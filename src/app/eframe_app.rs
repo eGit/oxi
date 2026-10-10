@@ -73,6 +73,7 @@ impl eframe::App for OxiApp {
         self.drain_compaction(ctx);
         self.check_external_file_changes();
         self.poll_git_changes(ctx);
+        self.attach_autonomous_turns(ctx);
 
         // A focus event runs these checks again when returning to an idle background window.
         if ctx.input(|i| i.focused)

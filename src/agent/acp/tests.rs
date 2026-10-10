@@ -508,6 +508,8 @@ fn notifications_are_scoped_to_the_active_session() {
         updates: UpdateState::default(),
         event_tx: tx,
         perm_tx,
+        cycle_end: None,
+        last_update: std::time::Instant::now(),
     };
     let update = json!({"sessionUpdate":"tool_call","toolCallId":"one","title":"Read"});
     ctx.emit_notification(&json!({"sessionId":"stale","update":update}));
@@ -532,6 +534,8 @@ fn client_fs_writes_respect_plan_mode_and_session_identity() {
         updates: UpdateState::default(),
         event_tx: tx,
         perm_tx,
+        cycle_end: None,
+        last_update: std::time::Instant::now(),
     };
     let mut args = json!({"sessionId":"active", "path":path, "content":"changed"});
     assert_eq!(ctx.write_text_file(&args), Err(PLAN_MODE_REFUSAL.into()));
@@ -868,4 +872,109 @@ fn acp_live_features() {
         "README now: {:?}",
         std::fs::read_to_string(cwd.join("README.md"))
     );
+}
+
+/// A fake agent that ends its turn at once, then runs one of its own: what Claude Code does when
+/// a command it left in the background finishes.
+const SELF_STARTING_AGENT: &str = r#"
+import json, sys, threading, time
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def update(v):
+    send(dict(method='session/update', params=dict(sessionId='fake-session', update=v)))
+def own_turn():
+    time.sleep(0.3)
+    update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='The build finished.')))
+    update(dict(sessionUpdate='usage_update', used=1, size=2, _meta={'_claude/origin': dict(kind='task-notification')}))
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='fake-session')))
+    elif method == 'session/prompt':
+        update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='Building in the background.')))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+        threading.Thread(target=own_turn).start()
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+
+fn texts(rx: &StdReceiver<AgentEvent>) -> String {
+    drain(rx)
+        .into_iter()
+        .filter_map(|ev| match ev {
+            AgentEvent::TextDelta(text) => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_turn_the_agent_starts_itself_is_held_until_attached() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-autonomous-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, SELF_STARTING_AGENT).unwrap();
+    let session_key = format!("autonomous-{}", rand::random::<u64>());
+    let mgr = AcpManager::spawn();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let prompt = AcpPrompt {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        command_line: format!("python3 {}", script.display()),
+        env: Vec::new(),
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "build it".into(),
+        history: String::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+    };
+    rt.block_on(mgr.prompt(prompt)).unwrap();
+    assert_eq!(texts(&ev_rx), "Building in the background.");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !pending_autonomous().contains(&session_key) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the agent's own turn was not announced"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let attach = AcpAttach {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+    };
+    // Returns at the usage update that closes the agent's cycle, not at the quiet limit.
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), mgr.attach(attach))
+            .await
+            .expect("the attached turn did not end with the agent's cycle")
+    })
+    .unwrap();
+    assert_eq!(texts(&ev_rx), "The build finished.");
+    assert!(!pending_autonomous().contains(&session_key));
+    mgr.close(&session_key);
+    let _ = std::fs::remove_dir_all(&dir);
 }

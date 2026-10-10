@@ -684,6 +684,98 @@ impl OxiApp {
         Ok(())
     }
 
+    /// Show the turns ACP agents started on their own (a background command finished, a
+    /// scheduled wake-up fired) in their chats, as soon as each chat is free.
+    pub(crate) fn attach_autonomous_turns(&mut self, ctx: &egui::Context) {
+        let waker = ctx.clone();
+        crate::agent::acp::set_autonomous_waker(move || waker.request_repaint());
+        for acp_key in crate::agent::acp::pending_autonomous() {
+            let key = self.conv.workspaces.iter().enumerate().find_map(|(w, ws)| {
+                (0..ws.sessions.len())
+                    .map(|s| SessionKey {
+                        workspace_idx: w,
+                        session_idx: s,
+                    })
+                    .find(|key| self.acp_session_key(*key) == acp_key)
+            });
+            let Some(key) = key else {
+                crate::agent::acp::claim_autonomous(&acp_key);
+                continue;
+            };
+            // A turn in flight shows it itself; one that is ending leaves it to the next frame.
+            if self
+                .run_state(key)
+                .is_some_and(|run| run.waiting_response || run.agent_rx.is_some())
+            {
+                continue;
+            }
+            crate::agent::acp::claim_autonomous(&acp_key);
+            self.start_autonomous_turn(key, acp_key);
+        }
+    }
+
+    fn start_autonomous_turn(&mut self, key: SessionKey, acp_session_key: String) {
+        let session = self.session_by_key(key);
+        if !session.messages_loaded
+            && let Some(file) = session.session_file.clone()
+            && let Some((loaded, wire)) = session_store::load_session_messages_with_wire(&file)
+        {
+            let session = self.session_mut_by_key(key);
+            session.messages = loaded.messages;
+            session.config = loaded.config;
+            session.wire_cache = wire;
+        }
+        let session = self.session_mut_by_key(key);
+        session.messages_loaded = true;
+        session.messages.push(ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            is_summary: false,
+            attachments: vec![],
+            blocks: vec![],
+            streaming: true,
+            started_at: Some(std::time::Instant::now()),
+            worked_duration: None,
+            route: None,
+            changes: None,
+        });
+        if key == self.active_session_key() {
+            self.conv.transcript.scroll_to_bottom_once = true;
+        }
+
+        let cwd = PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
+        let mut settings = self.conv.settings.clone();
+        let session_config = self.ensure_session_config(key);
+        session_config.apply_to_settings(&mut settings);
+        let (tx, rx) = relay_waking_ui(self.conv.git_ctx.clone());
+        let (approval_tx, approval_rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let undo_journal = Arc::new(std::sync::Mutex::new(
+            crate::agent::tools::TurnUndoJournal::default(),
+        ));
+        let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
+        let run = crate::agent::AcpAttachRun {
+            settings,
+            acp: self.acp.clone(),
+            acp_session_key,
+            cwd,
+            approval_rx,
+            cancel: cancel.clone(),
+            plan_mode,
+            undo_journal: undo_journal.clone(),
+        };
+        let _join = crate::agent::spawn_acp_attach(&self.agent_executor, run, tx);
+        let run = self.run_state_mut(key);
+        run.begin_waiting_response();
+        run.stream_error = None;
+        run.last_turn_planned = plan_mode;
+        run.undo_journal = Some(undo_journal);
+        run.agent_rx = Some(rx);
+        run.approval_tx = Some(approval_tx);
+        run.pending_approval = None;
+        run.cancel_agent = Some(cancel);
+    }
+
     /// Key of the chat's ACP agent subprocess: its session file, or a synthetic id while unsaved.
     pub(crate) fn acp_session_key(&self, key: SessionKey) -> String {
         match &self.session_by_key(key).session_file {
