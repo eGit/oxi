@@ -184,11 +184,7 @@ pub(super) fn render_tool_pill(
                     );
                     ui.add_space(2.0);
                     if running {
-                        ui.add(
-                            eframe::egui::Spinner::new()
-                                .size(10.0)
-                                .color(c_text_muted()),
-                        );
+                        crate::theme::spinner(ui, 10.0, c_text_muted());
                     } else if !has_error && let Some((added, removed)) = diff_stats {
                         diff_stat_labels(ui, added, removed);
                     }
@@ -565,11 +561,7 @@ fn render_edit_tool_block(
                             );
                             ui.add_space(2.0);
                             if running {
-                                ui.add(
-                                    eframe::egui::Spinner::new()
-                                        .size(10.0)
-                                        .color(c_text_muted()),
-                                );
+                                crate::theme::spinner(ui, 10.0, c_text_muted());
                             } else if has_diff && !has_error {
                                 diff_stat_labels(ui, added, removed);
                             }

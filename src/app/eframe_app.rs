@@ -99,7 +99,13 @@ impl eframe::App for OxiApp {
         });
         if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
         {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            // Agent events repaint on arrival; this only drives the "working" animations.
+            let interval = if ctx.input(|i| i.focused) {
+                std::time::Duration::from_millis(50)
+            } else {
+                crate::theme::UNFOCUSED_ANIMATION_FRAME
+            };
+            ctx.request_repaint_after(interval);
         }
     }
 
