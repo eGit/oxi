@@ -134,7 +134,8 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&tmp_path).map_err(|e| e.to_string())?;
+    let mut file =
+        std::io::BufWriter::new(options.open(&tmp_path).map_err(|e| e.to_string())?);
 
     let session_id = session_file_stem_or_generated(&session_path);
     writeln!(
@@ -177,38 +178,48 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         .map_err(|e| e.to_string())?;
     }
 
+    // Fields in the order `json!` sorts them, so lines stay byte-identical to earlier saves.
+    // Serializing borrows straight into the file avoids cloning every message, and the
+    // multi-megabyte wire history, into a `Value` and then a `String` first.
+    #[derive(serde::Serialize)]
+    struct MessageLine<'a> {
+        message: &'a Value,
+        #[serde(rename = "type")]
+        kind: &'static str,
+    }
+    #[derive(serde::Serialize)]
+    struct WireLine<'a> {
+        fingerprint: &'a str,
+        messages: &'a [Value],
+        #[serde(rename = "type")]
+        kind: &'static str,
+    }
+
     for message in &session.messages {
         for message_json in chat_message_to_json_entries(message) {
-            writeln!(
-                file,
-                "{}",
-                serde_json::to_string(&json!({
-                    "type": "message",
-                    "message": message_json,
-                }))
-                .map_err(|e| e.to_string())?
-            )
-            .map_err(|e| e.to_string())?;
+            let line = MessageLine {
+                message: &message_json,
+                kind: "message",
+            };
+            serde_json::to_writer(&mut file, &line).map_err(|e| e.to_string())?;
+            file.write_all(b"\n").map_err(|e| e.to_string())?;
         }
     }
 
     if let Some(wire) = session.wire_cache.as_ref()
         && !wire.messages.is_empty()
     {
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&json!({
-                "type": "wire_history",
-                "fingerprint": wire.fingerprint,
-                "messages": wire.messages,
-            }))
-            .map_err(|e| e.to_string())?
-        )
-        .map_err(|e| e.to_string())?;
+        let line = WireLine {
+            fingerprint: &wire.fingerprint,
+            messages: &wire.messages,
+            kind: "wire_history",
+        };
+        serde_json::to_writer(&mut file, &line).map_err(|e| e.to_string())?;
+        file.write_all(b"\n").map_err(|e| e.to_string())?;
     }
 
-    file.sync_all().map_err(|e| e.to_string())?;
+    let file = file.into_inner().map_err(|e| e.to_string())?;
+    crate::fsutil::sync(&file).map_err(|e| e.to_string())?;
     drop(file);
     if let Err(error) = crate::fsutil::install(&tmp_path, &session_path) {
         let _ = fs::remove_file(&tmp_path);
