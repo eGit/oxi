@@ -134,8 +134,7 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file =
-        std::io::BufWriter::new(options.open(&tmp_path).map_err(|e| e.to_string())?);
+    let mut file = std::io::BufWriter::new(options.open(&tmp_path).map_err(|e| e.to_string())?);
 
     let session_id = session_file_stem_or_generated(&session_path);
     writeln!(

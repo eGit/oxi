@@ -926,7 +926,11 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
     let prompt = AcpPrompt {
         session_key: session_key.clone(),
         cwd: dir.clone(),
-        command_line: format!("python3 {}", script.display()),
+        command_line: format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        ),
         env: Vec::new(),
         model: String::new(),
         effort: String::new(),
