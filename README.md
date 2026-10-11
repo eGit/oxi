@@ -7,7 +7,7 @@
 <p align="center">
   <b>The native coding agent for any model.</b><br />
   Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for.<br />
-  One Rust binary. No Electron, no account, around 110 MB of RAM.
+  One Rust binary. No Electron, no account, around 70 MB of RAM.
 </p>
 
 <p align="center">
