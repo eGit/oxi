@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.3] - 2026-10-11
+
+### Added
+- **Agent:** Display turns that the agent initiates between user prompts, so the chat stays current during background work and scheduled wake-ups.
+
+### Changed
+- **Performance:** Session saves are 3x faster (~8 ms instead of ~23 ms) by reducing unnecessary disk syncs and avoiding large memory clones.
+- **Performance:** Spinners no longer force the window to redraw at display refresh rate, cutting CPU usage and frame rate during agent runs.
+
+### Fixed
+- **Agent:** Agent turns now end properly when updates arrive between prompts, fixing the chat appearing stuck on 'I'll report back when it finishes'.
+
+
 ## [1.11.2] - 2026-10-09
 
 ### Fixed
@@ -970,7 +983,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.2...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.3...HEAD
+[1.11.3]: https://github.com/maziluiosif/oxi/compare/v1.11.2...v1.11.3
 [1.11.2]: https://github.com/maziluiosif/oxi/compare/v1.11.1...v1.11.2
 [1.11.1]: https://github.com/maziluiosif/oxi/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/maziluiosif/oxi/compare/v1.10.0...v1.11.0
