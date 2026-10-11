@@ -81,7 +81,7 @@ pub struct AgentRunRequest {
     pub chars_per_token: f32,
     /// Plan mode: read-only tools only, and the model is asked for a plan instead of changes.
     pub plan_mode: bool,
-    pub undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
+    pub undo_journal: UndoJournal,
 }
 
 /// Spawns agent runs on the app-wide runtime ([`crate::runtime`]).
@@ -138,22 +138,7 @@ fn spawn_agent_attempt(
         if cfg.is_acp() {
             // The agent edits files with its own tools, so the turn is made reversible by
             // snapshotting the work tree around it (git repositories only).
-            let checkpoint_cwd = cwd.clone();
-            let before = tokio::task::spawn_blocking(move || {
-                crate::git::checkpoint::snapshot(&checkpoint_cwd)
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
-            {
-                let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
-                match before {
-                    Ok(snapshot) => journal.set_checkpoint_before(snapshot),
-                    Err(_) => journal.mark_non_reversible(
-                        "The ACP agent edits files itself; responses can only be restored in a git repository.",
-                    ),
-                }
-            }
+            checkpoint_before_acp_turn(&cwd, &undo_journal).await;
             let outcome = run_acp_turn(
                 &cfg,
                 settings.mcp_servers.clone(),
@@ -177,26 +162,7 @@ fn spawn_agent_attempt(
             {
                 crate::router::quota::start_cooldown(cfg.provider, QUOTA_COOLDOWN);
             }
-            let checkpoint_cwd = cwd.clone();
-            let after = tokio::task::spawn_blocking(move || {
-                crate::git::checkpoint::snapshot(&checkpoint_cwd)
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
-            let changes = {
-                let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
-                match after {
-                    Ok(snapshot) => journal.set_checkpoint_after(snapshot.tree),
-                    Err(e) => {
-                        journal.mark_non_reversible(format!("Could not snapshot the workspace: {e}"));
-                        None
-                    }
-                }
-            };
-            if let Some(changes) = changes {
-                let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
-            }
+            report_acp_turn_changes(&cwd, &undo_journal, &tx).await;
             let _ = tx.send(AgentEvent::Finished(outcome));
             return;
         }
@@ -324,7 +290,10 @@ fn spawn_agent_attempt(
                     AgentOutcome::Failed { error }
                 }
                 Ok(()) => AgentOutcome::Success {
-                    wire_cache: Some(WireCache { fingerprint: wire_fingerprint, messages }),
+                    wire_cache: Some(WireCache {
+                        fingerprint: wire_fingerprint,
+                        messages,
+                    }),
                 },
             }
         };
@@ -342,6 +311,108 @@ fn first_line(s: &str) -> &str {
         Some((i, _)) => &line[..i],
         None => line,
     }
+}
+
+type UndoJournal = Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>;
+
+/// Snapshot the work tree before an ACP turn, whose agent edits files with its own tools.
+async fn checkpoint_before_acp_turn(cwd: &std::path::Path, undo_journal: &UndoJournal) {
+    let checkpoint_cwd = cwd.to_path_buf();
+    let before =
+        tokio::task::spawn_blocking(move || crate::git::checkpoint::snapshot(&checkpoint_cwd))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+    let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
+    match before {
+        Ok(snapshot) => journal.set_checkpoint_before(snapshot),
+        Err(_) => journal.mark_non_reversible(
+            "The ACP agent edits files itself; responses can only be restored in a git repository.",
+        ),
+    }
+}
+
+/// Snapshot the work tree after an ACP turn and report what the turn changed.
+async fn report_acp_turn_changes(
+    cwd: &std::path::Path,
+    undo_journal: &UndoJournal,
+    tx: &Sender<AgentEvent>,
+) {
+    let checkpoint_cwd = cwd.to_path_buf();
+    let after =
+        tokio::task::spawn_blocking(move || crate::git::checkpoint::snapshot(&checkpoint_cwd))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+    let changes = {
+        let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
+        match after {
+            Ok(snapshot) => journal.set_checkpoint_after(snapshot.tree),
+            Err(e) => {
+                journal.mark_non_reversible(format!("Could not snapshot the workspace: {e}"));
+                None
+            }
+        }
+    };
+    if let Some(changes) = changes {
+        let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
+    }
+}
+
+/// A turn an ACP agent started on its own, shown like a prompted one (see
+/// [`crate::agent::acp::AcpAttach`]).
+pub struct AcpAttachRun {
+    /// The chat's settings, for its approval policy.
+    pub settings: AppSettings,
+    pub acp: crate::agent::acp::AcpManager,
+    pub acp_session_key: String,
+    pub cwd: PathBuf,
+    pub approval_rx: Receiver<ApprovalDecision>,
+    pub cancel: Arc<AtomicBool>,
+    pub plan_mode: bool,
+    pub undo_journal: UndoJournal,
+}
+
+pub fn spawn_acp_attach(
+    executor: &AgentExecutor,
+    run: AcpAttachRun,
+    tx: Sender<AgentEvent>,
+) -> tokio::task::JoinHandle<()> {
+    executor.spawn(async move {
+        let AcpAttachRun {
+            settings,
+            acp,
+            acp_session_key,
+            cwd,
+            approval_rx,
+            cancel,
+            plan_mode,
+            undo_journal,
+        } = run;
+        checkpoint_before_acp_turn(&cwd, &undo_journal).await;
+        let attached = acp
+            .attach(crate::agent::acp::AcpAttach {
+                session_key: acp_session_key,
+                cwd: cwd.clone(),
+                event_tx: tx.clone(),
+                approval_rx,
+                approval_policy: ApprovalPolicy {
+                    write_edit: settings.require_write_edit_approval,
+                    bash: settings.require_bash_approval,
+                },
+                bash_allowlist: settings.bash_allowlist,
+                cancel: cancel.clone(),
+                plan_mode,
+            })
+            .await;
+        let outcome = match attached {
+            _ if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+            Err(error) => AgentOutcome::Failed { error },
+            Ok(()) => AgentOutcome::Success { wire_cache: None },
+        };
+        report_acp_turn_changes(&cwd, &undo_journal, &tx).await;
+        let _ = tx.send(AgentEvent::Finished(outcome));
+    })
 }
 
 /// Drive one Claude Code (ACP) turn: extract the latest user message, submit it to the ACP

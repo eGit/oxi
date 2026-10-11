@@ -32,8 +32,10 @@ mod voice_models;
 use app::OxiApp;
 use eframe::egui::IconData;
 
+/// The window icon. 256 px is the largest size taskbars use; on macOS eframe hands it to the Dock
+/// as an `NSImage`, which AppKit backs at Retina scale, so the 1024 px source pinned 32 MB.
 fn app_icon() -> IconData {
-    let image = image::load_from_memory(include_bytes!("../assets/app-icon.png"))
+    let image = image::load_from_memory(include_bytes!("../assets/windows/app-icon-256.png"))
         .expect("embedded app icon should be a valid PNG")
         .into_rgba8();
     let (width, height) = image.dimensions();

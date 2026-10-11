@@ -275,7 +275,7 @@ impl OxiApp {
                 });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if loading {
-                    ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
+                    crate::theme::spinner(ui, 12.0, c_text_muted());
                 } else if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
                     .on_hover_text("Compare again")
                     .clicked()

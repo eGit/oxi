@@ -141,12 +141,55 @@ pub const ICON_DOT_CIRCLE: &str = "\u{f192}";
 
 /// Small loading indicator (avoids default large `interact_size` spinners).
 pub fn small_spinner(ui: &mut egui::Ui) {
-    use eframe::egui::Spinner;
-    ui.add(
-        Spinner::new()
-            .size(13.0)
-            .color(super::palette::c_text_muted()),
-    );
+    spinner(ui, 13.0, super::palette::c_text_muted());
+}
+
+/// How long a visible spinner waits before its next frame. Slightly under 1/30 s, so the frame
+/// after it (plus the frame's own CPU time) still lands on every second vsync at 60 Hz.
+const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(30);
+
+/// Frame interval for progress animations while the window is visible but not focused: the run
+/// keeps showing it is alive at ~10 fps instead of redrawing the whole window at ~30.
+pub const UNFOCUSED_ANIMATION_FRAME: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// A `size`-square loading spinner, drawn like egui's [`egui::Spinner`].
+pub fn spinner(ui: &mut egui::Ui, size: f32, color: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    paint_spinner(ui, rect, color);
+    response
+}
+
+/// Paint a spinner into `rect`. egui's own spinner requests a repaint every frame, which keeps
+/// the whole window redrawing at the display's refresh rate (120 Hz on ProMotion) for as long as
+/// a run shows one; this one asks for ~30 frames per second (~10 in an unfocused window).
+pub fn paint_spinner(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    // egui starts a delayed frame one predicted frame time early; without adding it back, 30 ms
+    // shrinks to ~13 ms at 60 Hz and the spinner still redraws on every vsync.
+    let (predicted_dt, focused) = ui.input(|i| (i.predicted_dt, i.focused));
+    let frame = if focused {
+        SPINNER_FRAME
+    } else {
+        UNFOCUSED_ANIMATION_FRAME
+    };
+    ui.ctx()
+        .request_repaint_after(frame + std::time::Duration::from_secs_f32(predicted_dt));
+    let radius = (rect.height().min(rect.width()) / 2.0) - 2.0;
+    let n_points = (radius.round() as u32).clamp(8, 128);
+    let time = ui.input(|i| i.time);
+    let start_angle = time * std::f64::consts::TAU;
+    let end_angle = start_angle + 240f64.to_radians() * time.sin();
+    let points: Vec<egui::Pos2> = (0..n_points)
+        .map(|i| {
+            let t = i as f64 / n_points as f64;
+            let (sin, cos) = (start_angle + (end_angle - start_angle) * t).sin_cos();
+            rect.center() + radius * egui::vec2(cos as f32, sin as f32)
+        })
+        .collect();
+    ui.painter()
+        .add(egui::Shape::line(points, Stroke::new(3.0, color)));
 }
 
 // ─── System fonts (user-selectable in Appearance settings) ──────────────────────
@@ -456,4 +499,36 @@ pub fn setup_style(ctx: &egui::Context) {
     style.scroll_animation = egui::style::ScrollAnimation::none();
     style.animation_time = 0.06;
     ctx.all_styles_mut(|s| *s = style.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What egui will wait before the next frame of a window showing only a spinner, after it
+    /// takes off one predicted frame time.
+    fn spinner_delay(focused: bool) -> std::time::Duration {
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            focused,
+            ..Default::default()
+        };
+        // The first passes of a new context repaint right away regardless.
+        for _ in 0..2 {
+            let _ = ctx.run_ui(input(), |ui| {
+                spinner(ui, 13.0, egui::Color32::WHITE);
+            });
+        }
+        let output = ctx.run_ui(input(), |ui| {
+            spinner(ui, 13.0, egui::Color32::WHITE);
+        });
+        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    /// A spinner on screen must not pin the window to the display's refresh rate.
+    #[test]
+    fn spinner_repaints_at_its_own_rate() {
+        assert_eq!(spinner_delay(true), SPINNER_FRAME);
+        assert_eq!(spinner_delay(false), UNFOCUSED_ANIMATION_FRAME);
+    }
 }

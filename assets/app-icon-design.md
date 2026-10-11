@@ -3,9 +3,10 @@
 The app icon uses linked code brackets in copper orange on a graphite tile,
 matching the application's warm accent. The exterior is transparent.
 
-- `app-icon.png`: 1024 × 1024 source, embedded by the native app and used by
-  `scripts/bundle-macos.sh` to build the macOS icon.
-- `windows/app-icon-256.png`: 256 × 256 PNG.
+- `app-icon.png`: 1024 × 1024 source, used by `scripts/bundle-macos.sh` to build
+  the macOS icon.
+- `windows/app-icon-256.png`: 256 × 256 PNG, embedded by the native app as its
+  window icon (a 1024 px window icon costs 32 MB of memory on macOS).
 - `windows/app-icon.ico`: PNG frames at 16, 24, 32, 48, 64, 128 and 256 pixels,
   embedded by `build.rs` on Windows.
 

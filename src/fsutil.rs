@@ -10,6 +10,25 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// Flush `file` to the drive. On macOS `File::sync_all` issues `F_FULLFSYNC`, which also
+/// drains the drive's write cache and costs ~5 ms per call on the UI thread (twice per session
+/// save). Plain `fsync` gives the same ordering against app and kernel crashes as on Linux;
+/// only a power cut can still lose the newest write, and the rename keeps the old file intact.
+pub fn sync(file: &fs::File) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the descriptor is owned by `file` and stays open for the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    file.sync_all()
+}
+
 /// A fresh, unpredictable sibling path in `dir`, e.g. `.oxi-write-123-<random>.tmp`.
 pub fn unique_temp_path(dir: &Path, prefix: &str, extension: &str) -> PathBuf {
     use rand::RngExt;
@@ -62,7 +81,7 @@ fn write_atomic_with(path: &Path, content: &[u8], private: bool) -> Result<(), S
         let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
         file.write_all(content).map_err(|e| e.to_string())?;
         file.flush().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+        sync(&file).map_err(|e| e.to_string())?;
         if let Some(permissions) = existing_permissions.filter(|_| !private) {
             fs::set_permissions(&tmp, permissions).map_err(|e| e.to_string())?;
         }
@@ -119,7 +138,7 @@ pub fn install(tmp: &Path, destination: &Path) -> Result<(), String> {
     fs::rename(tmp, destination).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
+        let _ = sync(&dir);
     }
     Ok(())
 }

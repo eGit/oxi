@@ -36,6 +36,12 @@ use super::approval::{ApprovalDecision, ApprovalPolicy, PLAN_MODE_REFUSAL};
 use super::events::{AgentEvent, TokenUsage};
 use crate::settings::McpServerConfig;
 
+#[path = "acp/autonomous.rs"]
+mod autonomous;
+pub use autonomous::{
+    claim as claim_autonomous, pending as pending_autonomous, set_waker as set_autonomous_waker,
+};
+
 #[path = "acp/client_fs.rs"]
 mod client_fs;
 
@@ -167,9 +173,27 @@ enum AcpCommand {
         req: AcpSetOption,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    Attach {
+        req: AcpAttach,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Close {
         session_key: String,
     },
+}
+
+/// Show a turn the agent started on its own (see [`autonomous`]) the way a prompted one is
+/// shown, without sending anything: the turn's events and permission requests go through this
+/// request until the agent's cycle ends.
+pub struct AcpAttach {
+    pub session_key: String,
+    pub cwd: PathBuf,
+    pub event_tx: StdSender<AgentEvent>,
+    pub approval_rx: StdReceiver<ApprovalDecision>,
+    pub approval_policy: ApprovalPolicy,
+    pub bash_allowlist: Vec<String>,
+    pub cancel: Arc<AtomicBool>,
+    pub plan_mode: bool,
 }
 
 /// The user picked a value for one of the agent's config options in the composer.
@@ -257,6 +281,23 @@ impl AcpManager {
                                 let _ = reply.send(set_option(&conns, req).await);
                             });
                         }
+                        AcpCommand::Attach { req, reply } => {
+                            let handles = conns
+                                .lock()
+                                .await
+                                .get(&req.session_key)
+                                .filter(|c| c.alive.load(Ordering::SeqCst))
+                                .map(|c| c.handles.clone());
+                            match handles {
+                                Some(handles) => {
+                                    tokio::spawn(run_attach(handles, req, reply));
+                                }
+                                // The agent is gone, and with it the turn.
+                                None => {
+                                    let _ = reply.send(Ok(()));
+                                }
+                            }
+                        }
                         AcpCommand::Close { session_key } => {
                             // Dropping the Conn kills the subprocess (kill_on_drop).
                             conns.lock().await.remove(&session_key);
@@ -316,6 +357,20 @@ impl AcpManager {
             .map_err(|_| "ACP manager dropped the request".to_string())?
     }
 
+    /// Show the turn the session's agent started on its own; returns when that turn ends.
+    pub async fn attach(&self, req: AcpAttach) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(AcpCommand::Attach {
+                req,
+                reply: reply_tx,
+            })
+            .map_err(|_| "ACP manager is not running".to_string())?;
+        reply_rx
+            .await
+            .map_err(|_| "ACP manager dropped the request".to_string())?
+    }
+
     /// Tear down the subprocess for a session (e.g. when its tab is closed). No-op if none.
     pub fn close(&self, session_key: &str) {
         let _ = self.tx.send(AcpCommand::Close {
@@ -362,6 +417,9 @@ struct ConnHandles {
     /// Held for a whole prompt turn. A prompt sent right after Stop waits here until the
     /// cancelled turn has wound down, instead of having its context cleared by it.
     turn_lock: Arc<AsyncMutex<()>>,
+    /// Updates received between turns, until a turn is attached to show them.
+    held: Arc<autonomous::Held>,
+    alive: Arc<AtomicBool>,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
@@ -373,6 +431,9 @@ struct PromptCtx {
     updates: UpdateState,
     event_tx: StdSender<AgentEvent>,
     perm_tx: mpsc::UnboundedSender<PermReq>,
+    /// For a turn attached to a cycle the agent started itself: fired when that cycle ends.
+    cycle_end: Option<oneshot::Sender<()>>,
+    last_update: std::time::Instant,
 }
 
 impl PromptCtx {
@@ -388,7 +449,13 @@ impl PromptCtx {
 
     fn emit_notification(&mut self, params: &Value) {
         if params["sessionId"].as_str() == Some(self.session_id.as_str()) {
+            self.last_update = std::time::Instant::now();
             self.updates.emit_update(&params["update"], &self.event_tx);
+            if autonomous::ends_cycle(&params["update"])
+                && let Some(end) = self.cycle_end.take()
+            {
+                let _ = end.send(());
+            }
         }
     }
 }
@@ -553,6 +620,7 @@ async fn spawn_conn(
     let next_id = Arc::new(AtomicI64::new(1));
     let alive = Arc::new(AtomicBool::new(true));
     let modes: SharedModes = Arc::default();
+    let held = Arc::new(autonomous::Held::new(session_key));
 
     let stderr_tail = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
     let stderr_task = tokio::spawn(drain_stderr(stderr, stderr_tail.clone()));
@@ -563,6 +631,7 @@ async fn spawn_conn(
         stdin.clone(),
         alive.clone(),
         modes.clone(),
+        held.clone(),
         CommandsKey {
             command_line: command_line.to_string(),
             cwd: cwd.to_path_buf(),
@@ -664,7 +733,10 @@ async fn spawn_conn(
         modes,
         embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
         turn_lock: Arc::new(AsyncMutex::new(())),
+        held,
+        alive: alive.clone(),
     };
+    handles.held.arm();
     Ok(Conn {
         command_line: command_line.to_string(),
         model: model.to_string(),
@@ -900,15 +972,24 @@ async fn run_prompt(
         return;
     }
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermReq>();
-    *handles.prompt_ctx.lock().await = Some(PromptCtx {
-        session_id: handles.session_id.clone(),
-        cwd: cwd.clone(),
-        plan_mode,
-        updates: UpdateState::default(),
-        event_tx: event_tx.clone(),
-        perm_tx,
-    });
-    let _ = event_tx.send(AgentEvent::AgentStart);
+    {
+        let mut slot = handles.prompt_ctx.lock().await;
+        let ctx = slot.insert(PromptCtx {
+            session_id: handles.session_id.clone(),
+            cwd: cwd.clone(),
+            plan_mode,
+            updates: UpdateState::default(),
+            event_tx: event_tx.clone(),
+            perm_tx,
+            cycle_end: None,
+            last_update: std::time::Instant::now(),
+        });
+        let _ = event_tx.send(AgentEvent::AgentStart);
+        // A turn the agent started on its own that no attached turn showed yet opens this one.
+        for params in handles.held.drain() {
+            ctx.emit_notification(&params);
+        }
+    }
 
     // Agents only run a slash command when the prompt starts with it, so a command goes out
     // verbatim: plan mode is still enforced through the permission requests, and the replayed
@@ -1004,6 +1085,97 @@ async fn run_prompt(
         let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
     }
     let _ = reply.send(result.map(|_| ()));
+}
+
+/// An attached turn that hears nothing for this long is taken as over, in case the agent never
+/// reports the end of its cycle (adapters other than Claude Code's).
+const ATTACH_QUIET_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+async fn run_attach(
+    handles: ConnHandles,
+    req: AcpAttach,
+    reply: oneshot::Sender<Result<(), String>>,
+) {
+    let AcpAttach {
+        cwd,
+        event_tx,
+        mut approval_rx,
+        approval_policy,
+        mut bash_allowlist,
+        cancel,
+        plan_mode,
+        ..
+    } = req;
+    let _turn = handles.turn_lock.clone().lock_owned().await;
+    let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermReq>();
+    let (end_tx, mut end_rx) = oneshot::channel::<()>();
+    // Installed and fed what was held under one lock, so no update slips in between or out of
+    // order: the reader holds this lock while it decides to hold an update.
+    let ended = {
+        let mut slot = handles.prompt_ctx.lock().await;
+        let ctx = slot.insert(PromptCtx {
+            session_id: handles.session_id.clone(),
+            cwd,
+            plan_mode,
+            updates: UpdateState::default(),
+            event_tx: event_tx.clone(),
+            perm_tx,
+            cycle_end: Some(end_tx),
+            last_update: std::time::Instant::now(),
+        });
+        let _ = event_tx.send(AgentEvent::AgentStart);
+        let held = handles.held.drain();
+        for params in &held {
+            ctx.emit_notification(params);
+        }
+        // Nothing held: a prompt sent meanwhile already showed the cycle.
+        held.is_empty() || ctx.cycle_end.is_none()
+    };
+    let mut auto_approve = false;
+    if !ended {
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut end_rx => break,
+                maybe = perm_rx.recv() => {
+                    if let Some(pr) = maybe {
+                        handle_permission(
+                            &handles.stdin,
+                            event_tx.clone(),
+                            &mut approval_rx,
+                            approval_policy,
+                            &mut bash_allowlist,
+                            plan_mode,
+                            &cancel,
+                            &mut auto_approve,
+                            pr,
+                        )
+                        .await;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(150)) => {
+                    if cancel.load(Ordering::SeqCst) {
+                        let _ = write_line(
+                            &handles.stdin,
+                            &json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": handles.session_id}}),
+                        ).await;
+                        break;
+                    }
+                    let quiet = handles
+                        .prompt_ctx
+                        .lock()
+                        .await
+                        .as_ref()
+                        .is_none_or(|ctx| ctx.last_update.elapsed() > ATTACH_QUIET_LIMIT);
+                    if quiet || !handles.alive.load(Ordering::SeqCst) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    *handles.prompt_ctx.lock().await = None;
+    let _ = reply.send(Ok(()));
 }
 
 /// Token usage from a `session/prompt` response. Agents disagree on whether `inputTokens`

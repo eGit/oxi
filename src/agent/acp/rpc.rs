@@ -65,6 +65,7 @@ pub(super) async fn write_line(
 
 /// Read newline-delimited JSON-RPC messages from the agent until stdout closes, dispatching
 /// each. On close, fail every outstanding request so callers don't hang.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn read_loop(
     stdout: tokio::process::ChildStdout,
     pending: Pending,
@@ -72,6 +73,7 @@ pub(super) async fn read_loop(
     stdin: Arc<AsyncMutex<ChildStdin>>,
     alive: Arc<AtomicBool>,
     modes: SharedModes,
+    held: Arc<super::autonomous::Held>,
     commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
@@ -141,7 +143,16 @@ pub(super) async fn read_loop(
                 }
             });
         } else {
-            dispatch(&line, &pending, &prompt_ctx, &stdin, &modes, &commands_key).await;
+            dispatch(
+                &line,
+                &pending,
+                &prompt_ctx,
+                &stdin,
+                &modes,
+                &held,
+                &commands_key,
+            )
+            .await;
         }
     }
     flush_chunks(&mut chunks, &mut chunk_count);
@@ -171,6 +182,7 @@ pub(super) async fn dispatch(
     prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: &Arc<AsyncMutex<ChildStdin>>,
     modes: &SharedModes,
+    held: &super::autonomous::Held,
     commands_key: &CommandsKey,
 ) {
     let v: Value = match serde_json::from_str(line) {
@@ -198,11 +210,11 @@ pub(super) async fn dispatch(
                         .unwrap_or_else(|e| e.into_inner())
                         .apply_notification(update);
                 }
-                _ => {
-                    if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
-                        ctx.emit_notification(&v["params"]);
-                    }
-                }
+                // Between turns the agent may be running a turn of its own: hold it for the UI.
+                _ => match prompt_ctx.lock().await.as_mut() {
+                    Some(ctx) => ctx.emit_notification(&v["params"]),
+                    None => held.hold(&v["params"]),
+                },
             }
         }
     } else if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {

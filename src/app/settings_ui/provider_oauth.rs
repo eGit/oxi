@@ -51,7 +51,7 @@ impl OxiApp {
                     self.spawn_codex_oauth(ui.ctx());
                 }
                 if self.conv.settings_page.oauth_busy {
-                    ui.add(egui::Spinner::new().size(13.0).color(c_text_muted()));
+                    crate::theme::spinner(ui, 13.0, c_text_muted());
                     ui.label(
                         RichText::new("Waiting for the browser sign-in…")
                             .size(FS_TINY)

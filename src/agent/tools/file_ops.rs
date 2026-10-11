@@ -81,7 +81,6 @@ fn spill_full_output(s: &str) -> Option<String> {
     }
     let mut file = options.open(&path).ok()?;
     file.write_all(s.as_bytes()).ok()?;
-    file.sync_all().ok()?;
     Some(path.to_string_lossy().into_owned())
 }
 

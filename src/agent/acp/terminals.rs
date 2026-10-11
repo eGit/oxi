@@ -119,6 +119,8 @@ mod tests {
             updates: super::super::UpdateState::default(),
             event_tx: tx,
             perm_tx,
+            cycle_end: None,
+            last_update: std::time::Instant::now(),
         };
         let terminals = Terminals::default();
         let params = json!({"sessionId":"active", "command":"does-not-exist"});

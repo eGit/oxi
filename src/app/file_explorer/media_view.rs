@@ -198,9 +198,10 @@ fn image_view(ui: &mut Ui, path: &Path) {
             );
         }
         (Ok(_), None) => {
-            egui::Spinner::new().paint_at(
+            crate::theme::paint_spinner(
                 ui,
                 Rect::from_center_size(canvas.center(), Vec2::splat(20.0)),
+                ui.visuals().strong_text_color(),
             );
         }
         (Ok(_), Some(source)) => {

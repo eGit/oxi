@@ -29,7 +29,7 @@ impl OxiApp {
                     .strong(),
             );
             if self.conv.git.busy {
-                ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
+                crate::theme::spinner(ui, 12.0, c_text_muted());
                 let op = self
                     .conv
                     .git
