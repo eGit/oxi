@@ -19,6 +19,8 @@ pub enum LlmProviderKind {
     GptCodex,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
     OpenCodeGo,
+    /// Meta Model API (Muse models) via its OpenAI-compatible Chat Completions endpoint.
+    MetaMuse,
     /// LM Studio local server (OpenAI-compatible API, on this machine or a LAN host).
     LmStudio,
     /// A plain llama.cpp `llama-server` (or any other OpenAI-compatible local server) the user
@@ -41,6 +43,9 @@ pub enum LlmProviderKind {
     CursorAcp,
     /// OpenAI Codex CLI through the official ACP adapter.
     CodexAcp,
+    /// Meta's Muse Code CLI through the community `muse-acp` adapter (BrokkAi), which bridges
+    /// ACP to Muse's own session protocol (`muse serve`) and so runs on the Muse Code login.
+    MuseCodeAcp,
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
     /// turn. Its `model_id` holds the routing strategy. See [`crate::router`].
     Router,
@@ -50,7 +55,7 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 15] = [
+    pub const ALL: [LlmProviderKind; 17] = [
         LlmProviderKind::Router,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
@@ -60,12 +65,14 @@ impl LlmProviderKind {
         LlmProviderKind::ClaudeCodeAcp,
         LlmProviderKind::CursorAcp,
         LlmProviderKind::CodexAcp,
+        LlmProviderKind::MuseCodeAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
         LlmProviderKind::OpenCodeGo,
+        LlmProviderKind::MetaMuse,
     ];
 
     /// Canonical string id for this provider. Matches the serde `lowercase` variant names
@@ -79,6 +86,7 @@ impl LlmProviderKind {
             LlmProviderKind::CustomAnthropic => "customanthropic",
             LlmProviderKind::GptCodex => "gptcodex",
             LlmProviderKind::OpenCodeGo => "opencodego",
+            LlmProviderKind::MetaMuse => "metamuse",
             LlmProviderKind::LmStudio => "lmstudio",
             LlmProviderKind::LlamaCpp => "llamacpp",
             LlmProviderKind::Ollama => "ollama",
@@ -87,6 +95,7 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp => "claudecodeacp",
             LlmProviderKind::CursorAcp => "cursoracp",
             LlmProviderKind::CodexAcp => "codexacp",
+            LlmProviderKind::MuseCodeAcp => "musecodeacp",
             LlmProviderKind::Router => "router",
         }
     }
@@ -94,7 +103,10 @@ impl LlmProviderKind {
     pub fn is_acp(self) -> bool {
         matches!(
             self,
-            LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp
+            LlmProviderKind::ClaudeCodeAcp
+                | LlmProviderKind::CursorAcp
+                | LlmProviderKind::CodexAcp
+                | LlmProviderKind::MuseCodeAcp
         )
     }
 
@@ -112,6 +124,7 @@ impl LlmProviderKind {
             }
             LlmProviderKind::CustomAnthropic => "http://localhost:8000",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
+            LlmProviderKind::MetaMuse => "https://api.meta.ai/v1",
             // LM Studio's built-in server speaks plain HTTP on port 1234 by default.
             // (HTTPS would need a separate reverse proxy.)
             LlmProviderKind::LmStudio => "http://localhost:1234/v1",
@@ -124,6 +137,7 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::Router => "",
         }
     }
@@ -136,6 +150,7 @@ impl LlmProviderKind {
             LlmProviderKind::CustomAnthropic => "Anthropic Compatible",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
+            LlmProviderKind::MetaMuse => "Meta Muse",
             LlmProviderKind::LmStudio => "LM Studio",
             LlmProviderKind::LlamaCpp => "llama.cpp / local server",
             LlmProviderKind::Ollama => "Ollama",
@@ -144,6 +159,7 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
             LlmProviderKind::CursorAcp => "Cursor (ACP)",
             LlmProviderKind::CodexAcp => "Codex (ACP)",
+            LlmProviderKind::MuseCodeAcp => "Muse Code (ACP)",
             LlmProviderKind::Router => "Router (auto)",
         }
     }
@@ -156,6 +172,7 @@ impl LlmProviderKind {
             LlmProviderKind::CustomAnthropic => "claude-sonnet-4-5",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
+            LlmProviderKind::MetaMuse => "muse-wonder-1.0",
             // LM Studio / Ollama model ids depend on what's loaded/pulled; fetch the real
             // list from the dropdown.
             LlmProviderKind::LmStudio | LlmProviderKind::LlamaCpp => "local-model",
@@ -164,7 +181,9 @@ impl LlmProviderKind {
             LlmProviderKind::RemoteHf => "remote-hf-model",
             // Informational only: Claude Code picks the model from its own config/login.
             LlmProviderKind::ClaudeCodeAcp => "sonnet",
-            LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => "default",
+            LlmProviderKind::CursorAcp
+            | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp => "default",
             LlmProviderKind::Router => "balanced",
         }
     }
@@ -403,6 +422,8 @@ impl ProviderConfig {
     pub const DEFAULT_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/claude-agent-acp";
     pub const DEFAULT_CURSOR_ACP_COMMAND: &'static str = "agent acp";
     pub const DEFAULT_CODEX_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/codex-acp";
+    /// Scoped package: the unscoped `muse-acp` on npm is an unrelated project.
+    pub const DEFAULT_MUSE_ACP_COMMAND: &'static str = "npx -y @brokkai/muse-acp";
 
     pub fn is_acp(&self) -> bool {
         self.provider.is_acp()
@@ -412,6 +433,7 @@ impl ProviderConfig {
         match self.provider {
             LlmProviderKind::CursorAcp => Self::DEFAULT_CURSOR_ACP_COMMAND,
             LlmProviderKind::CodexAcp => Self::DEFAULT_CODEX_ACP_COMMAND,
+            LlmProviderKind::MuseCodeAcp => Self::DEFAULT_MUSE_ACP_COMMAND,
             _ => Self::DEFAULT_ACP_COMMAND,
         }
     }
@@ -438,6 +460,10 @@ impl ProviderConfig {
                 LlmProviderKind::CodexAcp => {
                     env.push(("CODEX_API_KEY".to_string(), key.to_string()));
                     env.push(("OPENAI_API_KEY".to_string(), key.to_string()));
+                }
+                // Takes priority over the `muse login` account, i.e. bills pay-as-you-go.
+                LlmProviderKind::MuseCodeAcp => {
+                    env.push(("META_API_KEY".to_string(), key.to_string()));
                 }
                 _ => {}
             }

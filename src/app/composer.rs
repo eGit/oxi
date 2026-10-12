@@ -74,6 +74,7 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         CustomAnthropic => "Anthropic",
         GptCodex => "GPT Codex",
         OpenCodeGo => "OpenCode",
+        MetaMuse => "Muse",
         LmStudio => "LM Studio",
         LlamaCpp => "llama.cpp",
         Ollama => "Ollama",
@@ -82,6 +83,7 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         ClaudeCodeAcp => "Claude",
         CursorAcp => "Cursor",
         CodexAcp => "Codex",
+        MuseCodeAcp => "Muse Code",
         Router => "Router",
     }
 }

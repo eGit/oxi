@@ -139,6 +139,7 @@ impl AppSettings {
             LlmProviderKind::AzureOpenAi
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::OpenCodeGo
+            | LlmProviderKind::MetaMuse
             | LlmProviderKind::LmStudio
             | LlmProviderKind::LlamaCpp
             | LlmProviderKind::Ollama
@@ -147,6 +148,7 @@ impl AppSettings {
             | LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::Router => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;

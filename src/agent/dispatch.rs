@@ -20,9 +20,9 @@ use super::loop_ctx::LoopCtx;
 use super::openai::{run_azure_chat_loop, run_chat_loop};
 use super::runner::{
     azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
-    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
-    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
-    openrouter_extra_headers,
+    configured_lmstudio_key, configured_meta_muse_key, configured_ollama_key,
+    configured_openai_key, configured_opencode_go_key, configured_openrouter_key,
+    opencode_go_model_uses_anthropic, openrouter_extra_headers,
 };
 use super::tools::{
     MAX_TOOL_OUTPUT_CHARS, ToolEnv, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
@@ -135,6 +135,11 @@ pub(crate) async fn run_provider_loop(
             let headers = openrouter_extra_headers(cfg);
             run_chat_loop(ctx!(&base, &model), &key, &headers, messages, tools).await
         }
+        LlmProviderKind::MetaMuse => {
+            let key = configured_meta_muse_key(cfg)?;
+            let base = cfg.effective_base_url();
+            run_chat_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+        }
         LlmProviderKind::AzureOpenAi => {
             let key = configured_azure_openai_key(cfg)?;
             let base = cfg.effective_base_url();
@@ -184,7 +189,10 @@ pub(crate) async fn run_provider_loop(
                 run_chat_loop(ctx!(&chat_base, &model), &key, &[], messages, tools).await
             }
         }
-        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
+        LlmProviderKind::ClaudeCodeAcp
+        | LlmProviderKind::CursorAcp
+        | LlmProviderKind::CodexAcp
+        | LlmProviderKind::MuseCodeAcp => {
             Err(
                 "ACP agents run their own agent loop; oxi cannot drive them as a plain model."
                     .to_string(),

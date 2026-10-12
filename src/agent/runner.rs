@@ -29,9 +29,10 @@ pub fn wire_fingerprint_for(
         LlmProviderKind::OpenCodeGo if opencode_go_model_uses_anthropic(&cfg.model_id) => {
             "anthropic-messages"
         }
-        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
-            "acp"
-        }
+        LlmProviderKind::ClaudeCodeAcp
+        | LlmProviderKind::CursorAcp
+        | LlmProviderKind::CodexAcp
+        | LlmProviderKind::MuseCodeAcp => "acp",
         _ => "openai-chat",
     };
     let canonical = serde_json::json!({
@@ -61,8 +62,9 @@ mod provider_config;
 pub use provider_config::openrouter_extra_headers;
 pub(crate) use provider_config::{
     azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
-    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
-    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
+    configured_lmstudio_key, configured_meta_muse_key, configured_ollama_key,
+    configured_openai_key, configured_opencode_go_key, configured_openrouter_key,
+    opencode_go_model_uses_anthropic,
 };
 
 /// Immutable snapshot for one agent run.

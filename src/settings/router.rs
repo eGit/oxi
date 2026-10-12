@@ -34,6 +34,7 @@ impl Billing {
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::GptCodex
             | LlmProviderKind::OpenCodeGo => Billing::Subscription,
             LlmProviderKind::Ollama
@@ -43,6 +44,7 @@ impl Billing {
             | LlmProviderKind::RemoteHf => Billing::Local,
             LlmProviderKind::OpenAi
             | LlmProviderKind::OpenRouter
+            | LlmProviderKind::MetaMuse
             | LlmProviderKind::AzureOpenAi
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::Router => Billing::PayPerUse,
