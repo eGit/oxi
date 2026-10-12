@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-10-12
+
+### Added
+- **Providers:** Meta Muse API and Muse Code ACP providers now available for model selection
+
+### Fixed
+- **Sidebar:** Pressing Enter now confirms chat renames instead of requiring Escape
+
+
 ## [1.11.3] - 2026-10-11
 
 ### Added
@@ -983,7 +992,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.3...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/maziluiosif/oxi/compare/v1.11.3...v1.12.0
 [1.11.3]: https://github.com/maziluiosif/oxi/compare/v1.11.2...v1.11.3
 [1.11.2]: https://github.com/maziluiosif/oxi/compare/v1.11.1...v1.11.2
 [1.11.1]: https://github.com/maziluiosif/oxi/compare/v1.11.0...v1.11.1
