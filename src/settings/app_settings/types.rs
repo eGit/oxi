@@ -155,7 +155,7 @@ impl Default for LocalHfSettings {
 }
 
 /// Settings for local speech-to-text dictation. The whisper model itself is loaded lazily
-/// by [`crate::voice_engine::VoiceManager`].
+/// by `crate::voice_engine::VoiceManager`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DictationSettings {
     /// Master on/off switch.

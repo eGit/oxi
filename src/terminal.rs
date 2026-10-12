@@ -923,51 +923,7 @@ impl TerminalSession {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            if cond() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        false
-    }
-
-    #[test]
-    fn foreground_job_tracks_running_commands() {
-        let ctx = egui::Context::default();
-        let mut term =
-            TerminalSession::spawn(&ctx, ".", 24, 80, WindowsTerminal::default()).unwrap();
-        assert!(
-            wait_for(|| !term.has_foreground_job()),
-            "idle shell reads as busy"
-        );
-        term.send(b"sleep 30\n");
-        assert!(wait_for(|| term.has_foreground_job()), "sleep not detected");
-        // The foreground group switches to the job before its command execs, and an
-        // interrupt landing in that window can be lost while the child still holds the
-        // shell's signal setup. Keep pressing Ctrl+C like a user would until it lands.
-        let mut last_interrupt: Option<Instant> = None;
-        assert!(
-            wait_for(|| {
-                if !term.has_foreground_job() {
-                    return true;
-                }
-                if last_interrupt.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
-                    term.send(&[0x03]);
-                    last_interrupt = Some(Instant::now());
-                }
-                false
-            }),
-            "Ctrl+C left it busy"
-        );
-    }
-}
+mod tests;
 
 /// ACP owns the process lifecycle; the terminal panel owns its interactive view.
 #[derive(Clone)]
@@ -1059,44 +1015,4 @@ impl Drop for TerminalSession {
 }
 
 #[cfg(test)]
-mod acp_process_tests {
-    use super::*;
-
-    #[test]
-    fn truncation_keeps_unicode_boundaries_and_accepts_split_reads() {
-        let process = TerminalProcess::new(5);
-        process.append("aaș".as_bytes());
-        process.append("țbb".as_bytes());
-        assert_eq!(process.output()["output"], "țbb");
-        assert_eq!(process.output()["truncated"], true);
-        let process = TerminalProcess::new(10);
-        process.append(&[0xc8]);
-        process.append(&[0x99]);
-        assert_eq!(process.output()["output"], "ș");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn command_pty_captures_output_exit_and_can_be_interrupted() {
-        let ctx = egui::Context::default();
-        let mut command = CommandBuilder::new("/bin/sh");
-        command.args(["-c", "printf terminal-output; exit 7"]);
-        let (terminal, process) = TerminalSession::spawn_command(&ctx, command, 1024).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while process.exit_status().is_none() || terminal.is_alive() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(process.output()["output"], "terminal-output");
-        assert_eq!(process.exit_status().unwrap()["exitCode"], 7);
-        let mut command = CommandBuilder::new("/bin/sh");
-        command.args(["-c", "exec sleep 30"]);
-        let (_terminal, process) = TerminalSession::spawn_command(&ctx, command, 1024).unwrap();
-        process.kill().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while process.exit_status().is_none() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    }
-}
+mod acp_process_tests;

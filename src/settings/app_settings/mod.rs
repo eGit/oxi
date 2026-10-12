@@ -45,7 +45,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub acp_workspace_preferences: BTreeMap<String, AcpWorkspacePreference>,
     /// One config per provider kind. Serialized as a JSON object keyed by
-    /// [`LlmProviderKind::slug`]; [`AppSettings::normalize`] guarantees every kind has an
+    /// [`LlmProviderKind::slug`]; `AppSettings::normalize` guarantees every kind has an
     /// entry, so lookups through [`AppSettings::provider`] are infallible.
     #[serde(default)]
     pub providers: BTreeMap<LlmProviderKind, ProviderConfig>,
@@ -58,7 +58,7 @@ pub struct AppSettings {
     #[serde(default = "default_include_oxi_rules")]
     pub include_oxi_rules: bool,
     /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
-    /// with fewer tools still deserialize; [`AppSettings::normalize`] resizes it to the
+    /// with fewer tools still deserialize; `AppSettings::normalize` resizes it to the
     /// current tool count, enabling any newly-added tools by default.
     #[serde(default = "default_tools_enabled")]
     pub tools_enabled: Vec<bool>,
@@ -78,14 +78,14 @@ pub struct AppSettings {
     #[serde(default = "default_require_approval")]
     pub require_bash_approval: bool,
     /// `bash` command prefixes (`cargo test`, `git status`) that run without the approval
-    /// prompt. Only simple commands match; see [`crate::agent::approval::bash_command_allowlisted`].
+    /// prompt. Only simple commands match; see `bash_command_allowlisted`.
     #[serde(default)]
     pub bash_allowlist: Vec<String>,
     /// Desktop notification (and a dock/taskbar nudge) when a response finishes or the agent
     /// asks for approval while oxi is in the background.
     #[serde(default = "default_true")]
     pub notify_in_background: bool,
-    /// Legacy single approval switch. Migrated in [`AppSettings::normalize`] and no longer saved.
+    /// Legacy single approval switch. Migrated in `AppSettings::normalize` and no longer saved.
     #[serde(default, skip_serializing)]
     pub require_approval: Option<bool>,
     /// Persisted width of the main app/sidebar split.
@@ -111,7 +111,7 @@ pub struct AppSettings {
     /// freed by hiding side panels) instead of staying pinned to a fixed column.
     #[serde(default = "default_chat_column_max_width")]
     pub chat_column_max_width: f32,
-    /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
+    /// Active color theme id (see `crate::theme`: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
     pub theme_id: String,
@@ -121,7 +121,7 @@ pub struct AppSettings {
     /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
     #[serde(default = "default_font_id")]
     pub ui_font: String,
-    /// Code (monospace) font id — see [`crate::theme::mono_font_options`].
+    /// Code (monospace) font id — see `crate::theme::mono_font_options`.
     #[serde(default = "default_font_id")]
     pub mono_font: String,
     /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
@@ -160,7 +160,7 @@ pub struct AppSettings {
     /// Last active chat file inside the active workspace, if the chat has been saved to disk.
     #[serde(default)]
     pub last_active_session_file: Option<String>,
-    /// Local voice dictation (see [`crate::voice_engine`]).
+    /// Local voice dictation (see `crate::voice_engine`).
     #[serde(default)]
     pub dictation: DictationSettings,
     /// Local HF (`llama-server`) runtime tuning: port, context size, GPU layers.
@@ -191,10 +191,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
     /// Record raw provider/agent traffic for the Activity window (see
-    /// [`crate::agent::activity_log`]). Off by default; the log itself is never written to disk.
+    /// `crate::agent::activity_log`). Off by default; the log itself is never written to disk.
     #[serde(default)]
     pub activity_log_enabled: bool,
-    /// Preferences for the Router pseudo-provider (see [`crate::router`]).
+    /// Preferences for the Router pseudo-provider (see `crate::router`).
     #[serde(default)]
     pub router: super::router::RouterSettings,
 }

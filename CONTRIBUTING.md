@@ -84,6 +84,11 @@ Most modules keep their tests in an inline `#[cfg(test)] mod tests` block next t
 code under test; a few larger areas (e.g. `src/agent/tools/tests.rs`) use a dedicated
 file. Match whichever convention the file you're touching already uses.
 
+The crate also builds as a library (`src/lib.rs`, with `src/main.rs` as a thin entry
+point over it), so `tests/` holds integration tests that exercise the public API
+(`oxi::settings`, `oxi::fsutil`) from outside the binary. Put a test there when it
+covers behaviour call sites rely on across modules, rather than one module's internals.
+
 A handful of tests are marked `#[ignore]` because they exercise the real OS keychain
 (`src/secrets.rs`) and aren't safe to run unattended in CI/sandboxed environments. Run
 them explicitly when touching that code:

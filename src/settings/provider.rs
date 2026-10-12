@@ -37,7 +37,7 @@ pub enum LlmProviderKind {
     /// Claude Code driven over the Agent Client Protocol (ACP): oxi spawns the
     /// `claude-code-acp` adapter as a subprocess and speaks JSON-RPC over stdio, letting
     /// Claude Code run its own agent loop and tools. Unlike every other provider, oxi is an
-    /// ACP *client* here rather than the agent. See [`crate::agent::acp`].
+    /// ACP *client* here rather than the agent. See `crate::agent::acp`.
     ClaudeCodeAcp,
     /// Cursor CLI's built-in ACP server (`agent acp`).
     CursorAcp,
@@ -47,7 +47,7 @@ pub enum LlmProviderKind {
     /// ACP to Muse's own session protocol (`muse serve`) and so runs on the Muse Code login.
     MuseCodeAcp,
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
-    /// turn. Its `model_id` holds the routing strategy. See [`crate::router`].
+    /// turn. Its `model_id` holds the routing strategy. See `crate::router`.
     Router,
 }
 
@@ -244,7 +244,7 @@ impl LlmProviderKind {
 /// `Local` covers the common case (the runtime listens on this machine, or on a LAN host
 /// reachable directly via `base_url`). `RemoteSsh` tunnels the connection through SSH port
 /// forwarding so a runtime bound to `127.0.0.1` on a remote host (reachable only over SSH)
-/// can still be reached as if it were local. See [`crate::compute`].
+/// can still be reached as if it were local. See `crate::compute`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComputeLocation {
@@ -254,7 +254,7 @@ pub enum ComputeLocation {
 }
 
 /// SSH connection details for a remote compute target. The password itself is **not**
-/// stored here — it lives in the OS keychain (see [`crate::compute::store`]), keyed by
+/// stored here — it lives in the OS keychain (see `crate::compute::store`), keyed by
 /// [`LlmProviderKind::slug`], so it never ends up in `settings.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshConfig {
@@ -264,7 +264,7 @@ pub struct SshConfig {
     pub user: String,
     /// Port the model runtime (Ollama/LM Studio) listens on on the remote host.
     pub remote_runtime_port: u16,
-    /// SHA-256 host key fingerprint ("SHA256:<base64>") pinned on the first successful
+    /// SHA-256 host key fingerprint ("SHA256:&lt;base64&gt;") pinned on the first successful
     /// connection (trust-on-first-use). `None` = not yet pinned; the next successful
     /// connect records it. A later connection presenting a different key is refused until
     /// the user accepts the new key. Not a secret, so it lives here in `settings.json`.

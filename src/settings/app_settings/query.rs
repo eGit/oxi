@@ -4,7 +4,7 @@ use super::super::provider::{LlmProviderKind, ProviderConfig, WebSearchBackend};
 use super::*;
 
 impl AppSettings {
-    /// Config for the given provider kind. Infallible: [`AppSettings::normalize`] runs on
+    /// Config for the given provider kind. Infallible: `AppSettings::normalize` runs on
     /// every load and guarantees an entry per kind.
     pub fn provider(&self, kind: LlmProviderKind) -> &ProviderConfig {
         self.providers

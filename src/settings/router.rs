@@ -88,7 +88,7 @@ impl RouterProviderPrefs {
 }
 
 /// The router's strategy. Stored as the Router provider's `model_id`, so every chat keeps its
-/// own strategy through [`crate::model::SessionConfig`] just like a regular model choice.
+/// own strategy through `crate::model::SessionConfig` just like a regular model choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterStrategy {
     /// Subscriptions first, then the cheapest model that is good enough.
