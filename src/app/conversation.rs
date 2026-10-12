@@ -16,6 +16,9 @@ use super::{OxiApp, PendingApproval};
 /// are still rendered for real. Units beyond it advance the cursor by their cached height only,
 /// so a fast scroll never reveals an unrendered gap at the edges.
 const TRANSCRIPT_CULL_MARGIN: f32 = 600.0;
+/// Seconds the chat column width must stay unchanged before off-screen units measured at another
+/// width are laid out again. See `render_conversation`.
+const TRANSCRIPT_RESIZE_SETTLE: f64 = 0.25;
 
 #[path = "conversation/transcript_model.rs"]
 mod transcript_model;
@@ -400,6 +403,25 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
+                            // A new width invalidates every cached height, and re-measuring the
+                            // whole history on each frame of a window resize drag made resizing
+                            // lag (~25 ms/frame at 300 turns). While the width keeps changing,
+                            // off-screen units reuse their height from the old width as an
+                            // estimate; once it settles they are all measured again in one frame.
+                            let now = ui.input(|input| input.time);
+                            let transcript = &mut self.conv.transcript;
+                            if transcript.width_bits != width_bits {
+                                transcript.width_bits = width_bits;
+                                transcript.width_changed_at = now;
+                            }
+                            let resizing =
+                                now - transcript.width_changed_at < TRANSCRIPT_RESIZE_SETTLE;
+                            if resizing {
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_secs_f64(
+                                        TRANSCRIPT_RESIZE_SETTLE,
+                                    ));
+                            }
                             // Normally cull to keep per-frame cost O(visible). Two exceptions keep
                             // text selection working:
                             //   1. While a selection or drag-select exists, render every unit so
@@ -440,7 +462,7 @@ impl OxiApp {
                                     .heights
                                     .get(&key)
                                     .filter(|entry| {
-                                        entry.width_bits == width_bits
+                                        (entry.width_bits == width_bits || resizing)
                                             && entry.fingerprint == fingerprint
                                     })
                                     .map(|entry| entry.height);

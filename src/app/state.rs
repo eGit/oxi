@@ -655,6 +655,11 @@ pub struct TranscriptState {
     /// revalidated against the column width and a cheap content fingerprint, and re-measured
     /// whenever the unit actually renders.
     pub heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
+    /// Column width (`f32` bits) seen last frame, and the input time it last changed. While the
+    /// window is being resized, off-screen units keep their heights from the old width instead
+    /// of all being laid out again every frame.
+    pub width_bits: u32,
+    pub width_changed_at: f64,
     /// Transcript units laid out for real last frame. While the pointer rests over the
     /// transcript none of them is culled, so the widget under the cursor cannot flip between a
     /// real label and a placeholder right before a click. See `render_conversation`.
@@ -673,6 +678,8 @@ impl Default for TranscriptState {
             scroll_to_bottom_once: true,
             stick_bottom_hold_frames: 0,
             heights: Default::default(),
+            width_bits: 0,
+            width_changed_at: f64::NEG_INFINITY,
             rendered: Default::default(),
             turn_changes: Default::default(),
             message_menu: None,
