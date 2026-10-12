@@ -4,7 +4,7 @@ use super::super::provider::{LlmProviderKind, ProviderConfig, WebSearchBackend};
 use super::*;
 
 impl AppSettings {
-    /// Config for the given provider kind. Infallible: [`AppSettings::normalize`] runs on
+    /// Config for the given provider kind. Infallible: `AppSettings::normalize` runs on
     /// every load and guarantees an entry per kind.
     pub fn provider(&self, kind: LlmProviderKind) -> &ProviderConfig {
         self.providers
@@ -69,7 +69,8 @@ impl AppSettings {
             // so it's always offered; the subprocess reports a clear error if not logged in.
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
-            | LlmProviderKind::CodexAcp => true,
+            | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp => true,
             LlmProviderKind::AzureOpenAi => true,
             // Picks among the providers above; local runtimes always count as configured.
             LlmProviderKind::Router => true,
@@ -83,6 +84,9 @@ impl AppSettings {
             }
             LlmProviderKind::OpenRouter => {
                 has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
+            }
+            LlmProviderKind::MetaMuse => {
+                has_profile_key(kind) || std::env::var("MODEL_API_KEY").is_ok()
             }
             LlmProviderKind::OpenCodeGo => {
                 has_profile_key(kind)

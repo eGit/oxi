@@ -304,6 +304,9 @@ static CONTEXT_CATALOG: &[(&str, usize)] = &[
     ("mimo-v2-omni", 256_000),
     ("hy3-preview", 256_000),
 
+    // ── Meta Model API ───────────────────────────────────────────────────────
+    ("muse-spark", 1_048_576),
+
     // ── Anthropic Claude (also served via OpenCode Zen) ──────────────────────
     ("claude-opus-4-8", 200_000),
     ("claude-opus-4-7", 200_000),

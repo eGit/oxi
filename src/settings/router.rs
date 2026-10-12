@@ -34,6 +34,7 @@ impl Billing {
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
+            | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::GptCodex
             | LlmProviderKind::OpenCodeGo => Billing::Subscription,
             LlmProviderKind::Ollama
@@ -43,6 +44,7 @@ impl Billing {
             | LlmProviderKind::RemoteHf => Billing::Local,
             LlmProviderKind::OpenAi
             | LlmProviderKind::OpenRouter
+            | LlmProviderKind::MetaMuse
             | LlmProviderKind::AzureOpenAi
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::Router => Billing::PayPerUse,
@@ -86,7 +88,7 @@ impl RouterProviderPrefs {
 }
 
 /// The router's strategy. Stored as the Router provider's `model_id`, so every chat keeps its
-/// own strategy through [`crate::model::SessionConfig`] just like a regular model choice.
+/// own strategy through `crate::model::SessionConfig` just like a regular model choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouterStrategy {
     /// Subscriptions first, then the cheapest model that is good enough.

@@ -33,7 +33,7 @@ pub(super) struct Adapter {
     bin: &'static str,
 }
 
-const ADAPTERS: [Adapter; 2] = [
+const ADAPTERS: [Adapter; 3] = [
     Adapter {
         package: "@agentclientprotocol/claude-agent-acp",
         bin: "claude-agent-acp",
@@ -41,6 +41,10 @@ const ADAPTERS: [Adapter; 2] = [
     Adapter {
         package: "@agentclientprotocol/codex-acp",
         bin: "codex-acp",
+    },
+    Adapter {
+        package: "@brokkai/muse-acp",
+        bin: "muse-acp",
     },
 ];
 
@@ -389,6 +393,10 @@ mod tests {
         assert_eq!(
             adapter_for("npx -y @agentclientprotocol/codex-acp").map(|a| a.bin),
             Some("codex-acp")
+        );
+        assert_eq!(
+            adapter_for(crate::settings::ProviderConfig::DEFAULT_MUSE_ACP_COMMAND).map(|a| a.bin),
+            Some("muse-acp")
         );
     }
 

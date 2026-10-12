@@ -69,12 +69,14 @@ pub fn parse(text: &str) -> Option<Preference> {
                 ("router", LlmProviderKind::Router),
                 ("claude code", LlmProviderKind::ClaudeCodeAcp),
                 ("codex acp", LlmProviderKind::CodexAcp),
+                ("muse code", LlmProviderKind::MuseCodeAcp),
                 ("cursor acp", LlmProviderKind::CursorAcp),
                 ("anthropic api", LlmProviderKind::CustomAnthropic),
                 ("openai api", LlmProviderKind::OpenAi),
                 ("gpt codex", LlmProviderKind::GptCodex),
                 ("openrouter", LlmProviderKind::OpenRouter),
                 ("opencode go", LlmProviderKind::OpenCodeGo),
+                ("meta muse", LlmProviderKind::MetaMuse),
                 ("azure openai", LlmProviderKind::AzureOpenAi),
                 ("lm studio", LlmProviderKind::LmStudio),
                 ("ollama", LlmProviderKind::Ollama),
@@ -86,6 +88,7 @@ pub fn parse(text: &str) -> Option<Preference> {
                 ("codex", LlmProviderKind::CodexAcp),
                 ("claude", LlmProviderKind::ClaudeCodeAcp),
                 ("cursor", LlmProviderKind::CursorAcp),
+                ("muse", LlmProviderKind::MuseCodeAcp),
             ];
             for (alias, provider) in aliases {
                 if let Some(tail) = rest.strip_prefix(alias)

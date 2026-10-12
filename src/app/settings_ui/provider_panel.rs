@@ -158,6 +158,7 @@ impl OxiApp {
                     | LlmProviderKind::ClaudeCodeAcp
                     | LlmProviderKind::CodexAcp
                     | LlmProviderKind::CursorAcp
+                    | LlmProviderKind::MuseCodeAcp
             ) {
                 let is_gpt = matches!(
                     kind,
@@ -166,6 +167,7 @@ impl OxiApp {
                         | LlmProviderKind::AzureOpenAi
                         | LlmProviderKind::CodexAcp
                         | LlmProviderKind::CursorAcp
+                        | LlmProviderKind::MuseCodeAcp
                 );
                 field_label(
                     ui,
@@ -287,6 +289,7 @@ impl OxiApp {
                 LlmProviderKind::CustomAnthropic => "Anthropic-compatible API key",
                 LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                 LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
+                LlmProviderKind::MetaMuse => "Meta Model API key (or MODEL_API_KEY)",
                 LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                 LlmProviderKind::LlamaCpp => "Optional: the --api-key given to llama-server",
                 LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
@@ -299,6 +302,9 @@ impl OxiApp {
                 LlmProviderKind::CursorAcp => "Cursor CLI uses its own login",
                 LlmProviderKind::CodexAcp => {
                     "Optional OPENAI_API_KEY / CODEX_API_KEY (else Codex login is used)"
+                }
+                LlmProviderKind::MuseCodeAcp => {
+                    "Optional META_API_KEY, billed pay-as-you-go (else `muse login` is used)"
                 }
                 LlmProviderKind::Router => "",
             };

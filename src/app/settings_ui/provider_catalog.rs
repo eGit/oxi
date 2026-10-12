@@ -24,6 +24,7 @@ pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::CustomAnthropic,
             LlmProviderKind::GptCodex,
             LlmProviderKind::OpenCodeGo,
+            LlmProviderKind::MetaMuse,
         ],
     ),
     (
@@ -32,6 +33,7 @@ pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::ClaudeCodeAcp,
             LlmProviderKind::CursorAcp,
             LlmProviderKind::CodexAcp,
+            LlmProviderKind::MuseCodeAcp,
         ],
     ),
 ];
@@ -57,6 +59,7 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         LlmProviderKind::CustomAnthropic => "Any Anthropic Messages-compatible endpoint.",
         LlmProviderKind::GptCodex => "ChatGPT / Codex via OAuth or OpenAI API-key fallback.",
         LlmProviderKind::OpenCodeGo => "OpenCode Go subscription endpoint.",
+        LlmProviderKind::MetaMuse => "Meta Model API (Muse Wonder, Muse Spark), pay-as-you-go key.",
         LlmProviderKind::ClaudeCodeAcp => {
             "Drive Claude Code as an external agent over the Agent Client Protocol."
         }
@@ -65,6 +68,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         }
         LlmProviderKind::CodexAcp => {
             "Drive Codex CLI through the official Agent Client Protocol adapter."
+        }
+        LlmProviderKind::MuseCodeAcp => {
+            "Drive Meta's Muse Code CLI (your Muse Code subscription) through the community muse-acp adapter."
         }
         LlmProviderKind::Router => {
             "Picks a provider, model and effort per turn from the ones you configured, using subscription quota, spend and task difficulty."

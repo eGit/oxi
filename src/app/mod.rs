@@ -523,7 +523,7 @@ impl OxiApp {
         let kind = settings.active_provider;
         let base_url = settings.provider(kind).base_url.to_ascii_lowercase();
         let needs_key = match kind {
-            OpenRouter | OpenCodeGo => true,
+            OpenRouter | OpenCodeGo | MetaMuse => true,
             OpenAi => base_url.trim().is_empty() || base_url.contains("api.openai.com"),
             CustomAnthropic => base_url.trim().is_empty() || base_url.contains("anthropic.com"),
             _ => false,

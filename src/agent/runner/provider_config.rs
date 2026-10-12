@@ -56,6 +56,16 @@ pub(crate) fn configured_opencode_go_key(cfg: &ProviderConfig) -> Result<String,
     })
 }
 
+pub(crate) fn configured_meta_muse_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        return Ok(key.to_string());
+    }
+    std::env::var("MODEL_API_KEY").map_err(|_| {
+        "Set Meta Model API key in Settings or MODEL_API_KEY in the environment.".into()
+    })
+}
+
 /// LM Studio's local server ignores the bearer token, so an API key is optional. Use the
 /// configured value (or `LMSTUDIO_API_KEY`) if present, otherwise fall back to an empty key.
 pub(crate) fn configured_lmstudio_key(cfg: &ProviderConfig) -> String {

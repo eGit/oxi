@@ -262,6 +262,7 @@ impl OxiApp {
                 | LlmProviderKind::AzureOpenAi
                 | LlmProviderKind::CodexAcp
                 | LlmProviderKind::CursorAcp
+                | LlmProviderKind::MuseCodeAcp
         )
     }
 

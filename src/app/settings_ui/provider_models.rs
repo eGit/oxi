@@ -263,6 +263,9 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenRouter => {
             std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
         }
+        LlmProviderKind::MetaMuse => {
+            std::env::var("MODEL_API_KEY").map_err(|_| "Set an API key to list models.".into())
+        }
         LlmProviderKind::CustomAnthropic => std::env::var("CUSTOM_ANTHROPIC_API_KEY")
             .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
             .map_err(|_| "Set an API key to list models.".into()),
@@ -278,6 +281,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         | LlmProviderKind::ClaudeCodeAcp
         | LlmProviderKind::CursorAcp
         | LlmProviderKind::CodexAcp
+        | LlmProviderKind::MuseCodeAcp
         | LlmProviderKind::Router => Ok(String::new()),
     }
 }
