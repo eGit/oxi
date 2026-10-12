@@ -351,22 +351,19 @@ impl OxiApp {
                             );
                         }
                         if self.conv.sidebar.renaming_session == Some((wi, si)) {
-                            let edit =
-                                egui::TextEdit::singleline(&mut self.conv.sidebar.rename_draft)
-                                    .font(egui::TextStyle::Small)
-                                    .desired_width(rect.width() - 8.0);
-                            let resp = ui.put(rect.shrink2(egui::vec2(4.0, 2.0)), edit);
-                            resp.request_focus();
-                            let enter =
-                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                            if enter {
-                                let draft = self.conv.sidebar.rename_draft.clone();
-                                self.rename_session(si, draft);
-                                self.conv.sidebar.renaming_session = None;
-                                sidebar_changed = true;
-                            } else if escape || (resp.lost_focus() && !enter) {
-                                self.conv.sidebar.renaming_session = None;
+                            match session_rename_field(
+                                ui,
+                                rect.shrink2(egui::vec2(4.0, 2.0)),
+                                &mut self.conv.sidebar.rename_draft,
+                            ) {
+                                Some(true) => {
+                                    let draft = self.conv.sidebar.rename_draft.clone();
+                                    self.rename_session(si, draft);
+                                    self.conv.sidebar.renaming_session = None;
+                                    sidebar_changed = true;
+                                }
+                                Some(false) => self.conv.sidebar.renaming_session = None,
+                                None => {}
                             }
                         } else {
                             if response.clicked() {
@@ -700,4 +697,71 @@ pub(super) fn sidebar_group_header(
     );
     ui.add_space(1.0);
     response.clicked()
+}
+
+/// Inline rename field for a sidebar chat row. `Some(true)` commits on Enter,
+/// `Some(false)` cancels on Escape or when focus moves elsewhere.
+fn session_rename_field(ui: &mut Ui, rect: egui::Rect, draft: &mut String) -> Option<bool> {
+    let edit = egui::TextEdit::singleline(draft)
+        .font(egui::TextStyle::Small)
+        .desired_width(rect.width() - 8.0);
+    let resp = ui.put(rect, edit);
+    // Focus only until the field holds it: re-requesting every frame undoes the
+    // TextEdit's own surrender on Enter, so `lost_focus` never fired and Enter
+    // could not commit.
+    if !resp.has_focus() && !resp.lost_focus() {
+        resp.request_focus();
+    }
+    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if enter {
+        Some(true)
+    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) || resp.lost_focus() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(harness: &mut egui_kittest::Harness<'_, (String, Option<bool>)>, key: egui::Key) {
+        harness.key_press(key);
+        harness.step();
+    }
+
+    fn rename_harness() -> egui_kittest::Harness<'static, (String, Option<bool>)> {
+        egui_kittest::Harness::builder()
+            .with_size(egui::vec2(240.0, 60.0))
+            .build_ui_state(
+                |ui, state: &mut (String, Option<bool>)| {
+                    if state.1.is_some() {
+                        return;
+                    }
+                    let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(200.0, 24.0));
+                    state.1 = session_rename_field(ui, rect, &mut state.0);
+                },
+                ("Old title".to_string(), None),
+            )
+    }
+
+    #[test]
+    fn rename_field_commits_on_enter() {
+        let mut harness = rename_harness();
+        harness.run_steps(3);
+        harness.event(egui::Event::Text(" 2".into()));
+        harness.step();
+        press(&mut harness, egui::Key::Enter);
+        assert_eq!(harness.state().1, Some(true));
+        assert_eq!(harness.state().0, "Old title 2");
+    }
+
+    #[test]
+    fn rename_field_cancels_on_escape() {
+        let mut harness = rename_harness();
+        harness.run_steps(3);
+        press(&mut harness, egui::Key::Escape);
+        assert_eq!(harness.state().1, Some(false));
+    }
 }
