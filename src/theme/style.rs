@@ -319,6 +319,57 @@ fn active_fonts() -> FontSelection {
         .unwrap_or_default()
 }
 
+/// Glyph shift (fraction of the font size, negative = up) that centers a text face optically in
+/// the rows egui lays out for it.
+///
+/// egui sizes a row from the face's ascent, descent and line gap and puts the baseline at the
+/// ascent, so where the letters land inside the row depends on the face. Noto Sans reserves a tall
+/// ascent for accents, which left its lowercase ~1.5 px below the row middle at 14 pt. Selections,
+/// highlights and the caret span the whole row and icons are centered on it, so text looked low
+/// against all of them. The middle of the band between the x-height and cap-height middles goes
+/// on the row middle instead. Faces without Latin letters (icons, emoji) keep their own metrics.
+fn optical_center_offset(data: &[u8], index: u32) -> Option<f32> {
+    use skrifa::MetadataProvider as _;
+    let font = skrifa::FontRef::from_index(data, index).ok()?;
+    let size = skrifa::instance::Size::unscaled();
+    let location = skrifa::instance::LocationRef::default();
+    let metrics = font.metrics(size, location);
+    let em = f32::from(metrics.units_per_em);
+    let glyph_metrics = font.glyph_metrics(size, location);
+    let charmap = font.charmap();
+    // Measured outlines first: some faces (Ubuntu Mono) declare an x-height their glyphs miss.
+    let top = |c: char, declared: Option<f32>| {
+        charmap
+            .map(c)
+            .and_then(|id| glyph_metrics.bounds(id))
+            .map(|bounds| bounds.y_max)
+            .or(declared)
+            .filter(|height| *height > 0.0)
+    };
+    let x_height = top('x', metrics.x_height)?;
+    let cap_height = top('H', metrics.cap_height)?;
+    if em <= 0.0 {
+        return None;
+    }
+    let row_middle = (metrics.ascent - metrics.descent + metrics.leading) * 0.5;
+    let ink_middle = metrics.ascent - (x_height + cap_height) * 0.25;
+    Some(((row_middle - ink_middle) / em).clamp(-0.2, 0.2))
+}
+
+/// `data` with [`optical_center_offset`] applied, for the faces that set text.
+fn centered_text_font(data: FontData) -> FontData {
+    match optical_center_offset(&data.font, data.index) {
+        Some(y_offset_factor) => FontData {
+            tweak: egui::FontTweak {
+                y_offset_factor,
+                ..data.tweak
+            },
+            ..data
+        },
+        None => data,
+    }
+}
+
 /// Find the best normal face for a discovered family and register it with egui.
 fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> Option<String> {
     let catalog = system_fonts();
@@ -334,9 +385,10 @@ fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> 
         .with_face_data(id, |data, index| (data.to_vec(), index))?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
-    fonts
-        .font_data
-        .insert(key.to_string(), std::sync::Arc::new(data));
+    fonts.font_data.insert(
+        key.to_string(),
+        std::sync::Arc::new(centered_text_font(data)),
+    );
     Some(key.to_string())
 }
 
@@ -344,11 +396,13 @@ fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "noto_sans".to_string(),
-        std::sync::Arc::new(FontData::from_static(NOTO_SANS_REGULAR)),
+        std::sync::Arc::new(centered_text_font(FontData::from_static(NOTO_SANS_REGULAR))),
     );
     fonts.font_data.insert(
         "ubuntu_mono".to_string(),
-        std::sync::Arc::new(FontData::from_static(UBUNTU_MONO_REGULAR)),
+        std::sync::Arc::new(centered_text_font(FontData::from_static(
+            UBUNTU_MONO_REGULAR,
+        ))),
     );
     fonts.font_data.insert(
         "apple_symbols".to_string(),
@@ -523,6 +577,19 @@ mod tests {
             spinner(ui, 13.0, egui::Color32::WHITE);
         });
         output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    /// Text faces sit low in egui's rows and get pulled up; icon and emoji faces, already
+    /// centered on their rows, are left alone.
+    #[test]
+    fn only_text_faces_get_an_optical_shift() {
+        let noto = optical_center_offset(NOTO_SANS_REGULAR, 0).unwrap();
+        let mono = optical_center_offset(UBUNTU_MONO_REGULAR, 0).unwrap();
+        println!("noto {noto} mono {mono}");
+        assert!((-0.1..-0.05).contains(&noto), "{noto}");
+        assert!((-0.1..-0.03).contains(&mono), "{mono}");
+        assert_eq!(optical_center_offset(SYMBOLS_NERD_FONT_MONO, 0), None);
+        assert_eq!(optical_center_offset(NOTO_EMOJI, 0), None);
     }
 
     /// A spinner on screen must not pin the window to the display's refresh rate.

@@ -28,20 +28,13 @@ pub(super) fn editor_selection_rects(
     clip_rect: egui::Rect,
     range: egui::text::CCursorRange,
 ) -> Vec<egui::Rect> {
-    // The font's baseline leaves more visual space below the glyphs than above them. Moving only
-    // the painted selection slightly upward keeps the text optically centered without changing
-    // cursor positioning, line height, or hit-testing geometry.
-    const VERTICAL_OFFSET: f32 = 1.0;
     const CARET_CLEARANCE: f32 = 1.5;
     let [start, end] = range.sorted_cursors();
     let primary_is_start = range.primary.index == start.index;
     let primary_is_end = range.primary.index == end.index;
     // Keep one row outside each clip edge so clipping never exposes the artificial start/end
     // of this reduced contour. A select-all should cost roughly one viewport to paint.
-    let mut rects = selection_rects_in_clip(galley, galley_pos, clip_rect, range)
-        .into_iter()
-        .map(|rect| rect.translate(egui::vec2(0.0, -VERTICAL_OFFSET)))
-        .collect::<Vec<_>>();
+    let mut rects = selection_rects_in_clip(galley, galley_pos, clip_rect, range);
 
     // Leave the active edge to the custom caret instead of repainting a second caret.
     let start_is_painted = galley
@@ -365,6 +358,62 @@ const MAX_MATCHED_SELECTION: usize = 200;
 /// Sublime's `match_selection`: outline every other occurrence of a single-line selection on
 /// screen (whole words only when the selection is a word). Only the visible lines are
 /// searched, so the cost does not grow with the file.
+/// Find matches as rounded washes on the editor's row geometry, the way the selection is drawn.
+/// egui's own section backgrounds are square and spill a point past the row, so matches on
+/// consecutive lines merged into one block. Each match keeps a 1 pt gap to the next row.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn paint_find_matches(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    content: &str,
+    matches: &[std::ops::Range<usize>],
+    active: Option<usize>,
+    visible_lines: &std::ops::Range<usize>,
+) {
+    if matches.is_empty() {
+        return;
+    }
+    let window = super::syntax_window::line_byte_range(content, visible_lines);
+    let first = matches.partition_point(|range| range.end <= window.start);
+    let passive = crate::theme::blend_color(c_bg_main(), c_warning_fg(), 0.38);
+    let active_color = crate::theme::blend_color(c_bg_main(), c_accent(), 0.72);
+    let painter = ui.painter().with_clip_rect(clip_rect);
+    // Char indices advance incrementally from the window start: matches are sorted.
+    let mut byte = window.start;
+    let mut char = super::editor_text::char_index(content, byte);
+    let mut char_at = |target: usize| {
+        let target = target.clamp(byte, content.len());
+        char += content[byte..target].chars().count();
+        byte = target;
+        char
+    };
+    for (index, range) in matches.iter().enumerate().skip(first) {
+        if range.start >= window.end {
+            break;
+        }
+        let start = char_at(range.start);
+        let end = char_at(range.end);
+        let fill = if active == Some(index) {
+            active_color
+        } else {
+            passive
+        };
+        let range = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
+        );
+        for rect in selection_rects_in_clip(galley, galley_pos, clip_rect, range) {
+            painter.rect_filled(
+                rect.shrink2(egui::vec2(0.0, 0.5)),
+                egui::CornerRadius::same(2),
+                fill,
+            );
+        }
+    }
+}
+
 pub(super) fn paint_selection_matches(
     ui: &Ui,
     galley: &egui::Galley,
@@ -415,7 +464,7 @@ pub(super) fn paint_selection_matches(
             egui::text::CCursor::new(base_char),
             egui::text::CCursor::new(base_char + needle.chars().count()),
         );
-        for rect in editor_selection_rects(galley, galley_pos, clip_rect, range) {
+        for rect in selection_rects_in_clip(galley, galley_pos, clip_rect, range) {
             painter.rect_stroke(
                 rect.expand(0.5),
                 egui::CornerRadius::same(2),

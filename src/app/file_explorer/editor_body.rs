@@ -11,11 +11,11 @@ use super::super::OxiApp;
 use super::editor_logic::{char_index_to_byte, live_git_line_changes};
 use super::editor_paint::{
     byte_range_rects, caret_logical_line, editor_selection_rects, paint_bracket_underlines,
-    paint_caret, paint_indent_guides, paint_selected_whitespace, paint_selection,
-    paint_selection_matches, selected_logical_lines,
+    paint_caret, paint_find_matches, paint_indent_guides, paint_selected_whitespace,
+    paint_selection, paint_selection_matches, selected_logical_lines,
 };
 use super::editor_text::EditorText;
-use super::support::{apply_definition_underline, apply_search_highlights, language_for_path};
+use super::support::{apply_definition_underline, language_for_path};
 use super::{EditorLayoutCache, line_layout, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
@@ -567,8 +567,7 @@ impl OxiApp {
                             viewport_clip,
                         );
                         let cached_lines = &document.layout_cache.syntax_lines;
-                        let can_reuse_syntax = find_ranges.is_empty()
-                            && hovered_definition.is_none()
+                        let can_reuse_syntax = hovered_definition.is_none()
                             && document.layout_cache.syntax_palette
                                 == crate::theme::palette_generation()
                             && document.layout_cache.revision == document.content_revision
@@ -651,18 +650,6 @@ impl OxiApp {
                                 let start = range.start.clamp(job_start, job_end);
                                 start - job_start..range.end.clamp(start, job_end) - job_start
                             };
-                            // Matches are sorted; only those inside the job need highlighting.
-                            let first_find =
-                                find_ranges.partition_point(|range| range.end <= job_start);
-                            let local_find: Vec<_> = find_ranges[first_find..]
-                                .iter()
-                                .take_while(|range| range.start < job_end)
-                                .map(to_job)
-                                .collect();
-                            let local_active = active_find_match
-                                .and_then(|active| active.checked_sub(first_find))
-                                .filter(|active| *active < local_find.len());
-                            apply_search_highlights(&mut job, &local_find, local_active);
                             if let Some(range) = hovered_definition.as_ref()
                                 && !to_job(range).is_empty()
                             {
@@ -680,8 +667,7 @@ impl OxiApp {
                             // layout (they are written by the geometry layouter). Overwriting
                             // the keys here could relabel a geometry galley from an older
                             // wrap width as current and corrupt both caches.
-                            if find_ranges.is_empty()
-                                && hovered_definition.is_none()
+                            if hovered_definition.is_none()
                                 && !highlight_pending
                                 && document.layout_cache.revision == document.content_revision
                                 && document.layout_cache.wrap_width_bits == wrap_width_bits
@@ -823,6 +809,16 @@ impl OxiApp {
                             );
                             paint_selection(&selection_painter, &selection_rects, selection_color);
                         }
+                        paint_find_matches(
+                            ui,
+                            &output.galley,
+                            output.galley_pos,
+                            viewport_clip,
+                            &document.content,
+                            find_ranges,
+                            active_find_match,
+                            &window.visible,
+                        );
 
                         // TextEdit's geometry is transparent; paint the syntax galley, which
                         // covers only a window of lines, at that window's first row.
