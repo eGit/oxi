@@ -58,39 +58,45 @@ impl OxiApp {
             let (ahead, behind) = (self.conv.git.ahead, self.conv.git.behind);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                ui.label(
-                    RichText::new(ICON_BRANCH)
-                        .font(FontId::new(FS_TINY, icon_font()))
-                        .color(c_text_muted()),
-                );
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&branch)
-                            .size(FS_TINY)
-                            .color(c_text_muted())
-                            .monospace(),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(&branch);
-                if ahead > 0 {
-                    ui.label(
-                        RichText::new(format!("↑{ahead}"))
-                            .size(FS_TINY)
-                            .color(c_success())
-                            .monospace(),
-                    )
-                    .on_hover_text("Commits ahead of upstream");
-                }
-                if behind > 0 {
-                    ui.label(
-                        RichText::new(format!("↓{behind}"))
-                            .size(FS_TINY)
-                            .color(c_warning_fg())
-                            .monospace(),
-                    )
-                    .on_hover_text("Commits behind upstream");
-                }
+                // Counts are laid out first from the right edge, so a long branch name
+                // truncates into the space left instead of pushing them out of the panel.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if behind > 0 {
+                        ui.label(
+                            RichText::new(format!("↓{behind}"))
+                                .size(FS_TINY)
+                                .color(c_warning_fg())
+                                .monospace(),
+                        )
+                        .on_hover_text("Commits behind upstream");
+                    }
+                    if ahead > 0 {
+                        ui.label(
+                            RichText::new(format!("↑{ahead}"))
+                                .size(FS_TINY)
+                                .color(c_success())
+                                .monospace(),
+                        )
+                        .on_hover_text("Commits ahead of upstream");
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(ICON_BRANCH)
+                                .font(FontId::new(FS_TINY, icon_font()))
+                                .color(c_text_muted()),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&branch)
+                                    .size(FS_TINY)
+                                    .color(c_text_muted())
+                                    .monospace(),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&branch);
+                    });
+                });
             });
             ui.add_space(4.0);
             // Disabled while the worker is busy so an impatient double-click can't
