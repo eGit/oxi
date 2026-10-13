@@ -73,6 +73,10 @@ apple-native-keyring-store = { version = "1", features = ["keychain"] }
 whisper-rs = { version = "0.16", features = ["metal"] }
 mac-notification-sys = "0.6"
 
+# Native menu bar (macOS global menu, Windows window menu). Linux would need a GTK window.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+muda = { version = "0.21", default-features = false }
+
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = "0.16"
 

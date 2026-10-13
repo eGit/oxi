@@ -174,6 +174,11 @@ pub struct EditorState {
     pub file_picker_origin: Option<(PathBuf, usize)>,
     /// Last location a symbol/line query previewed, so the editor only moves when it changes.
     pub file_picker_previewed: Option<(PathBuf, std::ops::Range<usize>)>,
+    /// Keyboard focus when the picker opened (`None` until the picker captures it), given back
+    /// after a palette command so its keys land where the user was.
+    pub file_picker_return_focus: Option<Option<eframe::egui::Id>>,
+    /// Palette commands run most recently, newest first (indices into the palette's list).
+    pub palette_recent: Vec<usize>,
     /// Goto Symbol outline of the picker's document, keyed by path and content revision.
     pub file_picker_outline: Option<(
         PathBuf,

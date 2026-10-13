@@ -40,7 +40,7 @@ use eframe::egui::IconData;
 
 /// The window icon. 256 px is the largest size taskbars use; on macOS eframe hands it to the Dock
 /// as an `NSImage`, which AppKit backs at Retina scale, so the 1024 px source pinned 32 MB.
-fn app_icon() -> IconData {
+pub(crate) fn app_icon() -> IconData {
     let image = image::load_from_memory(include_bytes!("../assets/windows/app-icon-256.png"))
         .expect("embedded app icon should be a valid PNG")
         .into_rgba8();
@@ -88,7 +88,8 @@ pub fn run() -> eframe::Result<()> {
         "oxi",
         options,
         Box::new(|cc| {
-            let app = OxiApp::new();
+            let mut app = OxiApp::new();
+            app.install_menu_bar(&cc.egui_ctx);
             // Register the persisted font choice so the theme's font install picks it up.
             theme::set_active_fonts(theme::FontSelection {
                 ui: app.conv.settings.ui_font.clone(),

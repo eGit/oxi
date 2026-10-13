@@ -355,6 +355,25 @@ impl OxiApp {
         }
     }
 
+    /// Cmd/Ctrl+W: close whatever tab is showing — the git diff tab, a Markdown preview, or the
+    /// active document (asking first when it has unsaved edits).
+    pub(crate) fn close_active_editor_tab(&mut self) {
+        if self.conv.editor.diff_tab_active {
+            self.close_editor_git_diff();
+            return;
+        }
+        let Some(index) = self.conv.editor.active else {
+            return;
+        };
+        if self.conv.editor.markdown_preview_active {
+            self.conv.editor.documents[index].markdown_preview_open = false;
+            self.conv.editor.markdown_preview_active = false;
+            self.conv.editor.focus_editor_next_frame = true;
+        } else {
+            self.request_close_editor_tab(index);
+        }
+    }
+
     /// VS Code-style diff tab title: `stats.py (Working Tree)`, `stats.py (Staged)` or
     /// `Commit 1a2b3c4`.
     fn git_diff_tab_label(&self) -> String {
