@@ -44,10 +44,11 @@ pub fn editor_selection_fill() -> Color32 {
 /// Lay out `job` and run egui's label text selection styled like the workspace editor.
 /// egui recolors selected glyphs to `selection.stroke.color`; feeding it the job's dominant
 /// section color keeps the text visually unchanged, so only the wash marks the selection.
-pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
+pub fn selectable_text_job(ui: &mut Ui, mut job: LayoutJob) {
     if job.text.is_empty() {
         return;
     }
+    let section_backgrounds = take_section_backgrounds(&mut job);
     let dominant = job
         .sections
         .iter()
@@ -81,11 +82,11 @@ pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
         Stroke::NONE,
     );
     ui.visuals_mut().selection = saved;
+    let backgrounds = section_background_shapes(&original, rect.left_top(), &section_backgrounds);
     // egui 0.35 exposes label selection through its painted galley. Each selected row has
     // exactly four appended background vertices. Keep its cross-label drag/copy handling,
     // replace only those quads with our editor contour, and preserve original glyph colors.
     let mut rects = Vec::new();
-    let mut backgrounds = Vec::new();
     ui.ctx().graphics_mut(|g| {
         if let Some(list) = g.get_mut(ui.layer_id()) {
             list.mutate_shape(text_slot, |shape| {
@@ -117,17 +118,6 @@ pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
                                     rect.translate(placed.pos.to_vec2() + text.pos.to_vec2()),
                                 );
                             }
-                            // Paint section backgrounds (including inline code) below the
-                            // continuous contour, while keeping glyphs above it.
-                            let background_end = row.visuals.glyph_index_start;
-                            if background_end > 0 {
-                                let mut mesh = row.visuals.mesh.clone();
-                                mesh.indices = mesh.indices[..background_end].to_vec();
-                                mesh.translate(placed.pos.to_vec2() + text.pos.to_vec2());
-                                backgrounds.push(eframe::egui::Shape::mesh(mesh));
-                                row.visuals.mesh.indices.drain(..background_end);
-                                row.visuals.glyph_index_start = 0;
-                            }
                             for (vertex, source) in row.visuals.mesh.vertices[..base]
                                 .iter_mut()
                                 .zip(&original.row.visuals.mesh.vertices)
@@ -146,6 +136,80 @@ pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
         selection_slot,
         crate::ui::text_selection::selection_shape(&rects, editor_selection_fill()),
     );
+}
+
+/// Clears every section background in `job` and returns them by section index, for
+/// [`section_background_shapes`]. egui paints section backgrounds as square boxes grown a point
+/// past the row on every side, which hug the glyphs and run into the row above and below.
+fn take_section_backgrounds(job: &mut LayoutJob) -> Vec<Color32> {
+    job.sections
+        .iter_mut()
+        .map(|section| std::mem::replace(&mut section.format.background, Color32::TRANSPARENT))
+        .collect()
+}
+
+/// Rounded pills behind each run of glyphs that had a section background (inline code): a little
+/// air left and right of the text, and a point clear of the neighboring rows.
+fn section_background_shapes(
+    galley: &eframe::egui::Galley,
+    origin: Pos2,
+    backgrounds: &[Color32],
+) -> Vec<eframe::egui::Shape> {
+    use eframe::egui::{CornerRadius, Rect, Shape};
+    const PAD_X: f32 = 2.0;
+    const INSET_Y: f32 = 1.0;
+    if backgrounds
+        .iter()
+        .all(|color| *color == Color32::TRANSPARENT)
+    {
+        return Vec::new();
+    }
+    // Rows hold one glyph per char (the newline excepted), so walking the job's text alongside
+    // them gives each glyph's byte offset, and from it its section.
+    let job = &galley.job;
+    let mut chars = job.text.char_indices();
+    let mut section = 0;
+    let mut shapes = Vec::new();
+    for placed in &galley.rows {
+        let row_rect = placed.rect().translate(origin.to_vec2());
+        let mut run: Option<(Color32, f32, f32)> = None;
+        let mut flush = |run: Option<(Color32, f32, f32)>| {
+            if let Some((color, left, right)) = run {
+                let rect = Rect::from_x_y_ranges(
+                    left - PAD_X..=right + PAD_X,
+                    row_rect.top() + INSET_Y..=row_rect.bottom() - INSET_Y,
+                );
+                shapes.push(Shape::rect_filled(rect, CornerRadius::same(3), color));
+            }
+        };
+        for glyph in &placed.row.glyphs {
+            let byte = chars.next().map_or(job.text.len(), |(byte, _)| byte);
+            while section + 1 < job.sections.len() && job.sections[section].byte_range.end.0 <= byte
+            {
+                section += 1;
+            }
+            let color = backgrounds
+                .get(section)
+                .copied()
+                .unwrap_or(Color32::TRANSPARENT);
+            let left = row_rect.left() + glyph.pos.x;
+            let right = row_rect.left() + glyph.max_x();
+            match &mut run {
+                Some((run_color, _, run_right)) if *run_color == color => *run_right = right,
+                _ => {
+                    flush(run.take());
+                    if color != Color32::TRANSPARENT {
+                        run = Some((color, left, right));
+                    }
+                }
+            }
+        }
+        flush(run);
+        if placed.ends_with_newline {
+            chars.next();
+        }
+    }
+    shapes
 }
 
 pub fn animated_status_job(label: &str, size: f32, time: f64) -> LayoutJob {
@@ -472,7 +536,7 @@ mod selection_tests {
             .position(|s| matches!(s.shape, egui::Shape::Text(_)))
             .unwrap();
         let contour_index = selected.shapes.iter().position(|s| matches!(&s.shape, egui::Shape::Vec(v) if v.iter().any(|s| matches!(s, egui::Shape::Path(_))))).unwrap();
-        let background_index = selected.shapes.iter().position(|s| matches!(&s.shape, egui::Shape::Vec(v) if v.iter().any(|s| matches!(s, egui::Shape::Mesh(_))))).unwrap();
+        let background_index = selected.shapes.iter().position(|s| matches!(&s.shape, egui::Shape::Vec(v) if v.iter().any(|s| matches!(s, egui::Shape::Rect(r) if r.fill == Color32::DARK_GRAY)))).unwrap();
         assert!(background_index < contour_index && contour_index < text_index);
         let egui::Shape::Text(text) = &selected.shapes[text_index].shape else {
             unreachable!()

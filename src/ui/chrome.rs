@@ -369,6 +369,36 @@ pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egu
     WidgetText::LayoutJob(std::sync::Arc::new(job))
 }
 
+/// A shortcut such as `⇧⌘P` laid out for display. The text fonts have no ⌘⇧⌃⌥, so the fallback
+/// font drew them small and low; they come from the icon font instead, centered on the keys.
+pub fn shortcut_job(shortcut: &str, size: f32, color: Color32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    let text = TextFormat::simple(FontId::proportional(size), color);
+    let glyph = TextFormat {
+        font_id: FontId::new(size, icon_font()),
+        color,
+        valign: Align::Center,
+        ..Default::default()
+    };
+    for ch in shortcut.chars() {
+        let icon = match ch {
+            '⌘' => "\u{f0633}",
+            '⌃' => "\u{f0634}",
+            '⌥' => "\u{f0635}",
+            '⇧' => "\u{f0636}",
+            _ => {
+                let mut buf = [0u8; 4];
+                job.append(ch.encode_utf8(&mut buf), 0.0, text.clone());
+                continue;
+            }
+        };
+        job.append(icon, 0.0, glyph.clone());
+    }
+    job
+}
+
 /// Render `icon` with the dedicated icon font family (no trailing label) at the given size/color.
 pub fn icon_glyph_rich(icon: &str, size: f32, color: Color32) -> RichText {
     RichText::new(icon)

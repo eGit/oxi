@@ -167,51 +167,6 @@ impl FindResults {
     }
 }
 
-pub(super) fn apply_search_highlights(
-    job: &mut egui::text::LayoutJob,
-    matches: &[std::ops::Range<usize>],
-    active: Option<usize>,
-) {
-    if matches.is_empty() {
-        return;
-    }
-    let passive = crate::theme::blend_color(c_bg_main(), c_warning_fg(), 0.38);
-    let active_color = crate::theme::blend_color(c_bg_main(), c_accent(), 0.72);
-    let mut sections = Vec::with_capacity(job.sections.len() + matches.len() * 2);
-    for section in &job.sections {
-        let section_start = section.byte_range.start.0;
-        let section_end = section.byte_range.end.0;
-        let mut cursor = section_start;
-        for (match_index, range) in matches.iter().enumerate() {
-            let start = range.start.max(section_start);
-            let end = range.end.min(section_end);
-            if start >= end {
-                continue;
-            }
-            if cursor < start {
-                let mut untouched = section.clone();
-                untouched.byte_range = egui::text::ByteIndex(cursor)..egui::text::ByteIndex(start);
-                sections.push(untouched);
-            }
-            let mut highlighted = section.clone();
-            highlighted.byte_range = egui::text::ByteIndex(start)..egui::text::ByteIndex(end);
-            highlighted.format.background = if active == Some(match_index) {
-                active_color
-            } else {
-                passive
-            };
-            sections.push(highlighted);
-            cursor = end;
-        }
-        if cursor < section_end {
-            let mut tail = section.clone();
-            tail.byte_range = egui::text::ByteIndex(cursor)..egui::text::ByteIndex(section_end);
-            sections.push(tail);
-        }
-    }
-    job.sections = sections;
-}
-
 pub(super) fn apply_definition_underline(
     job: &mut egui::text::LayoutJob,
     range: &std::ops::Range<usize>,

@@ -7,6 +7,9 @@ use super::OxiApp;
 
 impl eframe::App for OxiApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        self.take_menu_actions();
+        self.replay_queued_actions(ctx, raw_input);
         if self.conv.settings_page.open
             || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
         {
@@ -48,6 +51,7 @@ impl eframe::App for OxiApp {
         self.guard_editor_exit(ctx);
         self.poll_windows_clipboard_image_paste(ctx);
         self.handle_hold_space_dictation(ctx);
+        self.run_pending_app_actions(ctx);
         self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
@@ -156,6 +160,9 @@ impl eframe::App for OxiApp {
         );
         self.render_activity_window(ui.ctx());
         self.route_opened_links(ui.ctx());
+        // Last, so the check marks see every toggle made this frame (keys, menu, buttons).
+        #[cfg(target_os = "macos")]
+        self.sync_menu_bar(ui.ctx());
     }
 }
 
@@ -260,10 +267,11 @@ impl OxiApp {
     fn poll_windows_clipboard_image_paste(&mut self, _ctx: &egui::Context) {}
 
     /// Global shortcuts that work outside the composer TextEdit.
-    /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
+    /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` (and Ctrl+` on macOS) terminal, Cmd/Ctrl+B chats sidebar,
     /// Cmd/Ctrl+E workspace explorer, Cmd/Ctrl+Shift+N opens the scratchpad,
-    /// Cmd/Ctrl+Shift+B git panel, Cmd/Ctrl+P opens any workspace file,
-    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds (Cmd+G / F3 next, with Shift previous), F12 goes to the
+    /// Cmd/Ctrl+Shift+B git panel, Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+Shift+P the
+    /// command palette, Cmd/Ctrl+, settings,
+    /// Cmd/Ctrl+S saves, Cmd/Ctrl+W closes the editor tab, Cmd/Ctrl+F finds (Cmd+G / F3 next, with Shift previous), F12 goes to the
     /// definition under the caret, Cmd/Ctrl+R lists the file's symbols, Cmd/Ctrl+Shift+R the
     /// project's, Ctrl+G (macOS) goes to a line, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
@@ -279,8 +287,11 @@ impl OxiApp {
             toggle_explorer,
             toggle_git,
             open_file,
+            command_palette,
+            open_settings,
             open_scratchpad,
             save_file,
+            close_tab,
             find_file,
             find_replace,
             find_next,
@@ -295,13 +306,19 @@ impl OxiApp {
         ) = ctx.input(|i| {
             (
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
+                // macOS keeps Cmd+` for cycling windows; Ctrl+` (VS Code's binding) works there.
+                (i.modifiers.matches_exact(cmd)
+                    || (cfg!(target_os = "macos") && i.modifiers.matches_exact(Modifiers::CTRL)))
+                    && i.key_pressed(Key::Backtick),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::E),
                 i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::B),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::P),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Comma),
                 i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::N),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::W),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
                 // Sublime's Replace: Cmd+Alt+F on macOS (Cmd+H hides the app), Ctrl+H elsewhere.
                 if cfg!(target_os = "macos") {
@@ -344,6 +361,12 @@ impl OxiApp {
         if open_file && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
         }
+        if command_palette && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
+            self.open_file_picker_with(">");
+        }
+        if open_settings && !self.conv.settings_page.open {
+            self.open_settings_page();
+        }
         if open_scratchpad && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_scratchpad();
         }
@@ -352,6 +375,13 @@ impl OxiApp {
             && self.conv.editor.active_document().is_some()
         {
             self.save_editor_file();
+        }
+        if close_tab
+            && !self.conv.settings_page.open
+            && !self.conv.editor.file_picker_open
+            && self.conv.editor.prompt.is_none()
+        {
+            self.close_active_editor_tab();
         }
         if (find_file || find_replace)
             && !self.conv.settings_page.open

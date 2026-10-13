@@ -49,6 +49,8 @@ glob = "0.3"
 git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
 walkdir = "2"
 fontdb = "0.24"
+# Same version egui reads font metrics with; used to center text faces optically in their rows.
+skrifa = "0.42"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dirs = "7"
 sha2 = "0.11"
@@ -70,6 +72,10 @@ libc = "0.2"
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 whisper-rs = { version = "0.16", features = ["metal"] }
 mac-notification-sys = "0.6"
+
+# Native menu bar (macOS global menu, Windows window menu). Linux would need a GTK window.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+muda = { version = "0.21", default-features = false }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = "0.16"

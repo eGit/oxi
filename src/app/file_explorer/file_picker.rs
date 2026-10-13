@@ -1,6 +1,7 @@
 //! Workspace file discovery, fuzzy ranking, and temporary editor previews. Like Sublime's Goto
 //! Anything, `@query` lists the current file's symbols, `:42` goes to a line and `name:42` opens
-//! a file at a line; Cmd/Ctrl+Shift+R lists the whole project's symbols.
+//! a file at a line; Cmd/Ctrl+Shift+R lists the whole project's symbols. `>query` is the command
+//! palette (Cmd/Ctrl+Shift+P): every menu command, run as if its keys were pressed.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,8 @@ enum PickerTarget {
     File { path: PathBuf, line: Option<usize> },
     /// A byte range in a file (a symbol or a line).
     Location { path: PathBuf, range: Range<usize> },
+    /// A palette command (index into [`crate::app::commands::palette_commands`]).
+    Command(usize),
 }
 
 /// Goto Symbol entries of one file: outline symbols with their 1-based line numbers.
@@ -90,11 +93,17 @@ struct PickerEntry {
     primary_matches: Vec<usize>,
     secondary: String,
     secondary_matches: Vec<usize>,
+    /// Right-aligned hint (a command's shortcut).
+    trailing: String,
     target: Option<PickerTarget>,
 }
 
 /// Rows shown when no query matches, by mode.
-const NO_MATCHES: &[&str] = &["No matching files", "No matching symbols"];
+const NO_MATCHES: &[&str] = &[
+    "No matching files",
+    "No matching symbols",
+    "No matching commands",
+];
 
 impl OxiApp {
     /// Open the picker with a mode prefix already typed (`@` symbols, `:` line).
@@ -151,6 +160,7 @@ impl OxiApp {
             );
             (document.path.clone(), caret)
         });
+        self.conv.editor.file_picker_return_focus = None;
         self.conv.editor.file_picker_open = true;
     }
 
@@ -299,6 +309,10 @@ impl OxiApp {
 
     /// Rows for the current query, best first; reused until the query or its inputs change.
     fn cached_picker_entries(&mut self, root: &Path, query: &str) -> Arc<Vec<PickerEntry>> {
+        // A few dozen commands, ordered by recent use: cheap, and not worth a cache key.
+        if query.starts_with('>') {
+            return Arc::new(self.picker_entries(root, query));
+        }
         let origin = self
             .conv
             .editor
@@ -343,6 +357,9 @@ impl OxiApp {
                 .to_string_lossy()
                 .replace('\\', "/")
         };
+        if let Some(command_query) = query.strip_prefix('>') {
+            return self.palette_entries(command_query.trim_start());
+        }
         if self.conv.editor.file_picker_project_symbols {
             let Some(symbols) = self.conv.editor.code_nav.project_symbols.clone() else {
                 return vec![PickerEntry {
@@ -350,6 +367,7 @@ impl OxiApp {
                     primary_matches: Vec::new(),
                     secondary: String::new(),
                     secondary_matches: Vec::new(),
+                    trailing: String::new(),
                     target: None,
                 }];
             };
@@ -371,6 +389,7 @@ impl OxiApp {
                     primary_matches: fuzzy_match_positions(&item.symbol.name, query),
                     secondary: format!("{}   {}", item.symbol.kind.label(), relative(&item.path)),
                     secondary_matches: Vec::new(),
+                    trailing: String::new(),
                     target: Some(PickerTarget::Location {
                         path: item.path.clone(),
                         range: item.symbol.name_range.clone(),
@@ -411,6 +430,7 @@ impl OxiApp {
                     primary_matches: fuzzy_match_positions(&symbol.name, symbol_query),
                     secondary: format!("{}   line {line}", symbol.kind.label()),
                     secondary_matches: Vec::new(),
+                    trailing: String::new(),
                     target: Some(PickerTarget::Location {
                         path: path.clone(),
                         range: symbol.name_range.clone(),
@@ -446,6 +466,7 @@ impl OxiApp {
                 primary_matches: Vec::new(),
                 secondary: format!("of {lines}"),
                 secondary_matches: Vec::new(),
+                trailing: String::new(),
                 target: target.map(|(_, start)| PickerTarget::Location {
                     path,
                     range: start..start,
@@ -468,6 +489,7 @@ impl OxiApp {
                 primary_matches: Vec::new(),
                 secondary: String::new(),
                 secondary_matches: Vec::new(),
+                trailing: String::new(),
                 target: None,
             }];
         }
@@ -498,6 +520,7 @@ impl OxiApp {
                         .into_iter()
                         .filter(|at| *at + 1 < name_start)
                         .collect(),
+                    trailing: String::new(),
                     target: Some(PickerTarget::File {
                         path: path.clone(),
                         line,
@@ -507,11 +530,81 @@ impl OxiApp {
             .collect()
     }
 
+    /// Palette rows for `query`: every command that applies here, best match first. With no
+    /// query, recently run commands come first, then menu order.
+    fn palette_entries(&self, query: &str) -> Vec<PickerEntry> {
+        use crate::app::commands::{Scope, palette_commands, shortcut_label};
+        let editing = self.conv.editor.file_picker_origin.is_some();
+        let recent = &self.conv.editor.palette_recent;
+        let recency = |index: usize| {
+            recent
+                .iter()
+                .position(|&recent| recent == index)
+                .map_or(i64::MIN, |rank| -(rank as i64))
+        };
+        let mut ranked: Vec<_> = palette_commands()
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, command))| editing || command.scope != Scope::Editor)
+            .filter_map(|(index, (title, command))| {
+                let score = if query.is_empty() {
+                    0
+                } else {
+                    fuzzy_path_score(title, query)?
+                };
+                Some((score, recency(index), index, title, command))
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+        ranked
+            .into_iter()
+            .map(|(_, _, index, title, command)| PickerEntry {
+                primary: title.clone(),
+                primary_matches: fuzzy_match_positions(title, query),
+                secondary: String::new(),
+                secondary_matches: Vec::new(),
+                trailing: command
+                    .shortcut
+                    .map(|(modifiers, key)| shortcut_label(modifiers, key))
+                    .unwrap_or_default(),
+                target: Some(PickerTarget::Command(index)),
+            })
+            .collect()
+    }
+
+    /// Close the palette and run command `index` as if its keys were pressed where the user
+    /// was: focus goes back to what had it before the palette, or to the editor for an editor
+    /// command.
+    fn run_palette_command(&mut self, ctx: &egui::Context, index: usize) {
+        use crate::app::commands::{Scope, palette_commands};
+        let Some((_, command)) = palette_commands().get(index) else {
+            return;
+        };
+        self.cancel_file_picker();
+        self.conv
+            .editor
+            .palette_recent
+            .retain(|&recent| recent != index);
+        self.conv.editor.palette_recent.insert(0, index);
+        self.conv.editor.palette_recent.truncate(8);
+        let editor = command.scope == Scope::Editor;
+        if !editor && let Some(Some(id)) = self.conv.editor.file_picker_return_focus.take() {
+            ctx.memory_mut(|memory| memory.request_focus(id));
+        }
+        self.queue_action(command.action, editor);
+    }
+
     /// Show `target` in the editor behind the picker. Files open as a temporary preview tab;
     /// locations select their range, only when it changed so the view is not re-scrolled
     /// every frame.
     fn preview_picker_target(&mut self, target: &PickerTarget) {
         let (path, range) = match target {
+            PickerTarget::Command(_) => {
+                if self.conv.editor.file_picker_preview.is_some() {
+                    self.clear_file_picker_preview();
+                }
+                return;
+            }
             PickerTarget::File { path, line } => {
                 self.preview_file_picker_path(path);
                 let Some(line) = line else {
@@ -550,12 +643,17 @@ impl OxiApp {
     }
 
     /// Enter/click: keep the previewed file as a real tab and jump there.
-    fn accept_picker_target(&mut self, target: PickerTarget) {
+    fn accept_picker_target(&mut self, ctx: &egui::Context, target: PickerTarget) {
+        if let PickerTarget::Command(index) = target {
+            self.run_palette_command(ctx, index);
+            return;
+        }
         let origin = self.conv.editor.file_picker_origin.take();
         self.conv.editor.file_picker_previewed = None;
         self.preview_picker_target(&target);
         let path = match &target {
             PickerTarget::File { path, .. } | PickerTarget::Location { path, .. } => path.clone(),
+            PickerTarget::Command(_) => return,
         };
         if let Some((target_path, range)) = self.conv.editor.file_picker_previewed.take() {
             self.conv.editor.navigation_target = Some((target_path, range));
@@ -591,7 +689,14 @@ impl OxiApp {
             self.conv.editor.file_picker_selected = 0;
             self.conv.editor.file_picker_last_query.clone_from(&query);
         }
-        let symbol_mode = self.conv.editor.file_picker_project_symbols || query.starts_with('@');
+        let mode = if query.starts_with('>') {
+            2
+        } else {
+            usize::from(self.conv.editor.file_picker_project_symbols || query.starts_with('@'))
+        };
+        if self.conv.editor.file_picker_return_focus.is_none() {
+            self.conv.editor.file_picker_return_focus = Some(ctx.memory(|m| m.focused()));
+        }
         let matches = self.cached_picker_entries(&root, &query);
 
         let (arrow_up, arrow_down, enter) = ctx.input_mut(|input| {
@@ -676,7 +781,7 @@ impl OxiApp {
                         .hint_text(if self.conv.editor.file_picker_project_symbols {
                             "Go to symbol in project…"
                         } else {
-                            "Go to file…  (@ symbol, : line)"
+                            "Go to file…  (@ symbol, : line, > command)"
                         })
                         .desired_width(f32::INFINITY),
                 );
@@ -691,10 +796,7 @@ impl OxiApp {
                     .animated(false)
                     .show(ui, |ui| {
                         if matches.is_empty() {
-                            ui.label(
-                                RichText::new(NO_MATCHES[usize::from(symbol_mode)])
-                                    .color(c_text_muted()),
-                            );
+                            ui.label(RichText::new(NO_MATCHES[mode]).color(c_text_muted()));
                         }
                         for (match_index, entry) in matches.iter().enumerate() {
                             let response = file_picker_row(
@@ -743,7 +845,7 @@ impl OxiApp {
         }
         if let Some(target) = selected {
             // Enter/click promotes the temporary preview to a regular editor tab.
-            self.accept_picker_target(target);
+            self.accept_picker_target(ctx, target);
         } else if !open {
             self.cancel_file_picker();
         } else {
@@ -820,7 +922,15 @@ fn file_picker_row(ui: &mut egui::Ui, entry: &PickerEntry, selected: bool) -> eg
             c_text_faint(),
         );
     }
-    job.wrap.max_width = rect.width() - 16.0;
+    // A command's shortcut sits at the right edge, like VS Code's palette.
+    let trailing = (!entry.trailing.is_empty()).then(|| {
+        let job = crate::ui::chrome::shortcut_job(&entry.trailing, FS_SMALL, c_text_muted());
+        ui.fonts_mut(|f| f.layout_job(job))
+    });
+    let trailing_w = trailing
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().x + 12.0);
+    job.wrap.max_width = rect.width() - 16.0 - trailing_w;
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     job.wrap.overflow_character = Some('…');
@@ -830,6 +940,16 @@ fn file_picker_row(ui: &mut egui::Ui, entry: &PickerEntry, selected: bool) -> eg
         galley,
         c_text(),
     );
+    if let Some(galley) = trailing {
+        ui.painter().galley(
+            egui::pos2(
+                rect.right() - 8.0 - galley.size().x,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            c_text_faint(),
+        );
+    }
     if response.hovered() && entry.target.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

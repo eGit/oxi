@@ -191,8 +191,15 @@ fn render_shortcuts(ui: &mut Ui) {
     } else {
         format!("{cmd}P :")
     };
-    let shortcuts: [(String, &str); 21] = [
+    // macOS keeps ⌘` for cycling windows, so the terminal also answers to VS Code's ⌃`.
+    let terminal = if mac {
+        "⌃`".to_owned()
+    } else {
+        format!("{cmd}`")
+    };
+    let shortcuts: [(String, &str); 24] = [
         (format!("{cmd}N"), "New chat"),
+        (format!("{cmd},"), "Settings"),
         (format!("{cmd}."), "Stop the running reply"),
         ("Enter".into(), "Send message"),
         (format!("{shift}Enter"), "New line in the message"),
@@ -201,7 +208,11 @@ fn render_shortcuts(ui: &mut Ui) {
         (format!("{cmd}B"), "Show or hide chats"),
         (format!("{cmd}E"), "Show or hide the file explorer"),
         (format!("{cmd}{shift}B"), "Show or hide source control"),
-        (format!("{cmd}`"), "Show or hide the terminal"),
+        (terminal, "Show or hide the terminal"),
+        (
+            format!("{cmd}{shift}P"),
+            "Command palette (every menu command)",
+        ),
         (format!("{cmd}P"), "Open a file in the workspace"),
         (format!("{cmd}R"), "Go to symbol in the file"),
         (format!("{cmd}{shift}R"), "Go to symbol in the project"),
@@ -209,6 +220,7 @@ fn render_shortcuts(ui: &mut Ui) {
         ("F12".into(), "Go to definition"),
         (format!("{cmd}{shift}N"), "Open global scratchpad"),
         (format!("{cmd}S"), "Save the open file"),
+        (format!("{cmd}W"), "Close the editor tab"),
         (format!("{cmd}F / {replace}"), "Find / find and replace"),
         (format!("{cmd}G / {cmd}{shift}G"), "Next / previous match"),
         (format!("{cmd}/"), "Toggle line comment"),
@@ -219,12 +231,7 @@ fn render_shortcuts(ui: &mut Ui) {
         .spacing(egui::vec2(18.0, 6.0))
         .show(ui, |ui| {
             for (keys, action) in shortcuts {
-                ui.label(
-                    RichText::new(keys)
-                        .size(FS_TINY)
-                        .monospace()
-                        .color(c_text()),
-                );
+                ui.label(crate::ui::chrome::shortcut_job(&keys, FS_TINY, c_text()));
                 ui.label(RichText::new(action).size(FS_TINY).color(c_text_muted()));
                 ui.end_row();
             }

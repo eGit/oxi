@@ -11,6 +11,7 @@ use crate::settings::AppSettings;
 mod activity_window;
 mod agent_handlers;
 mod chores;
+mod commands;
 mod compaction;
 mod composer;
 mod composer_helpers;
@@ -28,6 +29,8 @@ mod input_history;
 mod links;
 mod main_area;
 pub(crate) mod mentions;
+#[cfg(target_os = "macos")]
+mod menu_bar;
 mod notify;
 mod queue;
 mod selection_to_chat;
@@ -82,9 +85,26 @@ pub struct OxiApp {
     /// Size of the fixed part of every request (system prompt + tool definitions), reused by the
     /// per-frame context meter. See [`OxiApp::estimated_session_context_chars`].
     context_overhead_cache: std::cell::RefCell<Option<composer::ContextOverhead>>,
+    /// The native menu bar, installed once the window exists (see [`OxiApp::install_menu_bar`]).
+    #[cfg(target_os = "macos")]
+    menu_bar: Option<menu_bar::MenuBar>,
+    /// Menu items and palette commands waiting to be replayed as input (see
+    /// [`OxiApp::queue_action`]).
+    queued_actions: Vec<commands::QueuedAction>,
+    /// App actions due this frame, run from `logic`.
+    pending_app_actions: Vec<commands::AppAction>,
 }
 
 impl OxiApp {
+    /// Install the native menu bar (macOS). Must run on the main thread once the event loop is
+    /// up, i.e. from the eframe app creator.
+    pub fn install_menu_bar(&mut self, _ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        {
+            self.menu_bar = menu_bar::MenuBar::install(_ctx);
+        }
+    }
+
     /// Move keyboard focus to whatever view is actually showing: the editor when a
     /// document tab is active, the chat composer otherwise. Use this instead of setting
     /// `focus_chat_input_next_frame` directly so focus never lands on a hidden widget.
@@ -254,6 +274,10 @@ impl OxiApp {
             mcp: crate::agent::mcp::McpManager::new(),
             voice,
             clipboard_image_paste_key_down: false,
+            #[cfg(target_os = "macos")]
+            menu_bar: None,
+            queued_actions: Vec::new(),
+            pending_app_actions: Vec::new(),
             context_overhead_cache: Default::default(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
