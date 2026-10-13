@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-10-13
+
+### Added
+- **Agent:** Configure idle timeout and maximum concurrent agents in Settings → Agent → Limits
+- **Agent:** Agents warm up in the background while you compose a message, reducing latency when you send
+- **Approvals:** 'Always allow here' option on tool approvals, saved per workspace and applied to all agents in that workspace
+
+### Changed
+- **Agent:** Idle agents stop automatically after 15 minutes; the least recently used agent stops if more than 4 are running
+- **Agent:** Agent sessions resume on relaunch with previously selected permission mode and fast mode restored
+- **Agent:** One subprocess per chat shared between warm-up and message sending, reducing overhead
+
+
 ## [1.16.0] - 2026-10-13
 
 ### Added
@@ -1044,7 +1057,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.16.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.17.0...HEAD
+[1.17.0]: https://github.com/maziluiosif/oxi/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/maziluiosif/oxi/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/maziluiosif/oxi/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/maziluiosif/oxi/compare/v1.13.0...v1.14.0
