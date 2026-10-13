@@ -182,6 +182,32 @@ impl OxiApp {
             ui.add_space(14.0);
             hairline(ui);
             ui.add_space(12.0);
+            let current_detail = self.conv.settings.tool_detail;
+            settings_card_header(
+                ui,
+                "Tool calls",
+                Some("How much of each tool call the chat shows."),
+            );
+            egui::ComboBox::from_id_salt("appearance_tool_detail_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
+                .selected_text(current_detail.label())
+                .width(320.0)
+                .show_ui(ui, |ui| {
+                    for detail in crate::settings::ToolDetail::ALL {
+                        if ui
+                            .selectable_label(detail == current_detail, detail.label())
+                            .on_hover_text(detail.description())
+                            .clicked()
+                        {
+                            self.conv.settings.tool_detail = detail;
+                        }
+                    }
+                });
+            field_hint(ui, current_detail.description());
+
+            ui.add_space(14.0);
+            hairline(ui);
+            ui.add_space(12.0);
             settings_card_header(
                 ui,
                 "Chat width",

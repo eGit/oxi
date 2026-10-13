@@ -8,9 +8,11 @@ use eframe::egui::{
 };
 
 use crate::model::{AssistantBlock, concat_thinking_blocks};
+use crate::settings::ToolDetail;
 use crate::theme::*;
 use crate::ui::preview_expand::{
-    clickable_expand_overlay, expand_persist_id, is_expanded, set_expanded, truncate_lines_preview,
+    clickable_expand_overlay, clickable_expand_overlay_or, expand_persist_id, is_expanded,
+    is_expanded_or, set_expanded, truncate_lines_preview,
 };
 
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
@@ -170,8 +172,13 @@ pub(super) fn render_tool_pill(
     // moment they finish shrank the tail by the whole output panel, and with stick-to-bottom the
     // entire transcript jumped down on every command of a tool-heavy run. They fold once the next
     // tool starts (when the transcript is changing anyway), then remain user-foldable.
-    let live = (is_bash || is_task) && (running || (streaming && is_newest_tool));
-    let expanded = live || is_expanded(ui, persist_id);
+    let detail = super::tool_detail(ui);
+    let live = detail == ToolDetail::Balanced
+        && (is_bash || is_task)
+        && (running || (streaming && is_newest_tool));
+    // Only tools with something to show: an empty result would unfold into its raw arguments.
+    let open_by_default = detail == ToolDetail::Expanded && (has_output || diff_stats.is_some());
+    let expanded = live || is_expanded_or(ui, persist_id, open_by_default);
 
     let mut header_rect = eframe::egui::Rect::NOTHING;
     // Unfolded, the output hangs off the pill as one card instead of a second box below it.
@@ -229,7 +236,7 @@ pub(super) fn render_tool_pill(
     if is_bash && let Some(command) = bash_command(args_summary.as_deref()) {
         command_context_menu(ui, header_rect, persist_id, &command);
     }
-    clickable_expand_overlay(ui, frame.response.rect, persist_id);
+    clickable_expand_overlay_or(ui, frame.response.rect, persist_id, open_by_default);
 
     // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
     // unfolds the raw output / diff below it, and the next click folds it back.
@@ -529,10 +536,10 @@ fn render_edit_tool_block(
     } else {
         Id::new(("edit_block_open", tool_call_id.as_str()))
     });
-    let default_open = if streaming {
-        is_last_streaming_edit
-    } else {
-        true
+    let default_open = match super::tool_detail(ui) {
+        ToolDetail::Minimal => false,
+        ToolDetail::Balanced => !streaming || is_last_streaming_edit,
+        ToolDetail::Expanded => true,
     };
     let is_open = ui
         .ctx()

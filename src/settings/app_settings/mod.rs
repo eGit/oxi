@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::provider::{LlmProviderKind, ProviderConfig, UiDensity, WebSearchBackend};
+use super::provider::{LlmProviderKind, ProviderConfig, ToolDetail, UiDensity, WebSearchBackend};
 
 pub const ALL_TOOL_NAMES: [&str; 19] = [
     "read",
@@ -118,6 +118,9 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// How much tool output the transcript shows without a click.
+    #[serde(default)]
+    pub tool_detail: ToolDetail,
     /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
     #[serde(default = "default_font_id")]
     pub ui_font: String,
@@ -312,6 +315,7 @@ impl Default for AppSettings {
             chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            tool_detail: ToolDetail::Balanced,
             ui_font: default_font_id(),
             mono_font: default_font_id(),
             max_tool_rounds: default_max_tool_rounds(),

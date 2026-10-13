@@ -713,6 +713,8 @@ pub struct TranscriptState {
     /// of all being laid out again every frame.
     pub width_bits: u32,
     pub width_changed_at: f64,
+    /// Tool-detail mode the cached heights were measured with; switching it re-measures them.
+    pub tool_detail: crate::settings::ToolDetail,
     /// Transcript units laid out for real last frame. While the pointer rests over the
     /// transcript none of them is culled, so the widget under the cursor cannot flip between a
     /// real label and a placeholder right before a click. See `render_conversation`.
@@ -738,6 +740,7 @@ impl Default for TranscriptState {
             heights: Default::default(),
             width_bits: 0,
             width_changed_at: f64::NEG_INFINITY,
+            tool_detail: Default::default(),
             rendered: Default::default(),
             turn_changes: Default::default(),
             message_menu: None,
