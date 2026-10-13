@@ -141,6 +141,11 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         return;
     }
 
+    if std::env::var_os("OXI_STREAM_REVIEW").is_some() {
+        review_streaming_ui(rec);
+        return;
+    }
+
     let gallery = true;
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
@@ -1968,6 +1973,84 @@ impl Recorder<'_> {
         }));
         self.tx = None;
     }
+}
+
+/// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed
+/// tool, and the finished turn unfolded (`OXI_STREAM_REVIEW=1`).
+fn review_streaming_ui(rec: &mut Recorder<'_>) {
+    rec.harness.run_steps(4);
+    {
+        let app = rec.app();
+        app.conv.settings_page.open = false;
+        app.conv.settings_page.original = None;
+    }
+    rec.begin_turn("Why does the percentile test flake?");
+    rec.stream_thinking(
+        "The user says test_percentile is flaky. Flaky usually means ordering or floating point. \
+         Let me think about what percentile() does with ties and whether the test compares \
+         floats exactly. I should read the test and the implementation before guessing.",
+    );
+    rec.still("stream-thinking-live");
+    rec.send(AgentEvent::ToolStart {
+        name: "bash".into(),
+        tool_call_id: "s_1".into(),
+        args: Some(json!({ "command": "python3 -m unittest -q test_stats.TestPercentile" })),
+    });
+    rec.send(AgentEvent::ToolOutput {
+        tool_call_id: "s_1".into(),
+        text: "test_p50 ... ok\ntest_p90 ... ok\ntest_p99 ...".into(),
+        truncated: false,
+    });
+    rec.harness.run_steps(4);
+    rec.still("stream-bash-running");
+    rec.send(AgentEvent::ToolEnd {
+        tool_call_id: "s_1".into(),
+        is_error: Some(true),
+        full_output_path: None,
+        diff: None,
+    });
+    for (id, name, args) in [
+        ("s_2", "read", json!({ "path": "stats.py" })),
+        ("s_3", "grep", json!({ "pattern": "def percentile", "path": "." })),
+        ("s_4", "read", json!({ "path": "tests/test_stats.py" })),
+    ] {
+        rec.tool(id, name, args, 0.2);
+    }
+    rec.send(AgentEvent::ToolStart {
+        name: "find".into(),
+        tool_call_id: "s_5".into(),
+        args: Some(json!({ "pattern": "**/conftest.py" })),
+    });
+    rec.harness.run_steps(4);
+    rec.still("stream-explore-running");
+    rec.send(AgentEvent::ToolEnd {
+        tool_call_id: "s_5".into(),
+        is_error: Some(false),
+        full_output_path: None,
+        diff: None,
+    });
+    rec.harness.run_steps(4);
+    rec.still("stream-planning");
+    rec.stream_text("`percentile()` interpolates with floats, and the test compares with `==`.");
+    rec.harness.run_steps(4);
+    rec.still("stream-answer");
+    rec.finish_turn();
+    rec.harness.run_steps(4);
+    rec.still("stream-done");
+    {
+        let persist = crate::ui::preview_expand::expand_persist_id(egui::Id::new((
+            "activity_summary",
+            1usize,
+        )));
+        rec.harness
+            .ctx
+            .data_mut(|d| d.insert_persisted(persist, true));
+    }
+    rec.harness.run_steps(4);
+    rec.still("stream-done-expanded");
+    crate::theme::apply_theme(&rec.harness.ctx, "light");
+    rec.harness.run_steps(4);
+    rec.still("stream-done-expanded-light");
 }
 
 /// A focused GPU review using the demo's isolated settings and workspace.

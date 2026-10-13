@@ -613,7 +613,8 @@ fn render_activity_summary(
         persist_id.with("activity_summary_click"),
         egui::Sense::click(),
     );
-    let hovered = click.hovered();
+    // A live turn can't be folded, so it gets no hover affordance either.
+    let hovered = !streaming && click.hovered();
     // Only the chevron lights up on hover (matching the Thinking block behavior); the
     // "Worked..." text stays in its quiet muted tone so the row doesn't shout.
     let chevron_col = if hovered { c_accent() } else { c_text_faint() };
@@ -635,7 +636,7 @@ fn render_activity_summary(
         });
     });
 
-    if click.hovered() {
+    if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if !streaming && click.clicked() {
