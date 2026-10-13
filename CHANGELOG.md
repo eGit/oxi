@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-10-13
+
+### Added
+- **Search:** Find in Files mode (Cmd/Ctrl+Shift+F) with regex, case sensitivity, whole word matching, include globs, and Replace All.
+- **Search:** Find References (Shift+F12) to locate all uses of an identifier in scope, skipping comments and strings.
+- **Agent:** Search and grep commands now respect .gitignore, .ignore, and git excludes when scanning your codebase.
+
+### Fixed
+- **UI:** Tool output now attaches directly to its pill instead of appearing as a separate box.
+- **UI:** Spinner no longer renders as a blob at small sizes; stroke scales with text size.
+- **UI:** Reduced gap between consecutive tool pills.
+- **UI:** Sub-second reasoning displays as 'Thought' instead of 'Thought for 0s'.
+- **Git panel:** Ahead/behind counts stay visible when branch names are long; counts layout from the right to avoid being pushed out.
+- **Turn changes:** File paths no longer push the Revert button out of view; card layout is more even and consistent.
+
+
 ## [1.14.0] - 2026-10-13
 
 ### Added
@@ -1018,7 +1034,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/maziluiosif/oxi/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/maziluiosif/oxi/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/maziluiosif/oxi/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/maziluiosif/oxi/compare/v1.11.3...v1.12.0
