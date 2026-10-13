@@ -289,6 +289,7 @@ impl OxiApp {
         bottom_overlay_h: f32,
     ) {
         let transcript_h = scroll_budget.max(40.0);
+        let copy_selection = self.hold_selection_for_message_menu(ui.ctx());
         let wi = self.conv.active_workspace;
         let si = self.conv.workspaces[wi].active;
 
@@ -635,6 +636,12 @@ impl OxiApp {
                 }
             });
 
+        if copy_selection {
+            // The labels have gathered the selected text; nothing outside the transcript (the
+            // terminal reads Copy as Ctrl+C) may see the synthetic event.
+            ui.ctx()
+                .input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
+        }
         self.render_message_menu(ui.ctx());
 
         // Floating "scroll to bottom" jump button when the user has scrolled up —

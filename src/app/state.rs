@@ -668,6 +668,11 @@ pub struct TranscriptState {
     pub turn_changes: super::turn_changes::TurnChangesCache,
     /// Right-click menu of a transcript message (fork, copy).
     pub message_menu: Option<super::fork::MessageMenu>,
+    /// The transcript's text selection as it was when a right-click began. egui collapses a
+    /// label selection on any press, so it is put back while the message menu is open.
+    pub held_selection: Option<egui::text_selection::LabelSelectionState>,
+    /// "Copy selection" was chosen: copy the held selection on the next frame.
+    pub copy_held_selection: bool,
 }
 
 impl Default for TranscriptState {
@@ -683,6 +688,8 @@ impl Default for TranscriptState {
             rendered: Default::default(),
             turn_changes: Default::default(),
             message_menu: None,
+            held_selection: None,
+            copy_held_selection: false,
         }
     }
 }
