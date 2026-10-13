@@ -23,6 +23,7 @@ mod markdown_preview;
 mod media_view;
 mod minimap;
 mod navigation_diff;
+mod project_search;
 mod safety;
 mod support;
 mod syntax_window;
@@ -34,6 +35,7 @@ pub(crate) use code_navigation::CodeNavState;
 pub(crate) use file_picker::{PickerCache, PickerOutline};
 pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
+pub(crate) use project_search::{FIND_REFERENCES_REQUEST, ProjectSearchState};
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 
 pub(crate) use diff_editor::{DiffSource, DocumentDiff};

@@ -98,6 +98,16 @@ impl OxiApp {
                 }
                 self.focus_active_view_next_frame();
             }
+            SettingsExitAction::ShowSearch { toggle } => {
+                let search_on = self.conv.sidebar.open
+                    && self.conv.sidebar.mode == crate::app::state::SidebarMode::Search;
+                if toggle && search_on {
+                    self.conv.sidebar.open = false;
+                    self.focus_active_view_next_frame();
+                } else {
+                    self.show_project_search();
+                }
+            }
             SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
             SettingsExitAction::ToggleGitPanel => self.toggle_git_panel_tab(None),
             SettingsExitAction::ToggleGitBranches => {

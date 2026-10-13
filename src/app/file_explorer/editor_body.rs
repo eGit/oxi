@@ -528,6 +528,23 @@ impl OxiApp {
                                 context_goto = true;
                                 ui.close();
                             }
+                            if navigation_supported
+                                && ui
+                                    .button(if cfg!(target_os = "macos") {
+                                        "Find References    ⇧F12"
+                                    } else {
+                                        "Find References    Shift+F12"
+                                    })
+                                    .clicked()
+                            {
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new(super::FIND_REFERENCES_REQUEST),
+                                        (),
+                                    )
+                                });
+                                ui.close();
+                            }
                             if has_selection
                                 && ui
                                     .button(if cfg!(target_os = "macos") {

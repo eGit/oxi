@@ -1,5 +1,5 @@
 //! Persistent bottom status bar: thin strip below the terminal panel with quick
-//! toggles for the chats/explorer sidebar, terminal/git panels, and the current git branch.
+//! toggles for the chats/explorer/search sidebar, terminal/git panels, and the current git branch.
 
 use eframe::egui::{self, Align, Layout, Stroke};
 
@@ -55,6 +55,21 @@ impl OxiApp {
                     {
                         self.request_settings_exit(
                             crate::app::state::SettingsExitAction::ToggleExplorer,
+                        );
+                    }
+
+                    let search_on = self.conv.sidebar.open
+                        && self.conv.sidebar.mode == crate::app::state::SidebarMode::Search;
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_SEARCH, 20.0, search_on)
+                        .on_hover_text(if search_on {
+                            "Hide search (Cmd/Ctrl+Shift+F)"
+                        } else {
+                            "Find in files (Cmd/Ctrl+Shift+F)"
+                        })
+                        .clicked()
+                    {
+                        self.request_settings_exit(
+                            crate::app::state::SettingsExitAction::ShowSearch { toggle: true },
                         );
                     }
 

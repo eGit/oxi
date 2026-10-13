@@ -28,6 +28,8 @@ impl OxiApp {
         if self.conv.editor.active.is_some() {
             self.conv.editor.focus_editor_next_frame = true;
         } else if self.conv.editor.documents.is_empty()
+            // The search results stay up: they are how the user moves to the next file.
+            && self.conv.sidebar.mode != SidebarMode::Search
             && !(self.conv.editor.diff_tab_active
                 && self.conv.diff_view.open
                 && self.conv.git.diff.is_some())

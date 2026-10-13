@@ -130,6 +130,17 @@ impl OxiApp {
                 None,
                 "Delete".to_string(),
             ),
+            ConfirmAction::ReplaceInFiles { matches, files } => (
+                "Replace in files?".to_string(),
+                format!(
+                    "Replace {matches} {} in {files} {}. Files open in the editor are changed \
+                     there and left unsaved; the others are written to disk.",
+                    if *matches == 1 { "match" } else { "matches" },
+                    if *files == 1 { "file" } else { "files" },
+                ),
+                Some("Files written to disk cannot be restored with Undo.".to_string()),
+                "Replace".to_string(),
+            ),
         }
     }
 
@@ -165,6 +176,7 @@ impl OxiApp {
                     self.conv.settings.dictation.model_id = None;
                 }
             }
+            ConfirmAction::ReplaceInFiles { .. } => self.replace_in_files(),
         }
     }
 }

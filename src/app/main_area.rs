@@ -44,10 +44,10 @@ impl OxiApp {
                     .show(&mut sidebar_ui, |ui| {
                         ui.set_min_width(ui.max_rect().width());
                         ui.set_min_height(ui.max_rect().height());
-                        if self.conv.sidebar.mode == super::state::SidebarMode::Explorer {
-                            self.render_file_explorer(ui);
-                        } else {
-                            self.render_sidebar(ui);
+                        match self.conv.sidebar.mode {
+                            super::state::SidebarMode::Explorer => self.render_file_explorer(ui),
+                            super::state::SidebarMode::Search => self.render_project_search(ui),
+                            super::state::SidebarMode::Chats => self.render_sidebar(ui),
                         }
                     });
                 drop(sidebar_ui);

@@ -297,6 +297,8 @@ impl OxiApp {
             find_next,
             find_previous,
             goto_definition,
+            find_references,
+            find_in_files,
             goto_symbol,
             goto_project_symbol,
             goto_line,
@@ -331,6 +333,8 @@ impl OxiApp {
                 (i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::G))
                     || (i.modifiers.matches_exact(Modifiers::SHIFT) && i.key_pressed(Key::F3)),
                 i.modifiers.is_none() && i.key_pressed(Key::F12),
+                i.modifiers.matches_exact(Modifiers::SHIFT) && i.key_pressed(Key::F12),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::F),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::R),
                 i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::R),
                 // Sublime's Goto Line. Only macOS: elsewhere Ctrl+G is Find Next here.
@@ -405,6 +409,25 @@ impl OxiApp {
             })
         {
             self.conv.editor.goto_definition_requested = true;
+        }
+        // The editor's context menu asks for references through egui memory.
+        let find_references = find_references
+            || ctx.data_mut(|data| {
+                data.remove_temp::<()>(egui::Id::new(super::file_explorer::FIND_REFERENCES_REQUEST))
+                    .is_some()
+            });
+        if find_references
+            && !self.conv.settings_page.open
+            && self.conv.editor.active_document().is_some_and(|document| {
+                crate::code_nav::language_for_path(&document.path).is_some()
+            })
+        {
+            self.find_references_at_caret(ctx);
+        }
+        if find_in_files && !self.conv.editor.file_picker_open {
+            self.request_settings_exit(super::state::SettingsExitAction::ShowSearch {
+                toggle: false,
+            });
         }
         let editing = !self.conv.settings_page.open
             && !self.conv.editor.file_picker_open

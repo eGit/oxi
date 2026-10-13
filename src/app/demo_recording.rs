@@ -521,6 +521,29 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.still("editor-find-none");
         rec.app().conv.editor.find_open = false;
         rec.app().conv.editor.find_replace_open = false;
+        // Find in Files, then Find References on `median` from stats.py.
+        rec.app().show_project_search();
+        rec.app().conv.project_search.query = "median".into();
+        rec.app().conv.project_search.replace_open = true;
+        for _ in 0..20 {
+            rec.harness.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        rec.still("search-in-files");
+        {
+            let app = rec.app();
+            let content = app.conv.editor.active_document().unwrap().content.clone();
+            let byte = content.find("def median").unwrap() + 5;
+            app.conv.editor.navigation_cursor_char = content[..byte].chars().count();
+        }
+        let ctx = rec.harness.ctx.clone();
+        rec.app().find_references_at_caret(&ctx);
+        for _ in 0..20 {
+            rec.harness.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        rec.still("search-references");
+        rec.app().conv.sidebar.mode = super::state::SidebarMode::Explorer;
         rec.app().open_file_picker();
         rec.harness.run_steps(4);
         rec.still("file-picker");

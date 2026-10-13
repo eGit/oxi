@@ -216,6 +216,7 @@ impl OxiApp {
                     ..Default::default()
                 },
                 explorer: state::ExplorerState::default(),
+                project_search: Default::default(),
                 editor: state::EditorState::default(),
                 terminal_panel: state::TerminalPanelState {
                     open: settings.terminal_open,

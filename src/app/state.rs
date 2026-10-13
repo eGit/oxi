@@ -46,6 +46,10 @@ pub enum SettingsExitAction {
     NewChat,
     ToggleSidebar,
     ToggleExplorer,
+    /// Show the search sidebar (Cmd/Ctrl+Shift+F); `toggle` hides it when it is showing.
+    ShowSearch {
+        toggle: bool,
+    },
     ToggleTerminal,
     ToggleGitPanel,
     ToggleGitBranches,
@@ -54,13 +58,34 @@ pub enum SettingsExitAction {
 /// A destructive action waiting on the shared confirmation modal (see `app::confirm`).
 #[derive(Clone)]
 pub enum ConfirmAction {
-    DeleteSession { wi: usize, si: usize },
-    DeleteWorkspace { wi: usize },
-    RemoveWorktree { wi: usize },
-    GitDiscard { paths: Vec<String> },
-    DeleteLocalModel { id: String },
-    DeleteRemoteModel { id: String, path: String },
-    DeleteVoiceModel { id: String },
+    DeleteSession {
+        wi: usize,
+        si: usize,
+    },
+    DeleteWorkspace {
+        wi: usize,
+    },
+    RemoveWorktree {
+        wi: usize,
+    },
+    GitDiscard {
+        paths: Vec<String>,
+    },
+    DeleteLocalModel {
+        id: String,
+    },
+    DeleteRemoteModel {
+        id: String,
+        path: String,
+    },
+    DeleteVoiceModel {
+        id: String,
+    },
+    /// Replace All in the search sidebar.
+    ReplaceInFiles {
+        matches: usize,
+        files: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -68,6 +93,8 @@ pub enum SidebarMode {
     #[default]
     Chats,
     Explorer,
+    /// Find in Files and Find References results.
+    Search,
 }
 
 #[derive(Clone)]
@@ -755,6 +782,7 @@ pub struct ConversationState {
     pub composer: ComposerState,
     pub sidebar: SidebarState,
     pub explorer: ExplorerState,
+    pub project_search: crate::app::file_explorer::ProjectSearchState,
     pub editor: EditorState,
     pub terminal_panel: TerminalPanelState,
     pub settings: AppSettings,
