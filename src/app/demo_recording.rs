@@ -2011,7 +2011,11 @@ fn review_streaming_ui(rec: &mut Recorder<'_>) {
     });
     for (id, name, args) in [
         ("s_2", "read", json!({ "path": "stats.py" })),
-        ("s_3", "grep", json!({ "pattern": "def percentile", "path": "." })),
+        (
+            "s_3",
+            "grep",
+            json!({ "pattern": "def percentile", "path": "." }),
+        ),
         ("s_4", "read", json!({ "path": "tests/test_stats.py" })),
     ] {
         rec.tool(id, name, args, 0.2);
