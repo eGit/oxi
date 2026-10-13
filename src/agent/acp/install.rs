@@ -31,20 +31,30 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 pub(super) struct Adapter {
     package: &'static str,
     bin: &'static str,
+    /// Arguments the binary needs to speak ACP; part of the default command line.
+    args: &'static [&'static str],
 }
 
-const ADAPTERS: [Adapter; 3] = [
+const ADAPTERS: [Adapter; 4] = [
     Adapter {
         package: "@agentclientprotocol/claude-agent-acp",
         bin: "claude-agent-acp",
+        args: &[],
     },
     Adapter {
         package: "@agentclientprotocol/codex-acp",
         bin: "codex-acp",
+        args: &[],
     },
     Adapter {
         package: "@brokkai/muse-acp",
         bin: "muse-acp",
+        args: &[],
+    },
+    Adapter {
+        package: "@github/copilot",
+        bin: "copilot",
+        args: &["--acp"],
     },
 ];
 
@@ -91,6 +101,14 @@ impl Adapter {
             .map(|v| v.trim().to_string())
     }
 
+    /// `program` followed by the adapter's ACP arguments.
+    fn launch_line(&self, program: String) -> String {
+        std::iter::once(program)
+            .chain(self.args.iter().map(|a| a.to_string()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// Serializes installs and updates of this adapter within the process.
     fn lock(&self) -> Arc<AsyncMutex<()>> {
         type Locks = std::sync::Mutex<HashMap<&'static str, Arc<AsyncMutex<()>>>>;
@@ -107,8 +125,9 @@ fn base_dir() -> PathBuf {
     crate::app_dirs::data_dir().join("acp")
 }
 
-/// The managed adapter a launch command refers to: `npx [-y|--yes] <package>[@tag]` with nothing
-/// else on the line. Custom commands (extra flags, pinned versions, other tools) are left alone.
+/// The managed adapter a launch command refers to: `npx [-y|--yes] <package>[@tag]` followed by
+/// exactly the adapter's own arguments. Custom commands (extra flags, pinned versions, other
+/// tools) are left alone.
 pub(super) fn adapter_for(command_line: &str) -> Option<&'static Adapter> {
     let mut parts = command_line.split_whitespace();
     if parts.next()? != "npx" {
@@ -118,11 +137,11 @@ pub(super) fn adapter_for(command_line: &str) -> Option<&'static Adapter> {
     if spec == "-y" || spec == "--yes" {
         spec = parts.next()?;
     }
-    if parts.next().is_some() {
-        return None;
-    }
+    let rest: Vec<&str> = parts.collect();
     let package = spec.strip_suffix("@latest").unwrap_or(spec);
-    ADAPTERS.iter().find(|a| a.package == package)
+    ADAPTERS
+        .iter()
+        .find(|a| a.package == package && a.args == rest.as_slice())
 }
 
 /// The command line to actually spawn for `command_line`: the managed install of a known adapter
@@ -132,7 +151,7 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
         return command_line.to_string();
     };
     if let Some(bin) = adapter.installed_bin() {
-        return shell_quote(&bin);
+        return adapter.launch_line(shell_quote(&bin));
     }
     let lock = adapter.lock();
     let _guard = lock.lock().await;
@@ -142,8 +161,8 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
         log::warn!("could not install ACP adapter {}: {e}", adapter.package);
     }
     match adapter.installed_bin() {
-        Some(bin) => shell_quote(&bin),
-        None => format!("npx -y {}@latest", adapter.package),
+        Some(bin) => adapter.launch_line(shell_quote(&bin)),
+        None => adapter.launch_line(format!("npx -y {}@latest", adapter.package)),
     }
 }
 
@@ -398,6 +417,20 @@ mod tests {
             adapter_for(crate::settings::ProviderConfig::DEFAULT_MUSE_ACP_COMMAND).map(|a| a.bin),
             Some("muse-acp")
         );
+        for cmd in [
+            crate::settings::ProviderConfig::DEFAULT_COPILOT_ACP_COMMAND,
+            "npx @github/copilot@latest --acp",
+        ] {
+            assert_eq!(adapter_for(cmd).map(|a| a.bin), Some("copilot"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn launch_line_appends_the_acp_arguments() {
+        let copilot = adapter_for("npx -y @github/copilot --acp").unwrap();
+        assert_eq!(copilot.launch_line("copilot".into()), "copilot --acp");
+        let codex = adapter_for("npx -y @agentclientprotocol/codex-acp").unwrap();
+        assert_eq!(codex.launch_line("codex-acp".into()), "codex-acp");
     }
 
     #[test]
@@ -408,6 +441,9 @@ mod tests {
             "npx -y @agentclientprotocol/claude-agent-acp --debug",
             "npx -y @zed-industries/claude-code-acp",
             "codex-acp",
+            "npx -y @github/copilot",
+            "npx -y @github/copilot --acp --port 8080",
+            "npx -y @agentclientprotocol/codex-acp --acp",
             "",
         ] {
             assert!(adapter_for(cmd).is_none(), "{cmd}");

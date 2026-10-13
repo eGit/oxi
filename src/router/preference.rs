@@ -70,6 +70,7 @@ pub fn parse(text: &str) -> Option<Preference> {
                 ("claude code", LlmProviderKind::ClaudeCodeAcp),
                 ("codex acp", LlmProviderKind::CodexAcp),
                 ("muse code", LlmProviderKind::MuseCodeAcp),
+                ("github copilot", LlmProviderKind::CopilotAcp),
                 ("cursor acp", LlmProviderKind::CursorAcp),
                 ("anthropic api", LlmProviderKind::CustomAnthropic),
                 ("openai api", LlmProviderKind::OpenAi),
@@ -89,6 +90,7 @@ pub fn parse(text: &str) -> Option<Preference> {
                 ("claude", LlmProviderKind::ClaudeCodeAcp),
                 ("cursor", LlmProviderKind::CursorAcp),
                 ("muse", LlmProviderKind::MuseCodeAcp),
+                ("copilot", LlmProviderKind::CopilotAcp),
             ];
             for (alias, provider) in aliases {
                 if let Some(tail) = rest.strip_prefix(alias)

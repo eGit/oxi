@@ -84,6 +84,7 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         CursorAcp => "Cursor",
         CodexAcp => "Codex",
         MuseCodeAcp => "Muse Code",
+        CopilotAcp => "Copilot",
         Router => "Router",
     }
 }

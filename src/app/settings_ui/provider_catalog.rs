@@ -34,6 +34,7 @@ pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::CursorAcp,
             LlmProviderKind::CodexAcp,
             LlmProviderKind::MuseCodeAcp,
+            LlmProviderKind::CopilotAcp,
         ],
     ),
 ];
@@ -71,6 +72,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         }
         LlmProviderKind::MuseCodeAcp => {
             "Drive Meta's Muse Code CLI (your Muse Code subscription) through the community muse-acp adapter."
+        }
+        LlmProviderKind::CopilotAcp => {
+            "Drive GitHub Copilot CLI (your Copilot plan) through its built-in Agent Client Protocol server."
         }
         LlmProviderKind::Router => {
             "Picks a provider, model and effort per turn from the ones you configured, using subscription quota, spend and task difficulty."
