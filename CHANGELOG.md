@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-13
+
+### Added
+- **UI:** Native macOS menu bar with File, Edit, Selection, View, Go, Chat, Window, and Help menus, with toggles shown as check marks.
+- **UI:** Command palette accessible via Cmd/Ctrl+Shift+P or `>` in the file picker, showing all commands with shortcuts and recent history.
+- **UI:** Cmd/Ctrl+W closes the active editor tab.
+- **UI:** Cmd/Ctrl+, opens Settings.
+- **UI:** Ctrl+` toggles the terminal on macOS.
+
+### Fixed
+- **UI:** Text now centers optically in rows, fixing misaligned selections, highlights, and carets.
+- **UI:** Inline code in chat displays as rounded pills with proper spacing.
+- **UI:** Find matches in the editor render as rounded highlights on row geometry instead of square backgrounds that merged across lines.
+
+
 ## [1.13.0] - 2026-10-13
 
 ### Added
@@ -1003,7 +1018,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/maziluiosif/oxi/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/maziluiosif/oxi/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/maziluiosif/oxi/compare/v1.11.3...v1.12.0
 [1.11.3]: https://github.com/maziluiosif/oxi/compare/v1.11.2...v1.11.3
