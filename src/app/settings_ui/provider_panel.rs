@@ -306,6 +306,9 @@ impl OxiApp {
                 LlmProviderKind::MuseCodeAcp => {
                     "Optional META_API_KEY, billed pay-as-you-go (else `muse login` is used)"
                 }
+                LlmProviderKind::CopilotAcp => {
+                    "Optional COPILOT_GITHUB_TOKEN (else Copilot CLI's own login is used)"
+                }
                 LlmProviderKind::Router => "",
             };
             settings_password_field(

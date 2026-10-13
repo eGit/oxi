@@ -153,7 +153,7 @@ Pick a provider in Settings or from the model picker in the composer.
 | **Local HF** | oxi downloads a GGUF and runs `llama-server` for you |
 | **Remote HF** | Same, on another machine over SSH |
 | **LM Studio, Ollama, llama.cpp** | Your own local or LAN server, optionally over SSH |
-| **Claude Code, Cursor, Codex** | Uses your existing subscription through ACP |
+| **Claude Code, Cursor, Codex, GitHub Copilot** | Uses your existing subscription through ACP |
 | **GPT Codex** | Sign in with ChatGPT, or use an OpenAI key |
 | **OpenAI, Azure, OpenRouter, OpenCode Go, Anthropic-compatible** | Hosted APIs with your key |
 | **Router** | Picks one of your providers per task, and switches if one runs out of quota |

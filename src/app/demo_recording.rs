@@ -403,6 +403,7 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.still("chat-heavy");
         rec.profile("heavy idle", false);
         rec.profile_scroll("heavy scroll");
+        rec.profile_resize("heavy resize");
         rec.profile("heavy hover", true);
         rec.profile_streaming("heavy stream");
         rec.profile_composer_typing("composer typing");
@@ -1267,6 +1268,18 @@ impl Recorder<'_> {
         &mut self,
         label: &str,
         frames: usize,
+        events: impl FnMut(usize, &mut OxiApp) -> Vec<Event>,
+    ) {
+        self.measure_sized(label, frames, |_| SIZE, events);
+    }
+
+    /// [`Self::measure`] with the window size of frame `i` given by `size` (warm-up frames use
+    /// `size(0)`).
+    fn measure_sized(
+        &mut self,
+        label: &str,
+        frames: usize,
+        size: impl Fn(usize) -> egui::Vec2,
         mut events: impl FnMut(usize, &mut OxiApp) -> Vec<Event>,
     ) {
         const WARM_UP: usize = 12;
@@ -1280,7 +1293,10 @@ impl Recorder<'_> {
         for i in 0..WARM_UP + frames {
             let app = self.harness.state_mut();
             let mut raw = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    size(i.saturating_sub(WARM_UP)),
+                )),
                 time: Some(i as f64 / 60.0),
                 predicted_dt: 1.0 / 60.0,
                 focused: true,
@@ -1527,6 +1543,19 @@ impl Recorder<'_> {
                 },
             ]
         });
+    }
+
+    /// Frames while the window is dragged narrower and back, a few points per frame, the
+    /// pointer at the window edge like a real resize drag, then half a second at rest so the
+    /// max includes the frame that re-measures the transcript once the width settles.
+    fn profile_resize(&mut self, label: &str) {
+        let width = |i: usize| SIZE.x - 4.0 * (i.min(200) as f32).min(240.0 - i.min(200) as f32);
+        self.measure_sized(
+            label,
+            270,
+            |i| egui::vec2(width(i), SIZE.y),
+            |i, _| vec![Event::PointerMoved(egui::pos2(width(i) - 1.0, 400.0))],
+        );
     }
 
     /// Wheel-scroll whatever is under the middle of the window (negative = down).

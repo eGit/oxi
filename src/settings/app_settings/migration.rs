@@ -149,6 +149,7 @@ impl AppSettings {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::CopilotAcp
             | LlmProviderKind::Router => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;

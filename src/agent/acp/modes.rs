@@ -1,8 +1,8 @@
 //! Session modes: putting the agent into its own plan mode for oxi's plan-mode turns.
 //!
 //! Agents expose plan mode differently: Claude Code as a `plan` value of its `mode` config
-//! option, Codex as a `plan` value of its `collaboration_mode` option, older adapters through
-//! the legacy `modes` / `session/set_mode` pair. Whichever is advertised is switched; when none
+//! option, Codex as a `plan` value of its `collaboration_mode` option, Copilot CLI as a mode URL
+//! ending in `#plan`, older adapters through the legacy `modes` / `session/set_mode` pair. Whichever is advertised is switched; when none
 //! is, the caller falls back to asking for a plan in the prompt.
 
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,12 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::{Pending, request};
 
 const PLAN: &str = "plan";
+
+/// `plan`, or a mode URL whose fragment is `plan` (Copilot CLI's
+/// `https://agentclientprotocol.com/protocol/session-modes#plan`).
+fn is_plan(value: &str) -> bool {
+    value == PLAN || value.rsplit_once('#').is_some_and(|(_, mode)| mode == PLAN)
+}
 
 /// Mode state as the agent last reported it. Shared with the reader task, which applies
 /// `config_option_update` / `current_mode_update` notifications.
@@ -49,6 +55,11 @@ enum PlanSwitch {
     },
 }
 
+/// The agent's own spelling of its plan value.
+fn plan_value(values: &[String]) -> Option<&str> {
+    values.iter().map(String::as_str).find(|v| is_plan(v))
+}
+
 impl PlanSwitch {
     fn current(&self) -> &str {
         match self {
@@ -56,17 +67,25 @@ impl PlanSwitch {
         }
     }
 
+    fn values(&self) -> &[String] {
+        match self {
+            Self::Config { values, .. } => values,
+            Self::Legacy { ids, .. } => ids,
+        }
+    }
+
+    fn in_plan(&self) -> bool {
+        is_plan(self.current())
+    }
+
     /// Where a regular turn goes back to when nothing was recorded: `default` when offered,
     /// else the first non-plan value.
     fn fallback(&self) -> Option<String> {
-        let values = match self {
-            Self::Config { values, .. } => values,
-            Self::Legacy { ids, .. } => ids,
-        };
+        let values = self.values();
         values
             .iter()
             .find(|v| *v == "default")
-            .or_else(|| values.iter().find(|v| *v != PLAN))
+            .or_else(|| values.iter().find(|v| !is_plan(v)))
             .cloned()
     }
 }
@@ -114,7 +133,7 @@ impl ModeState {
             }
             _ => return,
         }
-        if self.plan_switch().is_none_or(|s| s.current() != PLAN) {
+        if self.plan_switch().is_none_or(|s| !s.in_plan()) {
             self.restore = None;
             self.user_plan = false;
         }
@@ -122,7 +141,7 @@ impl ModeState {
 
     /// After a turn that ran an agent slash command: a plan mode it turned on is the user's.
     pub(super) fn note_user_command(&mut self) {
-        if self.plan_switch().is_some_and(|s| s.current() == PLAN) && self.restore.is_none() {
+        if self.plan_switch().is_some_and(|s| s.in_plan()) && self.restore.is_none() {
             self.user_plan = true;
         }
     }
@@ -132,7 +151,7 @@ impl ModeState {
             options.iter().find(|o| {
                 let category = o["category"].as_str().or(o["id"].as_str());
                 matches!(category, Some("mode" | "collaboration_mode"))
-                    && option_values(o).iter().any(|v| v == PLAN)
+                    && plan_value(&option_values(o)).is_some()
             })
         });
         if let Some(option) = option {
@@ -147,7 +166,7 @@ impl ModeState {
             .iter()
             .filter_map(|m| m["id"].as_str().map(str::to_owned))
             .collect();
-        ids.iter().any(|id| id == PLAN).then(|| PlanSwitch::Legacy {
+        plan_value(&ids).is_some().then(|| PlanSwitch::Legacy {
             current: self.modes["currentModeId"]
                 .as_str()
                 .unwrap_or("")
@@ -161,15 +180,16 @@ impl ModeState {
         let switch = self.plan_switch()?;
         let current = switch.current().to_owned();
         if plan_mode {
-            if current == PLAN {
+            if switch.in_plan() {
                 return None;
             }
             let restore = Some(current)
                 .filter(|c| !c.is_empty())
                 .or_else(|| switch.fallback());
-            return Some((switch, PLAN.to_owned(), restore));
+            let plan = plan_value(switch.values())?.to_owned();
+            return Some((switch, plan, restore));
         }
-        if current != PLAN || self.user_plan {
+        if !switch.in_plan() || self.user_plan {
             return None;
         }
         let target = self.restore.clone().or_else(|| switch.fallback())?;
@@ -286,7 +306,7 @@ pub(super) async fn set_user_option(
                 |s| matches!(&s, PlanSwitch::Config { id: plan_id, .. } if plan_id == id),
             ) {
                 state.restore = None;
-                state.user_plan = value.as_str() == Some(PLAN);
+                state.user_plan = value.as_str().is_some_and(is_plan);
             }
             Ok(())
         }
@@ -360,6 +380,27 @@ mod tests {
         let (switch, _, restore) = codex.plan_target(true).unwrap();
         assert!(matches!(switch, PlanSwitch::Config { ref id, .. } if id == "collaboration_mode"));
         assert_eq!(restore.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn copilot_plan_mode_is_a_mode_url() {
+        const URL: &str = "https://agentclientprotocol.com/protocol/session-modes";
+        let options = |current: &str| {
+            json!([{"id": "mode", "category": "mode", "currentValue": format!("{URL}#{current}"),
+                    "options": [{"value": format!("{URL}#agent")}, {"value": format!("{URL}#plan")},
+                                {"value": format!("{URL}#autopilot")}]}])
+        };
+        let mut copilot = ModeState::new(options("agent"), Value::Null);
+        let (_, value, restore) = copilot.plan_target(true).unwrap();
+        assert_eq!(value, format!("{URL}#plan"));
+        assert_eq!(restore, Some(format!("{URL}#agent")));
+
+        copilot.set_options(options("plan"));
+        assert!(copilot.plan_target(true).is_none());
+        copilot.restore = Some(format!("{URL}#agent"));
+        let (_, value, _) = copilot.plan_target(false).unwrap();
+        assert_eq!(value, format!("{URL}#agent"));
+        assert!(!is_plan(&format!("{URL}#autopilot")));
     }
 
     #[test]

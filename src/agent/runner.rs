@@ -32,7 +32,8 @@ pub fn wire_fingerprint_for(
         LlmProviderKind::ClaudeCodeAcp
         | LlmProviderKind::CursorAcp
         | LlmProviderKind::CodexAcp
-        | LlmProviderKind::MuseCodeAcp => "acp",
+        | LlmProviderKind::MuseCodeAcp
+        | LlmProviderKind::CopilotAcp => "acp",
         _ => "openai-chat",
     };
     let canonical = serde_json::json!({

@@ -282,6 +282,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         | LlmProviderKind::CursorAcp
         | LlmProviderKind::CodexAcp
         | LlmProviderKind::MuseCodeAcp
+        | LlmProviderKind::CopilotAcp
         | LlmProviderKind::Router => Ok(String::new()),
     }
 }

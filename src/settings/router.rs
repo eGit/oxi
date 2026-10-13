@@ -35,6 +35,7 @@ impl Billing {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::CopilotAcp
             | LlmProviderKind::GptCodex
             | LlmProviderKind::OpenCodeGo => Billing::Subscription,
             LlmProviderKind::Ollama

@@ -1,6 +1,7 @@
 //! Right-click a transcript message → "Fork chat from here": a new chat with the history up to
 //! that point, so another direction can be tried without losing this one. Forking at one of
-//! your messages puts it back in the composer of the new chat to edit and resend.
+//! your messages puts it back in the composer of the new chat to edit and resend. A text
+//! selection survives the right-click, and the menu offers "Copy selection" for it.
 
 use eframe::egui::{self, RichText};
 
@@ -50,6 +51,45 @@ impl OxiApp {
         }
     }
 
+    /// Keep the transcript's text selection through a right-click and the message menu that
+    /// follows (egui collapses a label selection on any press). Call before the transcript's
+    /// labels are drawn; returns true when this frame injected a Copy event for "Copy selection",
+    /// which the caller removes once the labels have seen it.
+    pub(crate) fn hold_selection_for_message_menu(&mut self, ctx: &egui::Context) -> bool {
+        use egui::PointerButton::{Primary, Secondary};
+        let plugin = ctx.plugin::<egui::text_selection::LabelSelectionState>();
+        let transcript = &mut self.conv.transcript;
+        if std::mem::take(&mut transcript.copy_held_selection) {
+            let Some(held) = transcript.held_selection.take() else {
+                return false;
+            };
+            *plugin.lock() = held;
+            ctx.input_mut(|i| i.events.push(egui::Event::Copy));
+            return true;
+        }
+        let (secondary, primary) = ctx.input(|i| {
+            let active = |b| i.pointer.button_down(b) || i.pointer.button_released(b);
+            (active(Secondary), active(Primary))
+        });
+        match &transcript.held_selection {
+            None => {
+                let pressed = ctx.input(|i| i.pointer.button_pressed(Secondary));
+                if pressed && plugin.lock().has_selection() {
+                    transcript.held_selection = Some(plugin.lock().clone());
+                }
+            }
+            // A left click (on the menu or elsewhere) may change the selection as usual.
+            Some(held) if (secondary || transcript.message_menu.is_some()) && !primary => {
+                *plugin.lock() = held.clone();
+            }
+            Some(_) if !secondary && transcript.message_menu.is_none() => {
+                transcript.held_selection = None;
+            }
+            Some(_) => {}
+        }
+        false
+    }
+
     pub(crate) fn render_message_menu(&mut self, ctx: &egui::Context) {
         let Some(menu) = self.conv.transcript.message_menu.clone() else {
             return;
@@ -65,12 +105,20 @@ impl OxiApp {
         let busy = self.active_waiting_response();
         let mut fork = false;
         let mut copy = false;
+        let mut copy_selection = false;
+        let has_selection = self.conv.transcript.held_selection.is_some();
         let area = egui::Area::new(egui::Id::new("transcript_message_menu"))
             .order(egui::Order::Foreground)
             .fixed_pos(menu.pos)
             .show(ctx, |ui| {
                 egui::Frame::menu(ui.style()).show(ui, |ui| {
                     ui.set_min_width(170.0);
+                    if has_selection {
+                        copy_selection = ui
+                            .button(RichText::new("Copy selection").size(FS_SMALL))
+                            .clicked();
+                        ui.separator();
+                    }
                     let label = if is_user {
                         "Edit in a fork"
                     } else {
@@ -93,8 +141,19 @@ impl OxiApp {
             });
         let just_opened = ctx.cumulative_pass_nr() == menu.opened_pass;
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if fork || copy || escape || (!just_opened && area.response.clicked_elsewhere()) {
+        if fork
+            || copy
+            || copy_selection
+            || escape
+            || (!just_opened && area.response.clicked_elsewhere())
+        {
             self.conv.transcript.message_menu = None;
+            if copy_selection {
+                self.conv.transcript.copy_held_selection = true;
+                ctx.request_repaint();
+            } else {
+                self.conv.transcript.held_selection = None;
+            }
         }
         if copy {
             let text = message_text(&self.active_session().messages[menu.start..menu.end]);

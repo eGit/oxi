@@ -46,6 +46,8 @@ pub enum LlmProviderKind {
     /// Meta's Muse Code CLI through the community `muse-acp` adapter (BrokkAi), which bridges
     /// ACP to Muse's own session protocol (`muse serve`) and so runs on the Muse Code login.
     MuseCodeAcp,
+    /// GitHub Copilot CLI's built-in ACP server (`copilot --acp`), on the user's Copilot plan.
+    CopilotAcp,
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
     /// turn. Its `model_id` holds the routing strategy. See `crate::router`.
     Router,
@@ -55,7 +57,7 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 17] = [
+    pub const ALL: [LlmProviderKind; 18] = [
         LlmProviderKind::Router,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
@@ -66,6 +68,7 @@ impl LlmProviderKind {
         LlmProviderKind::CursorAcp,
         LlmProviderKind::CodexAcp,
         LlmProviderKind::MuseCodeAcp,
+        LlmProviderKind::CopilotAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
@@ -96,6 +99,7 @@ impl LlmProviderKind {
             LlmProviderKind::CursorAcp => "cursoracp",
             LlmProviderKind::CodexAcp => "codexacp",
             LlmProviderKind::MuseCodeAcp => "musecodeacp",
+            LlmProviderKind::CopilotAcp => "copilotacp",
             LlmProviderKind::Router => "router",
         }
     }
@@ -107,6 +111,7 @@ impl LlmProviderKind {
                 | LlmProviderKind::CursorAcp
                 | LlmProviderKind::CodexAcp
                 | LlmProviderKind::MuseCodeAcp
+                | LlmProviderKind::CopilotAcp
         )
     }
 
@@ -138,6 +143,7 @@ impl LlmProviderKind {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::CopilotAcp
             | LlmProviderKind::Router => "",
         }
     }
@@ -160,6 +166,7 @@ impl LlmProviderKind {
             LlmProviderKind::CursorAcp => "Cursor (ACP)",
             LlmProviderKind::CodexAcp => "Codex (ACP)",
             LlmProviderKind::MuseCodeAcp => "Muse Code (ACP)",
+            LlmProviderKind::CopilotAcp => "GitHub Copilot (ACP)",
             LlmProviderKind::Router => "Router (auto)",
         }
     }
@@ -183,7 +190,8 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp => "sonnet",
             LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
-            | LlmProviderKind::MuseCodeAcp => "default",
+            | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::CopilotAcp => "default",
             LlmProviderKind::Router => "balanced",
         }
     }
@@ -424,6 +432,8 @@ impl ProviderConfig {
     pub const DEFAULT_CODEX_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/codex-acp";
     /// Scoped package: the unscoped `muse-acp` on npm is an unrelated project.
     pub const DEFAULT_MUSE_ACP_COMMAND: &'static str = "npx -y @brokkai/muse-acp";
+    /// The Copilot CLI is its own ACP server; `--acp` serves it over stdio.
+    pub const DEFAULT_COPILOT_ACP_COMMAND: &'static str = "npx -y @github/copilot --acp";
 
     pub fn is_acp(&self) -> bool {
         self.provider.is_acp()
@@ -434,6 +444,7 @@ impl ProviderConfig {
             LlmProviderKind::CursorAcp => Self::DEFAULT_CURSOR_ACP_COMMAND,
             LlmProviderKind::CodexAcp => Self::DEFAULT_CODEX_ACP_COMMAND,
             LlmProviderKind::MuseCodeAcp => Self::DEFAULT_MUSE_ACP_COMMAND,
+            LlmProviderKind::CopilotAcp => Self::DEFAULT_COPILOT_ACP_COMMAND,
             _ => Self::DEFAULT_ACP_COMMAND,
         }
     }
@@ -464,6 +475,10 @@ impl ProviderConfig {
                 // Takes priority over the `muse login` account, i.e. bills pay-as-you-go.
                 LlmProviderKind::MuseCodeAcp => {
                     env.push(("META_API_KEY".to_string(), key.to_string()));
+                }
+                // A token with the "Copilot Requests" permission; first in the CLI's lookup order.
+                LlmProviderKind::CopilotAcp => {
+                    env.push(("COPILOT_GITHUB_TOKEN".to_string(), key.to_string()));
                 }
                 _ => {}
             }
