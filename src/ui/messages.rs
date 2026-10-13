@@ -94,6 +94,18 @@ pub(super) fn selectable_layout_job_with_wrap(
     crate::theme::selectable_text_job(ui, job);
 }
 
+/// The transcript's [`ToolDetail`](crate::settings::ToolDetail), published once per frame by the
+/// app so the tool renderers need not thread settings through every call.
+pub fn set_tool_detail(ctx: &egui::Context, detail: crate::settings::ToolDetail) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("tool_detail"), detail));
+}
+
+pub(super) fn tool_detail(ui: &egui::Ui) -> crate::settings::ToolDetail {
+    ui.ctx()
+        .data(|d| d.get_temp(egui::Id::new("tool_detail")))
+        .unwrap_or_default()
+}
+
 pub(super) fn block_state_tag(streaming: bool) -> &'static str {
     if streaming { "live" } else { "done" }
 }

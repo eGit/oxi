@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::provider::{LlmProviderKind, ProviderConfig, UiDensity, WebSearchBackend};
+use super::provider::{LlmProviderKind, ProviderConfig, ToolDetail, UiDensity, WebSearchBackend};
 
 pub const ALL_TOOL_NAMES: [&str; 19] = [
     "read",
@@ -118,6 +118,9 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// How much tool output the transcript shows without a click.
+    #[serde(default)]
+    pub tool_detail: ToolDetail,
     /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
     #[serde(default = "default_font_id")]
     pub ui_font: String,
@@ -194,6 +197,9 @@ pub struct AppSettings {
     /// `crate::agent::activity_log`). Off by default; the log itself is never written to disk.
     #[serde(default)]
     pub activity_log_enabled: bool,
+    /// Download and install new releases in the background (see `crate::update`).
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
     /// Preferences for the Router pseudo-provider (see `crate::router`).
     #[serde(default)]
     pub router: super::router::RouterSettings,
@@ -309,6 +315,7 @@ impl Default for AppSettings {
             chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            tool_detail: ToolDetail::Balanced,
             ui_font: default_font_id(),
             mono_font: default_font_id(),
             max_tool_rounds: default_max_tool_rounds(),
@@ -331,6 +338,7 @@ impl Default for AppSettings {
             git_executable: String::new(),
             mcp_servers: Vec::new(),
             activity_log_enabled: false,
+            auto_update: true,
             router: super::router::RouterSettings::default(),
         }
     }

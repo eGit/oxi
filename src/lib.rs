@@ -63,6 +63,7 @@ pub fn run() -> eframe::Result<()> {
         _ => {}
     }
     logging::init();
+    update::cleanup_previous_install();
     // Warm slow first-use work on background threads while the window is created.
     secrets::prefetch_unified();
     theme::prewarm_editor_highlighting();
@@ -84,7 +85,7 @@ pub fn run() -> eframe::Result<()> {
         },
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "oxi",
         options,
         Box::new(|cc| {
@@ -103,5 +104,7 @@ pub fn run() -> eframe::Result<()> {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(app) as Box<dyn eframe::App>)
         }),
-    )
+    );
+    update::relaunch_if_requested();
+    result
 }

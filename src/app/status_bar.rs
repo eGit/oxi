@@ -114,6 +114,8 @@ impl OxiApp {
                             );
                         }
 
+                        self.render_update_status(ui);
+
                         if self.conv.git.repo {
                             let branches_on =
                                 self.conv.git_ui.open && self.conv.git_ui.tab == GitTab::Branches;
@@ -153,5 +155,58 @@ impl OxiApp {
                     });
                 });
             });
+    }
+}
+
+impl OxiApp {
+    /// "Restart to update" once a new release is installed; progress while it downloads; a link
+    /// to About when an update exists that oxi will not install by itself.
+    fn render_update_status(&mut self, ui: &mut egui::Ui) {
+        use crate::app::state::UpdateInstall;
+
+        let (label, hover, accent) = match &self.conv.update.install {
+            UpdateInstall::Ready { version, .. } => (
+                format!("Restart to update to v{version}"),
+                if self.any_waiting_response() {
+                    format!("v{version} is installed. Restarting stops the running reply.")
+                } else {
+                    format!("v{version} is installed. Restart oxi to use it.")
+                },
+                true,
+            ),
+            UpdateInstall::Installing(version) => (
+                format!("Updating to v{version}\u{2026}"),
+                "Downloading the update in the background".to_owned(),
+                false,
+            ),
+            _ => match self.update_available() {
+                Some(info) => (
+                    format!("v{} available", info.version),
+                    "Open About to update".to_owned(),
+                    true,
+                ),
+                None => return,
+            },
+        };
+        let response = ui
+            .add(
+                egui::Label::new(egui::RichText::new(label).size(FS_TINY).color(if accent {
+                    c_accent()
+                } else {
+                    c_text_muted()
+                }))
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(hover);
+        if response.clicked() {
+            if matches!(self.conv.update.install, UpdateInstall::Ready { .. }) {
+                self.restart_to_update(ui.ctx());
+            } else {
+                self.conv.settings_page.tab = crate::app::state::SettingsTab::About;
+                self.open_settings_page();
+            }
+        }
+        ui.add_space(6.0);
     }
 }

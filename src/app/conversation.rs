@@ -410,7 +410,13 @@ impl OxiApp {
                             // off-screen units reuse their height from the old width as an
                             // estimate; once it settles they are all measured again in one frame.
                             let now = ui.input(|input| input.time);
+                            let tool_detail = self.conv.settings.tool_detail;
+                            crate::ui::messages::set_tool_detail(ui.ctx(), tool_detail);
                             let transcript = &mut self.conv.transcript;
+                            if transcript.tool_detail != tool_detail {
+                                transcript.tool_detail = tool_detail;
+                                transcript.heights.clear();
+                            }
                             if transcript.width_bits != width_bits {
                                 transcript.width_bits = width_bits;
                                 transcript.width_changed_at = now;

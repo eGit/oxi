@@ -6,6 +6,7 @@ use crate::theme::*;
 use crate::ui::chrome::{card_frame, hairline, settings_caption, settings_section_title};
 
 use super::super::OxiApp;
+use super::super::state::UpdateInstall;
 
 impl OxiApp {
     pub(super) fn render_settings_about_panel(&mut self, ui: &mut Ui) {
@@ -51,20 +52,7 @@ impl OxiApp {
                             .color(c_text_muted()),
                     );
                 } else if let Some(info) = self.update_available().cloned() {
-                    ui.label(
-                        RichText::new(format!("Update available: v{}", info.version))
-                            .size(FS_TINY)
-                            .color(c_accent())
-                            .strong(),
-                    );
-                    ui.add_space(6.0);
-                    if ui
-                        .add(crate::ui::chrome::primary_button_widget("View release"))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        let _ = webbrowser::open(&info.html_url);
-                    }
+                    self.render_update_install(ui, &info);
                 } else {
                     match &self.conv.update.result {
                         Some(Ok(_)) => {
@@ -85,8 +73,34 @@ impl OxiApp {
                     }
                 }
             });
+            if let UpdateInstall::Failed { error, .. } = &self.conv.update.install {
+                ui.label(
+                    RichText::new(format!("Update failed: {error}"))
+                        .size(FS_TINY)
+                        .color(c_error_fg()),
+                );
+            }
+            if crate::update::can_self_update() {
+                ui.add_space(4.0);
+                let mut auto_update = self.conv.settings.auto_update;
+                if ui
+                    .checkbox(
+                        &mut auto_update,
+                        RichText::new("Install updates automatically")
+                            .size(FS_SMALL)
+                            .color(c_text()),
+                    )
+                    .on_hover_text(
+                        "Download new releases in the background and install them over this copy \
+                         of oxi. They take effect the next time oxi starts.",
+                    )
+                    .changed()
+                {
+                    self.conv.settings.auto_update = auto_update;
+                }
+            }
             ui.label(
-                RichText::new("Checked once at startup against the latest GitHub release.")
+                RichText::new("Checked at startup and every few hours against the latest GitHub release.")
                     .size(FS_TINY)
                     .color(c_text_faint()),
             );
@@ -168,6 +182,51 @@ impl OxiApp {
                 }
             });
         });
+    }
+}
+
+impl OxiApp {
+    /// The "update available" row: install progress, restart, or the install / release buttons.
+    fn render_update_install(&mut self, ui: &mut Ui, info: &crate::update::ReleaseInfo) {
+        let ready = matches!(
+            &self.conv.update.install,
+            UpdateInstall::Ready { version, .. } if *version == info.version
+        );
+        let installing = matches!(self.conv.update.install, UpdateInstall::Installing(_));
+        let status = if ready {
+            format!("v{} installed", info.version)
+        } else if installing {
+            format!("Installing v{}\u{2026}", info.version)
+        } else {
+            format!("Update available: v{}", info.version)
+        };
+        ui.label(
+            RichText::new(status)
+                .size(FS_TINY)
+                .color(c_accent())
+                .strong(),
+        );
+        ui.add_space(6.0);
+        if ready {
+            if ui
+                .add(crate::ui::chrome::primary_button_widget("Restart now"))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                self.restart_to_update(ui.ctx());
+            }
+        } else if !installing
+            && crate::update::can_self_update()
+            && ui
+                .add(crate::ui::chrome::primary_button_widget("Install"))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+        {
+            self.install_update(ui.ctx(), true);
+        }
+        if crate::ui::chrome::ghost_button(ui, "View release", false).clicked() {
+            let _ = webbrowser::open(&info.html_url);
+        }
     }
 }
 

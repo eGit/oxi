@@ -1976,13 +1976,18 @@ impl Recorder<'_> {
 }
 
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed
-/// tool, and the finished turn unfolded (`OXI_STREAM_REVIEW=1`).
+/// tool, and the finished turn unfolded (`OXI_STREAM_REVIEW=1`; `OXI_TOOL_DETAIL=minimal` or
+/// `expanded` renders the same turn in that tool-detail mode).
 fn review_streaming_ui(rec: &mut Recorder<'_>) {
     rec.harness.run_steps(4);
     {
         let app = rec.app();
         app.conv.settings_page.open = false;
         app.conv.settings_page.original = None;
+        if let Ok(mode) = std::env::var("OXI_TOOL_DETAIL") {
+            app.conv.settings.tool_detail =
+                serde_json::from_value(json!(mode)).expect("minimal, balanced or expanded");
+        }
     }
     rec.begin_turn("Why does the percentile test flake?");
     rec.stream_thinking(

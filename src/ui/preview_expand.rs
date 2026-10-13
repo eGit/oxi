@@ -25,8 +25,13 @@ pub fn expand_persist_id(base: Id) -> Id {
 }
 
 pub fn is_expanded(ui: &Ui, persist_id: Id) -> bool {
+    is_expanded_or(ui, persist_id, false)
+}
+
+/// Like [`is_expanded`], for panels that start unfolded until the user folds them.
+pub fn is_expanded_or(ui: &Ui, persist_id: Id, default: bool) -> bool {
     ui.ctx()
-        .data_mut(|d| d.get_persisted::<bool>(persist_id).unwrap_or(false))
+        .data_mut(|d| d.get_persisted::<bool>(persist_id).unwrap_or(default))
 }
 
 pub fn set_expanded(ui: &Ui, persist_id: Id, expanded: bool) {
@@ -44,16 +49,27 @@ pub fn toggle_expanded(ui: &Ui, persist_id: Id) {
 }
 
 pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
-    clickable_expand_overlay_impl(ui, rect, persist_id, true);
+    clickable_expand_overlay_impl(ui, rect, persist_id, true, false);
+}
+
+/// [`clickable_expand_overlay`] for a panel whose unset state is `default` (see [`is_expanded_or`]).
+pub fn clickable_expand_overlay_or(ui: &mut Ui, rect: Rect, persist_id: Id, default: bool) {
+    clickable_expand_overlay_impl(ui, rect, persist_id, true, default);
 }
 
 /// Like [`clickable_expand_overlay`] but without the hover border — for frameless panels
 /// (thinking blocks) where a stroked rectangle would read heavier than the content itself.
 pub fn clickable_expand_overlay_quiet(ui: &mut Ui, rect: Rect, persist_id: Id) {
-    clickable_expand_overlay_impl(ui, rect, persist_id, false);
+    clickable_expand_overlay_impl(ui, rect, persist_id, false, false);
 }
 
-fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_border: bool) {
+fn clickable_expand_overlay_impl(
+    ui: &mut Ui,
+    rect: Rect,
+    persist_id: Id,
+    hover_border: bool,
+    default: bool,
+) {
     let id = persist_id.with("preview_click");
     // Keep the overlay hover-only so wheel events reach the transcript. Determine containment
     // directly from the pointer, though: when expanded, selectable child labels can own hover and
@@ -74,7 +90,7 @@ fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_
         }
     }
     if pointer_inside && ui.ctx().input(|i| i.pointer.primary_clicked()) {
-        toggle_expanded(ui, persist_id);
+        set_expanded(ui, persist_id, !is_expanded_or(ui, persist_id, default));
     }
 }
 

@@ -626,6 +626,46 @@ impl UiDensity {
     }
 }
 
+/// How much of each tool call the chat transcript shows unprompted. Any pill still unfolds on
+/// click in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolDetail {
+    /// Only the pills: running commands and edits stay folded too.
+    Minimal,
+    /// Pills fold; the running command, sub-agent and newest edit show their output.
+    #[default]
+    Balanced,
+    /// Every tool call shows its output or diff.
+    Expanded,
+}
+
+impl ToolDetail {
+    pub const ALL: [ToolDetail; 3] = [
+        ToolDetail::Minimal,
+        ToolDetail::Balanced,
+        ToolDetail::Expanded,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolDetail::Minimal => "Minimal",
+            ToolDetail::Balanced => "Balanced",
+            ToolDetail::Expanded => "Expanded",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ToolDetail::Minimal => "Just the tool pills. Click one to see its output.",
+            ToolDetail::Balanced => {
+                "Pills stay folded; the running command and the newest edit show their output."
+            }
+            ToolDetail::Expanded => "Every tool call shows its output or diff.",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -133,6 +133,10 @@ impl OxiApp {
         });
         // Enter is intentionally left to the focused button; it never silently discards edits.
         if cancel || modal.should_close() {
+            if matches!(prompt, EditorPrompt::Exit) {
+                // A "Restart to update" was waiting on this quit.
+                crate::update::cancel_relaunch();
+            }
             self.conv.editor.prompt = None;
             return;
         }
