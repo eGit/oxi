@@ -555,6 +555,27 @@ pub struct SshTestMsg {
 #[derive(Debug)]
 pub struct UpdateMsg(pub Result<crate::update::ReleaseInfo, String>);
 
+/// Result message from a background update install: the version and the replaced install path.
+#[derive(Debug)]
+pub struct UpdateInstallMsg(pub String, pub Result<std::path::PathBuf, String>);
+
+/// Progress of installing a newer release over the running one.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub enum UpdateInstall {
+    #[default]
+    Idle,
+    Installing(String),
+    /// Installed on disk; takes effect on the next launch.
+    Ready {
+        version: String,
+        path: std::path::PathBuf,
+    },
+    Failed {
+        version: String,
+        error: String,
+    },
+}
+
 pub struct PromptEditState {
     pub previous_input: String,
     pub previous_images: Vec<(String, Vec<u8>)>,
@@ -765,6 +786,12 @@ pub struct UpdateCheckState {
     pub started: bool,
     /// True while an update check is in flight.
     pub checking: bool,
+    /// When the last check started; long-running windows check again every few hours.
+    pub last_check: Option<std::time::Instant>,
+    /// Installing the release the check found (automatically, or from About).
+    pub install: UpdateInstall,
+    /// Channel for the install result (drained each frame).
+    pub install_rx: Option<std::sync::mpsc::Receiver<UpdateInstallMsg>>,
     /// Outcome of the last update check. Errors are only surfaced in the About panel.
     pub result: Option<Result<crate::update::ReleaseInfo, String>>,
     /// Channel for the update-check result (drained each frame).

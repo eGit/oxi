@@ -194,6 +194,9 @@ pub struct AppSettings {
     /// `crate::agent::activity_log`). Off by default; the log itself is never written to disk.
     #[serde(default)]
     pub activity_log_enabled: bool,
+    /// Download and install new releases in the background (see `crate::update`).
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
     /// Preferences for the Router pseudo-provider (see `crate::router`).
     #[serde(default)]
     pub router: super::router::RouterSettings,
@@ -331,6 +334,7 @@ impl Default for AppSettings {
             git_executable: String::new(),
             mcp_servers: Vec::new(),
             activity_log_enabled: false,
+            auto_update: true,
             router: super::router::RouterSettings::default(),
         }
     }
