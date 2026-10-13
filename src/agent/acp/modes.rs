@@ -17,7 +17,7 @@ const PLAN: &str = "plan";
 
 /// `plan`, or a mode URL whose fragment is `plan` (Copilot CLI's
 /// `https://agentclientprotocol.com/protocol/session-modes#plan`).
-fn is_plan(value: &str) -> bool {
+pub(super) fn is_plan(value: &str) -> bool {
     value == PLAN || value.rsplit_once('#').is_some_and(|(_, mode)| mode == PLAN)
 }
 
@@ -320,7 +320,7 @@ pub(super) async fn set_user_option(
 
 /// `session/set_config_option` params; boolean values must be tagged `type: "boolean"`, or
 /// the agent rejects them as an invalid select value.
-fn config_value_params(session_id: &str, id: &str, value: &Value) -> Value {
+pub(super) fn config_value_params(session_id: &str, id: &str, value: &Value) -> Value {
     let mut params = json!({ "sessionId": session_id, "configId": id, "value": value });
     if value.is_boolean() {
         params["type"] = json!("boolean");
@@ -328,7 +328,7 @@ fn config_value_params(session_id: &str, id: &str, value: &Value) -> Value {
     params
 }
 
-fn set_config_value(options: &mut Value, id: &str, value: &Value) {
+pub(super) fn set_config_value(options: &mut Value, id: &str, value: &Value) {
     if let Some(option) = options
         .as_array_mut()
         .and_then(|opts| opts.iter_mut().find(|o| o["id"].as_str() == Some(id)))

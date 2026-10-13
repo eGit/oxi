@@ -243,6 +243,7 @@ impl OxiApp {
                 title_gen: Vec::new(),
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
+                acp_prewarmed_at: std::collections::HashMap::new(),
                 model_rxs: Vec::new(),
                 local_models: crate::app::state::LocalModelsUiState {
                     downloaded: crate::local_models::load_manifest().models,

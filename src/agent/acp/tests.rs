@@ -143,6 +143,43 @@ fn permission_name_maps_kind() {
     assert_eq!(args.unwrap()["command"], "ls");
     let (name, _) = permission_name_args(&json!({"kind":"edit"}));
     assert_eq!(name, "edit");
+    // An MCP tool is named by its tool, not by a title that changes per call.
+    let (name, _) = permission_name_args(&json!({"kind":"other","title":"Create issue #12",
+        "_meta":{"claudeCode":{"toolName":"mcp__gh__create_issue"}}}));
+    assert_eq!(name, "mcp__gh__create_issue");
+}
+
+#[test]
+fn a_relaunched_agent_gets_back_the_options_the_user_set() {
+    let previous = super::config_options::parse(&json!([
+        {"id":"mode","category":"mode","type":"select","currentValue":"acceptEdits",
+         "options":[{"value":"default"},{"value":"acceptEdits"},{"value":"plan"}]},
+        {"id":"fast","type":"boolean","currentValue":true},
+        {"id":"model","category":"model","type":"select","currentValue":"opus",
+         "options":[{"value":"opus"},{"value":"sonnet"}]},
+        {"id":"gone","type":"boolean","currentValue":true}
+    ]));
+    let fresh = json!([
+        {"id":"mode","category":"mode","type":"select","currentValue":"default",
+         "options":[{"value":"default"},{"value":"acceptEdits"},{"value":"plan"}]},
+        {"id":"fast","type":"boolean","currentValue":false},
+        {"id":"model","category":"model","type":"select","currentValue":"sonnet",
+         "options":[{"value":"opus"},{"value":"sonnet"}]}
+    ]);
+    // The model comes from oxi's settings; an option the agent no longer offers is skipped.
+    assert_eq!(
+        super::options_to_restore(&fresh, &previous),
+        vec![
+            ("mode".to_string(), json!("acceptEdits")),
+            ("fast".to_string(), json!(true))
+        ]
+    );
+    // Plan mode is oxi's to switch per turn, never restored.
+    let in_plan = super::config_options::parse(&json!([
+        {"id":"mode","category":"mode","type":"select","currentValue":"plan",
+         "options":[{"value":"default"},{"value":"plan"}]}
+    ]));
+    assert!(super::options_to_restore(&fresh, &in_plan).is_empty());
 }
 
 #[test]
@@ -197,6 +234,7 @@ fn acp_end_to_end_applies_model() {
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
         bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
         cancel,
         plan_mode: false,
     };
@@ -849,6 +887,7 @@ fn acp_live_features() {
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
         bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode,
     };
@@ -943,6 +982,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
         bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
     };
@@ -967,6 +1007,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
         bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
     };

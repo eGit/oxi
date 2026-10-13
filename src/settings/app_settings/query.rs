@@ -102,6 +102,28 @@ impl AppSettings {
         }
     }
 
+    /// Tools that run without asking in the workspace at `root` (see
+    /// [`Self::workspace_tool_allowlist`]).
+    pub fn allowed_tools_for(&self, root: &std::path::Path) -> Vec<String> {
+        self.workspace_tool_allowlist
+            .get(root.to_string_lossy().trim())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Let `tool` run without asking in the workspace at `root`. Returns whether it was new.
+    pub fn allow_tool_in(&mut self, root: &std::path::Path, tool: &str) -> bool {
+        let list = self
+            .workspace_tool_allowlist
+            .entry(root.to_string_lossy().trim().to_owned())
+            .or_default();
+        if list.iter().any(|t| t == tool) {
+            return false;
+        }
+        list.push(tool.to_owned());
+        true
+    }
+
     /// URL passed to the `web_search` tool as its base.
     ///
     /// Returns the SearXNG URL only when the SearXNG backend is selected; otherwise returns

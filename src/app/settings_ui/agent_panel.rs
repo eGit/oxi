@@ -281,6 +281,47 @@ impl OxiApp {
                     self.conv.settings.bash_allowlist.push(String::new());
                 }
             }
+            if self
+                .conv
+                .settings
+                .workspace_tool_allowlist
+                .values()
+                .any(|tools| !tools.is_empty())
+            {
+                field_label(ui, "Always allowed tools");
+                field_hint(
+                    ui,
+                    "Tools allowed with “Always allow here” on an approval prompt, per workspace.",
+                );
+                let mut remove: Option<(String, usize)> = None;
+                for (root, tools) in &self.conv.settings.workspace_tool_allowlist {
+                    if tools.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(root.as_str())
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                    for (i, tool) in tools.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tool.as_str()).size(FS_SMALL).color(c_text()).monospace());
+                            if ghost_button(ui, "Remove", true).clicked() {
+                                remove = Some((root.clone(), i));
+                            }
+                        });
+                    }
+                }
+                if let Some((root, i)) = remove
+                    && let Some(tools) = self.conv.settings.workspace_tool_allowlist.get_mut(&root)
+                {
+                    tools.remove(i);
+                    if tools.is_empty() {
+                        self.conv.settings.workspace_tool_allowlist.remove(&root);
+                    }
+                }
+            }
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
@@ -342,6 +383,39 @@ impl OxiApp {
             field_hint(
                 ui,
                 "Upper bound for one bash call (5–3600s). The model's own timeout is clamped to this.",
+            );
+
+            field_label(ui, "Stop idle ACP agents after (minutes, 0 = never)");
+            let mut idle = self.conv.settings.acp_idle_minutes.to_string();
+            if settings_text_field_width(ui, &mut idle, "15", 180.0).changed() {
+                let trimmed = idle.trim();
+                if trimmed.is_empty() {
+                    self.conv.settings.acp_idle_minutes = 0;
+                } else if let Ok(n) = trimmed.parse::<u32>() {
+                    self.conv.settings.acp_idle_minutes = n.min(24 * 60);
+                }
+            }
+            field_hint(
+                ui,
+                "Each Claude Code, Codex or Copilot chat keeps its own agent process (a few hundred MB) after a reply. An idle one is stopped and relaunched on the next message, with the conversation resumed. Agents running background work get two hours.",
+            );
+
+            field_label(ui, "Max ACP agents running (0 = unlimited)");
+            let mut max_live = self.conv.settings.acp_max_live_agents.to_string();
+            if settings_text_field_width(ui, &mut max_live, "4", 180.0).changed() {
+                let trimmed = max_live.trim();
+                if trimmed.is_empty() {
+                    self.conv.settings.acp_max_live_agents = 0;
+                } else if let Ok(n) = trimmed.parse::<u32>() {
+                    self.conv.settings.acp_max_live_agents = n;
+                }
+            }
+            let live = crate::agent::acp::live_count();
+            field_hint(
+                ui,
+                &format!(
+                    "Beyond this, the least recently used idle agent is stopped. Running now: {live}."
+                ),
             );
         });
 

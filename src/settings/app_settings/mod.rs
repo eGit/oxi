@@ -81,6 +81,17 @@ pub struct AppSettings {
     /// prompt. Only simple commands match; see `bash_command_allowlisted`.
     #[serde(default)]
     pub bash_allowlist: Vec<String>,
+    /// Tools (other than `bash`, which has [`Self::bash_allowlist`]) that run without the
+    /// approval prompt, by workspace root path.
+    #[serde(default)]
+    pub workspace_tool_allowlist: BTreeMap<String, Vec<String>>,
+    /// Minutes an ACP agent may sit idle before its subprocess is stopped; `0` never stops it.
+    /// The next prompt relaunches it and resumes the agent's session.
+    #[serde(default = "default_acp_idle_minutes")]
+    pub acp_idle_minutes: u32,
+    /// Most ACP agent subprocesses kept running at once; `0` is no limit.
+    #[serde(default = "default_acp_max_live_agents")]
+    pub acp_max_live_agents: u32,
     /// Desktop notification (and a dock/taskbar nudge) when a response finishes or the agent
     /// asks for approval while oxi is in the background.
     #[serde(default = "default_true")]
@@ -209,6 +220,14 @@ fn default_require_approval() -> bool {
     true
 }
 
+fn default_acp_idle_minutes() -> u32 {
+    15
+}
+
+fn default_acp_max_live_agents() -> u32 {
+    4
+}
+
 fn default_max_tool_rounds() -> u32 {
     0
 }
@@ -304,6 +323,9 @@ impl Default for AppSettings {
             require_write_edit_approval: default_require_approval(),
             require_bash_approval: default_require_approval(),
             bash_allowlist: Vec::new(),
+            workspace_tool_allowlist: BTreeMap::new(),
+            acp_idle_minutes: default_acp_idle_minutes(),
+            acp_max_live_agents: default_acp_max_live_agents(),
             notify_in_background: true,
             require_approval: None,
             sidebar_width: default_sidebar_width(),

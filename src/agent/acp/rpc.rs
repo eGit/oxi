@@ -74,6 +74,7 @@ pub(super) async fn read_loop(
     alive: Arc<AtomicBool>,
     modes: SharedModes,
     held: Arc<super::autonomous::Held>,
+    activity: Arc<super::reaper::Activity>,
     commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
@@ -116,6 +117,9 @@ pub(super) async fn read_loop(
         }
         // Waiting for a terminal must not block session updates or later kill requests.
         let request: Option<Value> = serde_json::from_str(&line).ok();
+        if let Some(msg) = &request {
+            activity.note(msg);
+        }
         if let Some(request) = request.filter(|v| {
             v["method"]
                 .as_str()

@@ -156,6 +156,7 @@ fn spawn_agent_attempt(
                     bash: settings.require_bash_approval,
                 },
                 settings.bash_allowlist.clone(),
+                settings.allowed_tools_for(&cwd),
                 &cancel,
                 plan_mode,
             )
@@ -238,7 +239,8 @@ fn spawn_agent_attempt(
             approval_rx,
         )
         .with_plan_mode(plan_mode)
-        .with_bash_allowlist(settings.bash_allowlist.clone());
+        .with_bash_allowlist(settings.bash_allowlist.clone())
+        .with_allowed_tools(settings.allowed_tools_for(&cwd));
 
         let outcome = {
             tool_env.subagent = Some(Arc::new(
@@ -403,6 +405,7 @@ pub fn spawn_acp_attach(
                     write_edit: settings.require_write_edit_approval,
                     bash: settings.require_bash_approval,
                 },
+                allowed_tools: settings.allowed_tools_for(&cwd),
                 bash_allowlist: settings.bash_allowlist,
                 cancel: cancel.clone(),
                 plan_mode,
@@ -434,6 +437,7 @@ async fn run_acp_turn(
     approval_rx: Receiver<ApprovalDecision>,
     approval_policy: ApprovalPolicy,
     bash_allowlist: Vec<String>,
+    allowed_tools: Vec<String>,
     cancel: &Arc<AtomicBool>,
     plan_mode: bool,
 ) -> AgentOutcome {
@@ -484,6 +488,7 @@ async fn run_acp_turn(
         approval_rx,
         approval_policy,
         bash_allowlist,
+        allowed_tools,
         cancel: cancel.clone(),
         plan_mode,
     };
