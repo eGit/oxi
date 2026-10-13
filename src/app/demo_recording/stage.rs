@@ -472,7 +472,7 @@ fn blend_into(into: &mut RgbaImage, from: &RgbaImage, amount: f32) {
         return;
     }
     let k = (amount.clamp(0.0, 1.0) * 256.0) as u32;
-    for (dst, src) in into.as_mut().iter_mut().zip(from.as_raw()) {
+    for (dst, src) in (**into).iter_mut().zip(from.as_raw()) {
         *dst = ((*dst as u32 * (256 - k) + *src as u32 * k) >> 8) as u8;
     }
 }
@@ -496,7 +496,7 @@ fn composite_window(
             // Fully inside: copy the row.
             let start = ((at.1 + y) * stage.width() + at.0) as usize * 4;
             let src = &app.as_raw()[(y * w) as usize * 4..((y + 1) * w) as usize * 4];
-            stage.as_mut()[start..start + src.len()].copy_from_slice(src);
+            (**stage)[start..start + src.len()].copy_from_slice(src);
             continue;
         }
         for x in 0..w {

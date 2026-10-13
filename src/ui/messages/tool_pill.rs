@@ -26,18 +26,39 @@ const EDIT_PREVIEW_LINES: usize = 10;
 /// Vertical gap between consecutive pills.
 const TOOL_PILL_GAP: f32 = 3.0;
 
+/// Shape of a detail panel: a free-standing card, or a drawer hanging off the bottom of a tool
+/// pill (square top corners, the pill's border colour).
+#[derive(Clone, Copy)]
+enum PanelShape {
+    Card,
+    Drawer(Color32),
+}
+
 fn render_static_preview_job_panel(
     ui: &mut Ui,
     panel_fill: Color32,
+    shape: PanelShape,
     preview_job: LayoutJob,
     full_job: impl Fn(f32) -> LayoutJob,
     persist_id: Id,
     overflows: bool,
 ) {
+    let (border, corner_radius) = match shape {
+        PanelShape::Card => (c_border(), CornerRadius::same(RADIUS_CHIP)),
+        PanelShape::Drawer(border) => (
+            border,
+            CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: RADIUS_BUTTON,
+                se: RADIUS_BUTTON,
+            },
+        ),
+    };
     let frame = Frame::new()
         .fill(panel_fill)
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(RADIUS_CHIP))
+        .stroke(Stroke::new(1.0, border))
+        .corner_radius(corner_radius)
         .inner_margin(Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -153,10 +174,21 @@ pub(super) fn render_tool_pill(
     let expanded = live || is_expanded(ui, persist_id);
 
     let mut header_rect = eframe::egui::Rect::NOTHING;
+    // Unfolded, the output hangs off the pill as one card instead of a second box below it.
+    let header_radius = if expanded {
+        CornerRadius {
+            nw: RADIUS_BUTTON,
+            ne: RADIUS_BUTTON,
+            sw: 0,
+            se: 0,
+        }
+    } else {
+        CornerRadius::same(RADIUS_BUTTON)
+    };
     let frame = Frame::new()
         .fill(pill_bg)
         .stroke(Stroke::new(1.0, pill_border))
-        .corner_radius(CornerRadius::same(RADIUS_BUTTON))
+        .corner_radius(header_radius)
         .inner_margin(Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -184,7 +216,7 @@ pub(super) fn render_tool_pill(
                     );
                     ui.add_space(2.0);
                     if running {
-                        crate::theme::spinner(ui, 10.0, c_text_muted());
+                        crate::theme::spinner(ui, 12.0, c_text_muted());
                     } else if !has_error && let Some((added, removed)) = diff_stats {
                         diff_stat_labels(ui, added, removed);
                     }
@@ -202,7 +234,9 @@ pub(super) fn render_tool_pill(
     // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
     // unfolds the raw output / diff below it, and the next click folds it back.
     if expanded {
-        ui.add_space(3.0);
+        // Pull the drawer up over the item spacing so its top edge shares the pill's bottom border.
+        ui.add_space(-ui.spacing().item_spacing.y - 1.0);
+        let drawer = PanelShape::Drawer(pill_border);
         let bubble_w = ui.available_width().max(40.0);
         let detail_id = persist_id.with("detail");
         if let Some(diff_text) = diff.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -211,6 +245,7 @@ pub(super) fn render_tool_pill(
             render_static_preview_job_panel(
                 ui,
                 crate::theme::c_tool_diff_bg(),
+                drawer,
                 diff_layout_job(&preview, bubble_w),
                 |inner| diff_layout_job(diff_text, inner),
                 detail_id,
@@ -235,6 +270,7 @@ pub(super) fn render_tool_pill(
             render_static_preview_job_panel(
                 ui,
                 crate::theme::c_tool_diff_bg(),
+                drawer,
                 mono_output_job(&preview, bubble_w),
                 |inner| mono_output_job(text, inner),
                 detail_id,
@@ -249,7 +285,6 @@ pub(super) fn render_tool_pill(
             ui.label(RichText::new(caption).size(FS_TINY).color(c_text_faint()));
         }
     }
-    ui.add_space(3.0);
 }
 
 /// Both labels share the space left after reserving the icon and trailing controls.
@@ -561,7 +596,7 @@ fn render_edit_tool_block(
                             );
                             ui.add_space(2.0);
                             if running {
-                                crate::theme::spinner(ui, 10.0, c_text_muted());
+                                crate::theme::spinner(ui, 12.0, c_text_muted());
                             } else if has_diff && !has_error {
                                 diff_stat_labels(ui, added, removed);
                             }
@@ -651,6 +686,7 @@ fn render_edit_tool_block(
                     render_static_preview_job_panel(
                         ui,
                         diff_bg,
+                        PanelShape::Card,
                         mono_output_job(&preview, ui.available_width()),
                         |width| mono_output_job(detail, width),
                         open_id.with("output"),

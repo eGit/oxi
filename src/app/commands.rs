@@ -61,6 +61,7 @@ pub(crate) enum Scope {
 pub(crate) enum Panel {
     Chats,
     Explorer,
+    Search,
     SourceControl,
     Terminal,
     ActivityLog,
@@ -242,6 +243,9 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Replace", replace.0, replace.1)),
                 editor(keys("Find Next", cmd(), Key::G)),
                 editor(keys("Find Previous", cmd_shift(), Key::G)),
+                c(keys("Find in Files…", cmd_shift(), Key::F)
+                    .palette("Search: Find in Files")
+                    .panel(Panel::Search)),
                 Separator,
                 editor(keys("Toggle Line Comment", cmd(), Key::Slash)),
                 editor(keys("Indent", cmd(), Key::CloseBracket)),
@@ -303,6 +307,7 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(goto_line),
                 Separator,
                 editor(keys("Go to Definition", Modifiers::NONE, Key::F12)),
+                editor(keys("Find References", Modifiers::SHIFT, Key::F12)),
                 editor(keys("Go to Matching Bracket", bracket, Key::M)),
             ],
         },
@@ -521,6 +526,7 @@ impl OxiApp {
         match panel {
             Panel::Chats => sidebar(SidebarMode::Chats),
             Panel::Explorer => sidebar(SidebarMode::Explorer),
+            Panel::Search => sidebar(SidebarMode::Search),
             Panel::SourceControl => self.conv.git_ui.open,
             Panel::Terminal => self.conv.terminal_panel.open,
             Panel::ActivityLog => super::activity_window::activity_window_open(ctx),

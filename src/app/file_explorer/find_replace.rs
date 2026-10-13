@@ -75,6 +75,13 @@ impl EditorState {
         Some((start_byte, end_byte))
     }
 
+    /// The editor selection when it is short and on one line, to seed a search query.
+    pub(crate) fn single_line_selection(&self) -> Option<String> {
+        let (start, end) = self.selection_bytes()?;
+        let selected = self.active_document()?.content.get(start..end)?;
+        (start < end && end - start <= 200 && !selected.contains('\n')).then(|| selected.to_owned())
+    }
+
     /// Open the panel (`replace` also shows the Replace row). A short single-line selection
     /// becomes the query, and the whole query is selected so typing replaces it.
     pub(crate) fn open_find(&mut self, replace: bool) {
@@ -517,7 +524,7 @@ impl OxiApp {
     }
 }
 
-enum ToggleLabel {
+pub(super) enum ToggleLabel {
     Text(&'static str),
     Icon(&'static str),
     /// "ab" with a bracket underneath, the usual whole-word glyph.
@@ -525,7 +532,13 @@ enum ToggleLabel {
 }
 
 /// Small square toggle: accent-tinted when on, a hover fill otherwise.
-fn toggle_button(ui: &mut Ui, rect: Rect, id: &str, on: bool, label: ToggleLabel) -> Response {
+pub(super) fn toggle_button(
+    ui: &mut Ui,
+    rect: Rect,
+    id: &str,
+    on: bool,
+    label: ToggleLabel,
+) -> Response {
     let response = ui.interact(rect, ui.id().with(id), Sense::click());
     let painter = ui.painter();
     if on {
@@ -588,7 +601,7 @@ fn toggle_button(ui: &mut Ui, rect: Rect, id: &str, on: bool, label: ToggleLabel
 }
 
 /// Single-line field at `rect`; `reserve_right` keeps typed text clear of the match count.
-fn query_field(
+pub(super) fn query_field(
     ui: &mut Ui,
     rect: Rect,
     id: egui::Id,

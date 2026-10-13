@@ -176,7 +176,11 @@ pub fn paint_spinner(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
     };
     ui.ctx()
         .request_repaint_after(frame + std::time::Duration::from_secs_f32(predicted_dt));
-    let radius = (rect.height().min(rect.width()) / 2.0) - 2.0;
+    // A fixed 3 pt stroke turned the small (10–13 pt) inline spinners into a blob; thin it with
+    // the size and keep the arc inside the rect.
+    let size = rect.height().min(rect.width());
+    let stroke = (size / 7.0).clamp(1.5, 3.0);
+    let radius = size / 2.0 - stroke / 2.0 - 0.5;
     let n_points = (radius.round() as u32).clamp(8, 128);
     let time = ui.input(|i| i.time);
     let start_angle = time * std::f64::consts::TAU;
@@ -189,7 +193,7 @@ pub fn paint_spinner(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
         })
         .collect();
     ui.painter()
-        .add(egui::Shape::line(points, Stroke::new(3.0, color)));
+        .add(egui::Shape::line(points, Stroke::new(stroke, color)));
 }
 
 // ─── System fonts (user-selectable in Appearance settings) ──────────────────────

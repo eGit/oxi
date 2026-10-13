@@ -852,6 +852,90 @@ pub fn find_definition(
         })
 }
 
+/// What Find References looks for: the identifier at the caret and, when it names a local, the
+/// scope its uses are confined to (in the current file).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReferenceTarget {
+    pub name: String,
+    pub local_scope: Option<Range<usize>>,
+}
+
+/// The identifier at `cursor_byte` in `source`, scoped like [`find_definition`] resolves it: a
+/// local declaration (or a use of one) stays within its enclosing function/block.
+pub fn reference_target(
+    language: &str,
+    source: &str,
+    cursor_byte: usize,
+) -> Option<ReferenceTarget> {
+    let (name, identifier) = identifier_at(source, cursor_byte)?;
+    let symbols = file_symbols(language, source);
+    let local_scope = symbols
+        .iter()
+        .find(|symbol| symbol.name_range == identifier)
+        .map(|symbol| symbol.scope.clone())
+        .unwrap_or_else(|| {
+            symbols
+                .iter()
+                .filter(|symbol| symbol.name == name && symbol.name_range.start <= cursor_byte)
+                .filter(|symbol| {
+                    symbol
+                        .scope
+                        .as_ref()
+                        .is_some_and(|scope| scope.contains(&cursor_byte))
+                })
+                .max_by_key(|symbol| symbol.name_range.start)
+                .and_then(|symbol| symbol.scope.clone())
+        });
+    Some(ReferenceTarget {
+        name: name.to_owned(),
+        local_scope,
+    })
+}
+
+/// Every place `name` occurs in `source` as a code token: whole-word, and not inside a comment or
+/// a string (interpolations such as `${name}` and `{name}` still count).
+pub fn reference_ranges(language: &str, source: &str, name: &str) -> Vec<Range<usize>> {
+    if name.is_empty() || !source.contains(name) {
+        return Vec::new();
+    }
+    let Some(tree) = parse(language, source) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let in_code = |node: Node<'_>| {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            let kind = node.kind();
+            if kind.contains("interpolation") || kind.contains("substitution") {
+                return true;
+            }
+            if kind.contains("comment") || kind.contains("string") {
+                return false;
+            }
+            current = node.parent();
+        }
+        true
+    };
+    source
+        .match_indices(name)
+        .map(|(start, _)| start..start + name.len())
+        .filter(|range| {
+            !source[..range.start]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_char)
+                && !source[range.end..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_identifier_char)
+        })
+        .filter(|range| {
+            root.descendant_for_byte_range(range.start, range.end)
+                .is_some_and(|node| node.byte_range() == *range && in_code(node))
+        })
+        .collect()
+}
+
 /// The next larger syntax node around `selection` (Sublime's Expand Selection to Scope).
 pub fn expand_selection(
     language: &str,

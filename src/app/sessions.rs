@@ -137,7 +137,7 @@ impl OxiApp {
         // the transcript is in front, and if the sidebar is browsing files, flip it back to the
         // chat list so the new chat is visible there too.
         self.reveal_chat_view();
-        if self.conv.sidebar.open && self.conv.sidebar.mode == super::state::SidebarMode::Explorer {
+        if self.conv.sidebar.open && self.conv.sidebar.mode != super::state::SidebarMode::Chats {
             self.conv.sidebar.mode = super::state::SidebarMode::Chats;
         }
 

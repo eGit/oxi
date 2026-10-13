@@ -48,6 +48,8 @@ memchr = "2"
 glob = "0.3"
 git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
 walkdir = "2"
+# ripgrep's walker: the agent's search tools honour .gitignore like rg does.
+ignore = "0.4"
 fontdb = "0.24"
 # Same version egui reads font metrics with; used to center text faces optically in their rows.
 skrifa = "0.42"

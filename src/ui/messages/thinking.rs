@@ -275,16 +275,18 @@ pub(super) fn render_thinking_group_block(
                 animated_status_label(ui, "Thinking", FS_TINY);
                 if let Some(d) = elapsed {
                     ui.label(
-                        RichText::new(format!(" for {}", format_stream_elapsed(d)))
+                        RichText::new(format!("for {}", format_stream_elapsed(d)))
                             .size(FS_TINY)
                             .color(c_text_muted()),
                     );
                 }
                 return;
             }
+            // Sub-second reasoning reads as "Thought for 0s"; drop the duration like an untracked
+            // one (same rule as the "Worked for" row).
             let caption = match elapsed {
-                Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
-                None => "Thought".to_string(),
+                Some(d) if d.as_secs() > 0 => format!("Thought for {}", format_stream_elapsed(d)),
+                _ => "Thought".to_string(),
             };
             ui.add(
                 egui::Label::new(RichText::new(caption).size(FS_TINY).color(c_text_faint()))

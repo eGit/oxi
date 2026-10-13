@@ -205,6 +205,26 @@ fn tool_grep_with_limit() {
 }
 
 #[test]
+fn tool_grep_honours_gitignore_and_skips_binaries() {
+    let cwd = temp_workspace("grep-ignore");
+    fs::write(cwd.join(".gitignore"), ".venv/\n*.log\n").unwrap();
+    fs::create_dir_all(cwd.join(".venv/lib")).unwrap();
+    fs::create_dir_all(cwd.join(".github")).unwrap();
+    fs::write(cwd.join(".venv/lib/site.py"), "needle\n").unwrap();
+    fs::write(cwd.join("run.log"), "needle\n").unwrap();
+    fs::write(cwd.join("blob.bin"), b"needle\0\x01").unwrap();
+    fs::write(cwd.join(".github/ci.yml"), "needle\n").unwrap();
+    fs::write(cwd.join("main.py"), "needle\n").unwrap();
+    let res = run_tool(&cwd, "grep", &json!({"pattern": "needle"}), &all_enabled());
+    assert!(!res.is_error);
+    assert!(res.output.contains("main.py:1"), "{}", res.output);
+    assert!(res.output.contains("ci.yml"), "{}", res.output);
+    assert!(!res.output.contains("site.py"), "{}", res.output);
+    assert!(!res.output.contains("run.log"), "{}", res.output);
+    assert!(!res.output.contains("blob.bin"), "{}", res.output);
+}
+
+#[test]
 fn tool_grep_missing_pattern() {
     let cwd = temp_workspace("grep-no-pattern");
     let res = run_tool(&cwd, "grep", &json!({}), &all_enabled());
@@ -222,6 +242,33 @@ fn tool_find_glob() {
     assert!(!res.is_error);
     assert!(res.output.contains("a.rs"));
     assert!(!res.output.contains("b.txt"));
+}
+
+#[test]
+fn tool_find_recursive_glob_honours_gitignore() {
+    let cwd = temp_workspace("find-recursive");
+    fs::write(cwd.join(".gitignore"), "dist/\n").unwrap();
+    fs::create_dir_all(cwd.join("src/deep")).unwrap();
+    fs::create_dir_all(cwd.join("dist")).unwrap();
+    fs::write(cwd.join("top.rs"), "").unwrap();
+    fs::write(cwd.join("src/deep/inner.rs"), "").unwrap();
+    fs::write(cwd.join("dist/built.rs"), "").unwrap();
+    let res = run_tool(&cwd, "find", &json!({"pattern": "**/*.rs"}), &all_enabled());
+    assert!(!res.is_error);
+    assert!(res.output.contains("top.rs"), "{}", res.output);
+    assert!(res.output.contains("inner.rs"), "{}", res.output);
+    assert!(!res.output.contains("built.rs"), "{}", res.output);
+    // `*` stays within one directory, as in a shell.
+    let res = run_tool(&cwd, "find", &json!({"pattern": "*.rs"}), &all_enabled());
+    assert!(res.output.contains("top.rs"), "{}", res.output);
+    assert!(!res.output.contains("inner.rs"), "{}", res.output);
+    let res = run_tool(
+        &cwd,
+        "find",
+        &json!({"pattern": "./src/*/*.rs"}),
+        &all_enabled(),
+    );
+    assert!(res.output.contains("inner.rs"), "{}", res.output);
 }
 
 #[test]

@@ -14,7 +14,6 @@ type LiveStreams = Arc<Mutex<(Vec<u8>, Vec<u8>)>>;
 type LivePipe = (LiveStreams, usize, super::ToolOutputCallback);
 use regex::Regex;
 use serde_json::Value;
-use walkdir::{DirEntry, WalkDir};
 
 use super::file_ops::truncate_out;
 use super::paths::{err, resolve_under_cwd};
@@ -25,20 +24,36 @@ const LS_MAX: usize = 500;
 /// Default timeout applied when the `bash` call omits its own `timeout` argument.
 const BASH_DEFAULT_TIMEOUT_SECS: f64 = 15.0;
 
-fn should_skip_search_entry(entry: &DirEntry) -> bool {
-    let name = entry.file_name().to_string_lossy();
-    matches!(name.as_ref(), ".git" | "target" | "node_modules")
+/// Directories never worth searching, even in a tree without a `.gitignore` saying so.
+const SKIPPED_SEARCH_DIRS: &[&str] = &[".git", "target", "node_modules"];
+
+/// Walk `root` the way ripgrep does: honour `.gitignore` / `.ignore` files (also outside a
+/// git repo) and skip [`SKIPPED_SEARCH_DIRS`], but still descend into hidden directories
+/// such as `.github`, which hold real project files.
+fn search_walk(root: &Path) -> impl Iterator<Item = ignore::DirEntry> {
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .filter_entry(|entry| {
+            !(entry.file_type().is_some_and(|t| t.is_dir())
+                && SKIPPED_SEARCH_DIRS.contains(&entry.file_name().to_string_lossy().as_ref()))
+        })
+        .build()
+        .filter_map(Result::ok)
 }
 
-fn is_reasonably_small_text_file(path: &Path) -> bool {
+/// Contents of `path` when it is a UTF-8 text file small enough to search, read once.
+fn read_searchable_text(path: &Path) -> Option<String> {
     const MAX_SEARCH_FILE_BYTES: u64 = 2 * 1024 * 1024;
-    match fs::metadata(path) {
-        Ok(meta) if meta.len() <= MAX_SEARCH_FILE_BYTES => {}
-        _ => return false,
+    if fs::metadata(path).ok()?.len() > MAX_SEARCH_FILE_BYTES {
+        return None;
     }
-    fs::read(path)
-        .map(|bytes| !bytes.contains(&0))
-        .unwrap_or(false)
+    let bytes = fs::read(path).ok()?;
+    if memchr::memchr(0, &bytes).is_some() {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Deny-list patterns checked against the lowercased, quote/backslash-stripped command
@@ -398,19 +413,12 @@ pub(crate) fn tool_grep(cwd: &Path, args: &Value) -> Result<String, String> {
             }
         }
     } else {
-        'outer: for entry in WalkDir::new(&search_root)
-            .into_iter()
-            .filter_entry(|e| !should_skip_search_entry(e))
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
+        'outer: for entry in search_walk(&search_root) {
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;
             }
             let p = entry.path();
-            if !is_reasonably_small_text_file(p) {
-                continue;
-            }
-            if let Ok(txt) = fs::read_to_string(p) {
+            if let Some(txt) = read_searchable_text(p) {
                 for (i, line) in txt.lines().enumerate() {
                     if re.is_match(line) {
                         matches += 1;
@@ -449,23 +457,68 @@ pub(crate) fn tool_find(cwd: &Path, args: &Value) -> Result<String, String> {
         .get("limit")
         .and_then(|x| x.as_u64())
         .unwrap_or(FIND_MAX as u64) as usize;
-    let glob_pat = format!("{}/{}", base.display(), pattern);
+    let pattern = pattern.trim_start_matches("./");
     let mut out = String::new();
     let mut n = 0usize;
-    for entry in glob(&glob_pat).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?;
-        if path.components().any(|c| {
-            matches!(
-                c.as_os_str().to_string_lossy().as_ref(),
-                ".git" | "target" | "node_modules"
-            )
-        }) {
-            continue;
-        }
-        let rel = path.strip_prefix(cwd).unwrap_or(&path);
+    let mut push = |path: &Path, out: &mut String| {
+        let rel = path.strip_prefix(cwd).unwrap_or(path);
         out.push_str(&format!("{}\n", rel.display()));
         n += 1;
-        if n >= limit {
+        n >= limit
+    };
+    let escapes_base = pattern.starts_with('/')
+        || Path::new(pattern).components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        });
+    if escapes_base {
+        // `../x` or an absolute pattern cannot be matched while walking `base`; expand it
+        // with plain glob (no ignore rules apply outside the walked tree anyway).
+        let glob_pat = format!("{}/{}", base.display(), pattern);
+        for entry in glob(&glob_pat).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?;
+            if path
+                .components()
+                .any(|c| SKIPPED_SEARCH_DIRS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+            {
+                continue;
+            }
+            if push(&path, &mut out) {
+                out.push_str(&format!("\n[limit {limit} reached]\n"));
+                break;
+            }
+        }
+        return Ok(truncate_out(out));
+    }
+    let matcher = glob::Pattern::new(pattern).map_err(|e| e.to_string())?;
+    let options = glob::MatchOptions {
+        // Like shell globbing: `*` stays within one path component, `**` crosses them.
+        require_literal_separator: true,
+        ..glob::MatchOptions::new()
+    };
+    // Walk only below the pattern's literal leading directories (`src/` of `src/**/*.rs`).
+    let mut walk_root = base.clone();
+    let components: Vec<&str> = pattern.split('/').collect();
+    for component in &components[..components.len().saturating_sub(1)] {
+        if component.contains(['*', '?', '[', '{']) {
+            break;
+        }
+        walk_root.push(component);
+    }
+    for entry in search_walk(&walk_root) {
+        if entry.depth() == 0 {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(rel) = path.strip_prefix(&base) else {
+            continue;
+        };
+        if !matcher.matches_path_with(rel, options) {
+            continue;
+        }
+        if push(path, &mut out) {
             out.push_str(&format!("\n[limit {limit} reached]\n"));
             break;
         }
@@ -503,19 +556,12 @@ pub(crate) fn tool_codebase_search(cwd: &Path, args: &Value) -> Result<String, S
     }
 
     let mut hits: Vec<(i32, String)> = Vec::new();
-    for entry in WalkDir::new(&base)
-        .into_iter()
-        .filter_entry(|e| !should_skip_search_entry(e))
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
+    for entry in search_walk(&base) {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
         let path = entry.path();
-        if !is_reasonably_small_text_file(path) {
-            continue;
-        }
-        let Ok(contents) = fs::read_to_string(path) else {
+        let Some(contents) = read_searchable_text(path) else {
             continue;
         };
         let lower = contents.to_lowercase();

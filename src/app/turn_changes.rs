@@ -25,6 +25,14 @@ struct TurnEntry {
     reverted: HashSet<String>,
 }
 
+/// Inset of the Revert button from the card's top, right and bottom edges.
+const CARD_INSET: f32 = 6.0;
+/// The header row's height: the Revert button's.
+const HEADER_H: f32 = 26.0;
+const FILE_ROW_H: f32 = 22.0;
+/// Chevron width plus its gap, so file rows start under "N files changed".
+const FILE_ROW_INDENT: f32 = 14.0;
+
 fn cache_key(changes: &TurnChanges) -> String {
     format!("{}..{}", changes.before, changes.after)
 }
@@ -67,15 +75,23 @@ impl OxiApp {
             .fold((0, 0), |(a, d), f| (a + f.added, d + f.deleted));
 
         let mut action = None;
-        ui.add_space(4.0);
         egui::Frame::new()
             .fill(c_bg_elevated())
             .stroke(egui::Stroke::new(1.0, c_border()))
             .corner_radius(crate::theme::RADIUS_PANEL)
-            .inner_margin(egui::Margin::symmetric(10, 6))
+            // The Revert button sits CARD_INSET from the top, right and bottom edges, so its
+            // corners run concentric with the card's.
+            .inner_margin(egui::Margin {
+                left: 12,
+                right: CARD_INSET as i8,
+                top: CARD_INSET as i8,
+                bottom: CARD_INSET as i8,
+            })
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
+                    // Same height with or without the button ("Reverted" is a plain label).
+                    ui.set_min_height(HEADER_H);
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let chevron = if expanded {
                         ICON_ANGLE_DOWN
@@ -139,7 +155,7 @@ impl OxiApp {
                     });
                 });
                 if expanded {
-                    ui.add_space(2.0);
+                    ui.add_space(4.0);
                     for file in &files {
                         let file_reverted = all_reverted || reverted.contains(&file.path);
                         if let Some(a) = render_file_row(ui, file, file_reverted) {
@@ -148,6 +164,8 @@ impl OxiApp {
                     }
                 }
             });
+        // Breathing room before the next turn, like a user bubble leaves after itself.
+        ui.add_space(12.0);
 
         match action {
             Some(CardAction::Toggle) => {
@@ -207,31 +225,15 @@ impl OxiApp {
 fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<CardAction> {
     let mut action = None;
     ui.horizontal(|ui| {
+        ui.set_min_height(FILE_ROW_H);
+        // Line up the status letter with the header text, past the chevron.
+        ui.add_space(FILE_ROW_INDENT);
         ui.spacing_mut().item_spacing.x = 6.0;
-        ui.label(
-            RichText::new(file.status.to_string())
-                .font(FontId::monospace(FS_TINY))
-                .color(crate::app::file_explorer::git_status_color(file.status)),
-        );
-        let name = RichText::new(&file.path).size(FS_SMALL);
-        let name = if reverted || file.status == 'D' {
-            name.strikethrough().color(c_text_muted())
-        } else {
-            name.color(c_text())
-        };
-        let row = ui
-            .add(
-                egui::Label::new(name)
-                    .truncate()
-                    .sense(Sense::click())
-                    .selectable(false),
-            )
-            .on_hover_text("Show the diff against the files before this response")
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        if row.clicked() && !reverted {
-            action = Some(CardAction::OpenDiff(file.path.clone()));
-        }
+        // Right side first, so a long path truncates instead of pushing the counts and the
+        // revert button out of the card.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Keep the icons off the card edge, inset like the Revert button's label.
+            ui.add_space(8.0);
             if !reverted
                 && ui
                     .add(
@@ -261,6 +263,31 @@ fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<Ca
                         .color(c_success()),
                 );
             }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(file.status.to_string())
+                        .font(FontId::monospace(FS_TINY))
+                        .color(crate::app::file_explorer::git_status_color(file.status)),
+                );
+                let name = RichText::new(&file.path).size(FS_SMALL);
+                let name = if reverted || file.status == 'D' {
+                    name.strikethrough().color(c_text_muted())
+                } else {
+                    name.color(c_text())
+                };
+                let row = ui
+                    .add(
+                        egui::Label::new(name)
+                            .truncate()
+                            .sense(Sense::click())
+                            .selectable(false),
+                    )
+                    .on_hover_text("Show the diff against the files before this response")
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if row.clicked() && !reverted {
+                    action = Some(CardAction::OpenDiff(file.path.clone()));
+                }
+            });
         });
     });
     action

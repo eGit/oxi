@@ -957,7 +957,7 @@ fn file_picker_row(ui: &mut egui::Ui, entry: &PickerEntry, selected: bool) -> eg
 }
 
 /// Byte offset where 1-based `line` starts (end of text past the last line).
-fn line_start(content: &str, line: usize) -> usize {
+pub(super) fn line_start(content: &str, line: usize) -> usize {
     if line <= 1 {
         return 0;
     }

@@ -189,3 +189,35 @@ fn expand_selection_grows_through_syntax_nodes() {
     let second = expand_selection("rs", source, first).unwrap();
     assert_eq!(&source[second], "add(1, 2)");
 }
+
+#[test]
+fn references_skip_comments_strings_and_longer_names() {
+    let source = "fn run() {}\n// run the thing\nfn main() {\n    run();\n    let s = \"run\";\n    rerun(run_all);\n    println!(\"{}\", run());\n}\n";
+    let lines: Vec<usize> = reference_ranges("rs", source, "run")
+        .into_iter()
+        .map(|range| source[..range.start].matches('\n').count() + 1)
+        .collect();
+    assert_eq!(lines, [1, 4, 7]);
+
+    let ts = "const user = 1;\nconst msg = `hi ${user}`; // user\nlog('user', user);\n";
+    let lines: Vec<usize> = reference_ranges("ts", ts, "user")
+        .into_iter()
+        .map(|range| ts[..range.start].matches('\n').count() + 1)
+        .collect();
+    assert_eq!(lines, [1, 2, 3]);
+}
+
+#[test]
+fn reference_target_scopes_locals_to_their_function() {
+    let source = "fn a() { let n = 1; n + 1; }\nfn b() { let n = 2; }\nfn helper() {}\n";
+    let use_of_local = source.find("n + 1").unwrap();
+    let target = reference_target("rs", source, use_of_local).unwrap();
+    assert_eq!(target.name, "n");
+    let scope = target.local_scope.unwrap();
+    assert!(scope.contains(&use_of_local));
+    assert!(!scope.contains(&source.rfind("let n").unwrap()));
+
+    let global = reference_target("rs", source, source.find("helper").unwrap()).unwrap();
+    assert_eq!(global.name, "helper");
+    assert_eq!(global.local_scope, None);
+}
