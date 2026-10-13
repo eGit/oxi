@@ -116,6 +116,67 @@ impl OxiApp {
         );
     }
 
+    /// Launch the active chat's ACP agent while a message is being typed into it, so sending
+    /// doesn't wait for the launch. The agent may have been stopped for idling (see
+    /// `acp::reaper`) or never started since oxi opened. Launched with exactly what the prompt
+    /// will use, so the prompt reuses it.
+    pub(crate) fn prewarm_typed_acp_chat(&mut self, ctx: &egui::Context) {
+        /// A launch that failed (or is slow) is not tried again sooner than this.
+        const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+        if self.conv.composer.input.trim().is_empty() {
+            return;
+        }
+        let key = self.active_session_key();
+        // A new chat is warmed as soon as it opens (`new_chat_needs_acp_warm`).
+        if self.session_by_key(key).messages.is_empty()
+            || self.run_state(key).is_some_and(|r| r.agent_rx.is_some())
+        {
+            return;
+        }
+        let acp_session_key = self.acp_session_key(key);
+        if crate::agent::acp::is_live(&acp_session_key)
+            || self
+                .conv
+                .acp_prewarmed_at
+                .get(&acp_session_key)
+                .is_some_and(|at| at.elapsed() < RETRY_AFTER)
+        {
+            return;
+        }
+        let session_config = self.ensure_session_config(key);
+        if !session_config.provider.is_acp() {
+            return;
+        }
+        self.conv
+            .acp_prewarmed_at
+            .insert(acp_session_key.clone(), std::time::Instant::now());
+        // The same settings `send_prompt_payload` builds the prompt from.
+        let mut settings = self.conv.settings.clone();
+        session_config.apply_to_settings(&mut settings);
+        let cfg = settings.active_config();
+        let req = crate::agent::acp::AcpWarm {
+            session_key: acp_session_key,
+            cwd: std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim()),
+            command_line: cfg.effective_acp_command(),
+            env: cfg.acp_env(),
+            model: cfg.model_id.clone(),
+            effort: cfg.effort.clone(),
+            mcp_servers: settings.mcp_servers.clone(),
+        };
+        let acp = self.acp.clone();
+        let ctx = ctx.clone();
+        spawn_async_task(
+            |e| log::warn!("could not launch the ACP agent ahead of a prompt: {e}"),
+            move |rt| {
+                if let Err(e) = rt.block_on(acp.warm(req)) {
+                    log::warn!("could not launch the ACP agent ahead of a prompt: {e}");
+                }
+                // The composer shows the agent's options once it is up.
+                ctx.request_repaint();
+            },
+        );
+    }
+
     /// Kick off a background `/v1/models` fetch for `kind`, if one isn't already in
     /// flight. Results arrive on `conv.model_rxs` and are drained each frame.
     pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {

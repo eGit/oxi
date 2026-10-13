@@ -54,6 +54,7 @@ pub(super) async fn handle_permission(
     approval_rx: &mut StdReceiver<ApprovalDecision>,
     approval_policy: ApprovalPolicy,
     bash_allowlist: &mut Vec<String>,
+    allowed_tools: &mut Vec<String>,
     plan_mode: bool,
     cancel: &Arc<AtomicBool>,
     auto_approve: &mut bool,
@@ -72,6 +73,7 @@ pub(super) async fn handle_permission(
         Some(ApprovalDecision::Deny)
     } else if *auto_approve
         || !approval_policy.requires_approval(&name)
+        || crate::agent::approval::tool_allowed(&name, allowed_tools)
         || (name == "bash"
             && args
                 .as_ref()
@@ -91,9 +93,9 @@ pub(super) async fn handle_permission(
         None => json!({ "outcome": "cancelled" }),
         Some(d) => {
             let wanted: &[&str] = match &d {
-                ApprovalDecision::Approve | ApprovalDecision::AllowPrefix(_) => {
-                    &["allow_once", "allow"]
-                }
+                ApprovalDecision::Approve
+                | ApprovalDecision::AllowPrefix(_)
+                | ApprovalDecision::AllowTool(_) => &["allow_once", "allow"],
                 ApprovalDecision::ApproveRest => &["allow_always", "allow_once", "allow"],
                 ApprovalDecision::Deny => &["reject_once", "reject"],
             };
@@ -102,6 +104,7 @@ pub(super) async fn handle_permission(
                     match d {
                         ApprovalDecision::ApproveRest => *auto_approve = true,
                         ApprovalDecision::AllowPrefix(prefix) => bash_allowlist.push(prefix),
+                        ApprovalDecision::AllowTool(tool) => allowed_tools.push(tool),
                         ApprovalDecision::Approve | ApprovalDecision::Deny => {}
                     }
                     json!({ "outcome": "selected", "optionId": option_id })
@@ -183,8 +186,12 @@ pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
         "search" => "grep".to_string(),
         "fetch" => "web_fetch".to_string(),
         "think" => "task".to_string(),
+        // MCP tools carry their full name (`mcp__server__tool`), which stays the same from
+        // call to call where the title may not, so an allowed tool keeps matching.
         "" | "other" => {
-            if title.is_empty() {
+            if let Some(tool) = tool["_meta"]["claudeCode"]["toolName"].as_str() {
+                tool.to_string()
+            } else if title.is_empty() {
                 "tool".to_string()
             } else {
                 title.to_string()

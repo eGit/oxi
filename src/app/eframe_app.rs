@@ -79,6 +79,11 @@ impl eframe::App for OxiApp {
         self.check_external_file_changes();
         self.poll_git_changes(ctx);
         self.attach_autonomous_turns(ctx);
+        crate::agent::acp::set_reap_policy(
+            self.conv.settings.acp_idle_minutes,
+            self.conv.settings.acp_max_live_agents,
+        );
+        self.prewarm_typed_acp_chat(ctx);
 
         // A focus event runs these checks again when returning to an idle background window.
         if ctx.input(|i| i.focused)

@@ -149,6 +149,26 @@ impl OxiApp {
                         }
                         self.respond_to_approval(ApprovalDecision::AllowPrefix(prefix.clone()));
                     }
+                    // Bash is allowed by command prefix instead: one rule for every command
+                    // would be a blank cheque.
+                    if pa.name != "bash"
+                        && !pa.name.trim().is_empty()
+                        && crate::ui::chrome::ghost_button(ui, "Always allow here", false)
+                            .on_hover_text(format!(
+                                "Run this and never ask again for `{}` in this workspace \
+                                 (edit the list in Settings → Agent → Approvals)",
+                                pa.name
+                            ))
+                            .clicked()
+                    {
+                        let root = std::path::PathBuf::from(
+                            self.active_workspace().root_path.trim().to_owned(),
+                        );
+                        if self.conv.settings.allow_tool_in(&root, &pa.name) {
+                            self.save_settings_quietly();
+                        }
+                        self.respond_to_approval(ApprovalDecision::AllowTool(pa.name.clone()));
+                    }
                     if crate::ui::chrome::ghost_button(ui, "Deny", true)
                         .on_hover_text("Skip this call; the agent is told it was denied")
                         .clicked()

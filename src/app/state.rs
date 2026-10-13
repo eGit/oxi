@@ -844,6 +844,9 @@ pub struct ConversationState {
     /// receivers prevents an older provider from getting stuck in `loading` after its
     /// receiver is overwritten.
     pub model_rxs: Vec<std::sync::mpsc::Receiver<ModelFetchMsg>>,
+    /// When each chat's ACP agent was last launched ahead of a message being typed, by ACP
+    /// session key, so a failing launch is not retried every frame.
+    pub acp_prewarmed_at: std::collections::HashMap<String, Instant>,
     pub local_models: LocalModelsUiState,
     /// Receivers for local/remote model operations. Several operations can overlap (for
     /// example, an automatic SSH listing and a HuggingFace search), so replacing a single

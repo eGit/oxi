@@ -72,6 +72,10 @@ use modes::{ModeState, SharedModes, set_user_option, sync_plan_mode};
 mod permissions;
 use permissions::{PermReq, handle_permission};
 
+#[path = "acp/reaper.rs"]
+mod reaper;
+pub use reaper::{is_live, live_count, set_policy as set_reap_policy};
+
 #[path = "acp/rpc.rs"]
 mod rpc;
 use rpc::{CommandsKey, drain_stderr, read_loop, request, write_line};
@@ -88,6 +92,76 @@ const PROTOCOL_VERSION: i64 = 1;
 
 /// Outstanding client→agent requests, keyed by JSON-RPC id, awaiting a response.
 type Pending = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
+
+/// The running agents, by oxi session key.
+type Conns = Arc<AsyncMutex<HashMap<String, Conn>>>;
+
+/// The running agents, plus one launch lock per session so a warm-up and the prompt right
+/// behind it share one subprocess instead of each starting their own.
+#[derive(Clone, Default)]
+struct Agents {
+    conns: Conns,
+    launching: Arc<std::sync::Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+}
+
+impl Agents {
+    fn launch_lock(&self, session_key: &str) -> Arc<AsyncMutex<()>> {
+        self.launching
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(session_key.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// Stop the session's agent. Its session stays resumable and its options stay shown.
+    async fn stop(&self, session_key: &str) {
+        // Dropping the Conn kills the subprocess (kill_on_drop).
+        self.conns.lock().await.remove(session_key);
+        reaper::mark_stopped(session_key);
+    }
+
+    /// Stop the agents the policy says nobody needs running any more. Picked and taken out
+    /// under one lock: a prompt reusing an agent marks it used under the same lock, so it is
+    /// either seen as in use here or relaunched there.
+    async fn reap(&self) {
+        let stopped: Vec<(String, Conn)> = {
+            let now = std::time::Instant::now();
+            let mut conns = self.conns.lock().await;
+            let agents = conns
+                .iter()
+                .filter(|(_, c)| c.alive.load(Ordering::SeqCst))
+                .map(|(key, c)| {
+                    let h = &c.handles;
+                    let busy = h.turn_lock.try_lock().is_err()
+                        || !h.held.is_empty()
+                        || h.pending.try_lock().map_or(true, |p| !p.is_empty());
+                    reaper::Candidate::of(key, &h.activity, busy, now)
+                })
+                .collect();
+            let mut stopped: Vec<(String, Conn)> = reaper::victims(agents)
+                .into_iter()
+                .filter_map(|key| conns.remove_entry(&key))
+                .collect();
+            // Agents that exited on their own.
+            let dead: Vec<String> = conns
+                .iter()
+                .filter(|(_, c)| !c.alive.load(Ordering::SeqCst))
+                .map(|(key, _)| key.clone())
+                .collect();
+            stopped.extend(dead.into_iter().filter_map(|key| conns.remove_entry(&key)));
+            stopped
+        };
+        for (key, conn) in stopped {
+            if conn.alive.load(Ordering::SeqCst) {
+                log::info!("stopping the idle ACP agent of {key}");
+            }
+            reaper::mark_stopped(&key);
+            // Dropping the Conn kills the subprocess (kill_on_drop).
+            drop(conn);
+        }
+    }
+}
 
 /// One prompt turn submitted to the manager. Carries the channels the background runtime uses
 /// to stream events back and to ask the UI for approval, plus everything needed to (re)launch
@@ -125,6 +199,8 @@ pub struct AcpPrompt {
     pub approval_policy: ApprovalPolicy,
     /// `bash` (ACP `execute`) command prefixes that run without asking.
     pub bash_allowlist: Vec<String>,
+    /// Other tools the user allowed in this workspace.
+    pub allowed_tools: Vec<String>,
     /// Cooperative cancellation for the turn.
     pub cancel: Arc<AtomicBool>,
     /// Plan mode: ask for a plan and refuse every permission request that could change things.
@@ -192,6 +268,7 @@ pub struct AcpAttach {
     pub approval_rx: StdReceiver<ApprovalDecision>,
     pub approval_policy: ApprovalPolicy,
     pub bash_allowlist: Vec<String>,
+    pub allowed_tools: Vec<String>,
     pub cancel: Arc<AtomicBool>,
     pub plan_mode: bool,
 }
@@ -232,12 +309,20 @@ impl AcpManager {
                         tokio::time::sleep(Duration::from_secs(60 * 60)).await;
                     }
                 });
-                let conns: Arc<AsyncMutex<HashMap<String, Conn>>> =
-                    Arc::new(AsyncMutex::new(HashMap::new()));
+                let agents = Agents::default();
+                {
+                    let agents = agents.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::time::sleep(reaper::SWEEP_EVERY).await;
+                            agents.reap().await;
+                        }
+                    });
+                }
                 while let Some(cmd) = rx.recv().await {
                     match cmd {
                         AcpCommand::Prompt { req, reply } => {
-                            let conns = conns.clone();
+                            let agents = agents.clone();
                             tokio::spawn(async move {
                                 // Only Sync fields are borrowed across the await here; the
                                 // `!Sync` approval Receiver stays owned by `req`.
@@ -250,7 +335,7 @@ impl AcpManager {
                                     effort: &req.effort,
                                     mcp_servers: &req.mcp_servers,
                                 };
-                                let ensured = ensure_conn(&conns, &spec).await;
+                                let ensured = ensure_conn(&agents, &spec).await;
                                 match ensured {
                                     Ok(handles) => run_prompt(handles, req, reply).await,
                                     Err(e) => {
@@ -260,7 +345,7 @@ impl AcpManager {
                             });
                         }
                         AcpCommand::Warm { req, reply } => {
-                            let conns = conns.clone();
+                            let agents = agents.clone();
                             tokio::spawn(async move {
                                 let spec = LaunchSpec {
                                     session_key: &req.session_key,
@@ -271,18 +356,19 @@ impl AcpManager {
                                     effort: &req.effort,
                                     mcp_servers: &req.mcp_servers,
                                 };
-                                let ensured = ensure_conn(&conns, &spec).await;
+                                let ensured = ensure_conn(&agents, &spec).await;
                                 let _ = reply.send(ensured.map(|h| h.available_models));
                             });
                         }
                         AcpCommand::SetOption { req, reply } => {
-                            let conns = conns.clone();
+                            let conns = agents.conns.clone();
                             tokio::spawn(async move {
                                 let _ = reply.send(set_option(&conns, req).await);
                             });
                         }
                         AcpCommand::Attach { req, reply } => {
-                            let handles = conns
+                            let handles = agents
+                                .conns
                                 .lock()
                                 .await
                                 .get(&req.session_key)
@@ -299,8 +385,7 @@ impl AcpManager {
                             }
                         }
                         AcpCommand::Close { session_key } => {
-                            // Dropping the Conn kills the subprocess (kill_on_drop).
-                            conns.lock().await.remove(&session_key);
+                            agents.stop(&session_key).await;
                             sessions::forget(&session_key);
                             config_options::forget(&session_key);
                         }
@@ -420,6 +505,8 @@ struct ConnHandles {
     /// Updates received between turns, until a turn is attached to show them.
     held: Arc<autonomous::Held>,
     alive: Arc<AtomicBool>,
+    /// When the agent was last used, for stopping idle ones (see [`reaper`]).
+    activity: Arc<reaper::Activity>,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
@@ -462,11 +549,11 @@ impl PromptCtx {
 
 /// Return handles for the session's agent, launching + initializing it if there isn't already a
 /// healthy subprocess (or if the launch command changed).
-async fn ensure_conn(
-    conns: &Arc<AsyncMutex<HashMap<String, Conn>>>,
-    spec: &LaunchSpec<'_>,
-) -> Result<ConnHandles, String> {
+async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ConnHandles, String> {
     let mcp_servers = mcp_servers::usable(spec.mcp_servers);
+    let launch = agents.launch_lock(spec.session_key);
+    let _launching = launch.lock().await;
+    let conns = &agents.conns;
     {
         let map = conns.lock().await;
         if let Some(c) = map.get(spec.session_key)
@@ -476,6 +563,8 @@ async fn ensure_conn(
             && c.effort == spec.effort
             && c.mcp_servers == mcp_servers
         {
+            // Under the map lock, so a sweep running now sees it in use.
+            c.handles.activity.touch();
             return Ok(c.handles.clone());
         }
     }
@@ -484,6 +573,7 @@ async fn ensure_conn(
     // agent session itself is resumed, so the conversation carries over.
     let conn = spawn_conn(spec, mcp_servers).await?;
     let handles = conn.handles.clone();
+    reaper::mark_live(spec.session_key, conn.alive.clone());
     conns
         .lock()
         .await
@@ -491,17 +581,16 @@ async fn ensure_conn(
     Ok(handles)
 }
 
-async fn set_option(
-    conns: &Arc<AsyncMutex<HashMap<String, Conn>>>,
-    req: AcpSetOption,
-) -> Result<(), String> {
+async fn set_option(conns: &Conns, req: AcpSetOption) -> Result<(), String> {
     let handles = {
         let mut map = conns.lock().await;
         let Some(conn) = map
             .get_mut(&req.session_key)
             .filter(|c| c.alive.load(Ordering::SeqCst) && c.command_line == req.command_line)
         else {
-            return Err("the agent is not running".into());
+            // A stopped agent takes the value when it is launched again: the composer already
+            // shows it, and the launch restores what the composer shows (see `restore_options`).
+            return Ok(());
         };
         if let Some(model) = req.model {
             conn.model = model;
@@ -621,6 +710,7 @@ async fn spawn_conn(
     let alive = Arc::new(AtomicBool::new(true));
     let modes: SharedModes = Arc::default();
     let held = Arc::new(autonomous::Held::new(session_key));
+    let activity = Arc::new(reaper::Activity::new());
 
     let stderr_tail = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
     let stderr_task = tokio::spawn(drain_stderr(stderr, stderr_tail.clone()));
@@ -632,6 +722,7 @@ async fn spawn_conn(
         alive.clone(),
         modes.clone(),
         held.clone(),
+        activity.clone(),
         CommandsKey {
             command_line: command_line.to_string(),
             cwd: cwd.to_path_buf(),
@@ -695,6 +786,8 @@ async fn spawn_conn(
         }
     };
     sessions::remember(session_key, command_line, cwd, &session_id);
+    // What the composer showed for this chat before, when its agent ran last.
+    let previous = config_options::options(session_key, command_line);
     let available_models = parse_available_models(&res);
     let mut config_options = res.get("configOptions").cloned().unwrap_or(Value::Null);
     config_options = set_matching_config_option(
@@ -716,6 +809,20 @@ async fn spawn_conn(
         effort,
     )
     .await?;
+    let config_options = match previous {
+        Some(previous) => {
+            restore_options(
+                &stdin,
+                &next_id,
+                &pending,
+                &session_id,
+                config_options,
+                &previous,
+            )
+            .await
+        }
+        None => config_options,
+    };
     *modes.lock().unwrap_or_else(|e| e.into_inner()) = ModeState::new(
         config_options,
         res.get("modes").cloned().unwrap_or(Value::Null),
@@ -735,6 +842,7 @@ async fn spawn_conn(
         turn_lock: Arc::new(AsyncMutex::new(())),
         held,
         alive: alive.clone(),
+        activity,
     };
     handles.held.arm();
     Ok(Conn {
@@ -900,6 +1008,74 @@ async fn set_matching_config_option(
         .unwrap_or_else(|| config_options.clone()))
 }
 
+/// Put back the options the user had set on the chat's previous agent (permission mode, fast
+/// mode…) after a relaunch: one stopped for idling, or relaunched for another model. The model
+/// and effort come from oxi's settings instead, and plan mode is oxi's to switch per turn.
+async fn restore_options(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    session_id: &str,
+    mut config_options: Value,
+    previous: &[config_options::AcpConfigOption],
+) -> Value {
+    for (id, value) in options_to_restore(&config_options, previous) {
+        match request(
+            stdin,
+            next_id,
+            pending,
+            "session/set_config_option",
+            modes::config_value_params(session_id, &id, &value),
+        )
+        .await
+        {
+            Ok(res) => {
+                if let Some(options) = res.get("configOptions").filter(|v| v.is_array()) {
+                    config_options = options.clone();
+                } else {
+                    modes::set_config_value(&mut config_options, &id, &value);
+                }
+            }
+            Err(e) => log::warn!("could not restore ACP option {id}: {e}"),
+        }
+    }
+    config_options
+}
+
+/// The `(id, value)` pairs where the new agent differs from what was shown before and still
+/// offers the old value.
+fn options_to_restore(
+    current: &Value,
+    previous: &[config_options::AcpConfigOption],
+) -> Vec<(String, Value)> {
+    use config_options::AcpConfigKind;
+    let current = config_options::parse(current);
+    previous
+        .iter()
+        .filter(|old| !old.is_model() && !old.is_thought_level())
+        .filter_map(|old| {
+            let now = current.iter().find(|o| o.id == old.id)?;
+            match (&old.kind, &now.kind) {
+                (
+                    AcpConfigKind::Select { current: was, .. },
+                    AcpConfigKind::Select {
+                        current: is,
+                        values,
+                    },
+                ) => (was != is
+                    && !was.is_empty()
+                    && !modes::is_plan(was)
+                    && values.iter().any(|v| &v.value == was))
+                .then(|| (old.id.clone(), json!(was))),
+                (AcpConfigKind::Boolean(was), AcpConfigKind::Boolean(is)) => {
+                    (was != is).then(|| (old.id.clone(), json!(was)))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 async fn set_thought_level(
     stdin: &Arc<AsyncMutex<ChildStdin>>,
     next_id: &Arc<AtomicI64>,
@@ -961,12 +1137,14 @@ async fn run_prompt(
         mut approval_rx,
         approval_policy,
         mut bash_allowlist,
+        mut allowed_tools,
         cancel,
         plan_mode,
         ..
     } = req;
 
     let _turn = handles.turn_lock.clone().lock_owned().await;
+    handles.activity.touch();
     if cancel.load(Ordering::SeqCst) {
         let _ = reply.send(Ok(()));
         return;
@@ -1052,6 +1230,7 @@ async fn run_prompt(
                         &mut approval_rx,
                         approval_policy,
                         &mut bash_allowlist,
+                        &mut allowed_tools,
                         plan_mode,
                         &cancel,
                         &mut auto_approve,
@@ -1072,6 +1251,7 @@ async fn run_prompt(
         }
     };
     *handles.prompt_ctx.lock().await = None;
+    handles.activity.touch();
     if slash_command {
         handles
             .modes
@@ -1102,6 +1282,7 @@ async fn run_attach(
         mut approval_rx,
         approval_policy,
         mut bash_allowlist,
+        mut allowed_tools,
         cancel,
         plan_mode,
         ..
@@ -1145,6 +1326,7 @@ async fn run_attach(
                             &mut approval_rx,
                             approval_policy,
                             &mut bash_allowlist,
+                            &mut allowed_tools,
                             plan_mode,
                             &cancel,
                             &mut auto_approve,
@@ -1175,6 +1357,7 @@ async fn run_attach(
         }
     }
     *handles.prompt_ctx.lock().await = None;
+    handles.activity.touch();
     let _ = reply.send(Ok(()));
 }
 

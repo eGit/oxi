@@ -105,6 +105,14 @@ impl Held {
         }
     }
 
+    /// Nothing is waiting for a turn to show it.
+    pub(super) fn is_empty(&self) -> bool {
+        self.updates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     /// Take the held updates for a turn that shows them, which also settles the announcement.
     pub(super) fn drain(&self) -> Vec<Value> {
         let updates = self

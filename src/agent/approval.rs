@@ -20,6 +20,9 @@ pub enum ApprovalDecision {
     /// Run this `bash` call and, from now on, every simple command starting with this prefix
     /// (the UI also saves it to the settings allowlist for later runs).
     AllowPrefix(String),
+    /// Run this call and, from now on, every call of this (non-`bash`) tool in the workspace
+    /// (the UI also saves it to the settings for later runs).
+    AllowTool(String),
     /// Run this and auto-approve every remaining tool in the current run.
     ApproveRest,
     /// Refuse this tool call; the model is told the user denied it.
@@ -65,6 +68,12 @@ pub fn bash_command_allowlisted(command: &str, allowlist: &[String]) -> bool {
         let prefix: Vec<&str> = entry.split_whitespace().collect();
         !prefix.is_empty() && words.len() >= prefix.len() && words[..prefix.len()] == prefix[..]
     })
+}
+
+/// Whether `name` runs without asking because the user allowed the tool in this workspace.
+/// `bash` never does: its commands are allowed by prefix instead.
+pub fn tool_allowed(name: &str, allowed: &[String]) -> bool {
+    !name.eq_ignore_ascii_case("bash") && allowed.iter().any(|t| t == name)
 }
 
 /// Allowlist entry to offer for `command`: the program plus its subcommand when there is one
@@ -119,6 +128,8 @@ pub struct ApprovalGate {
     plan_mode: bool,
     /// `bash` command prefixes that run without asking (see [`bash_command_allowlisted`]).
     bash_allowlist: Vec<String>,
+    /// Tools the user allowed in this workspace.
+    allowed_tools: Vec<String>,
     rx: Receiver<ApprovalDecision>,
 }
 
@@ -129,8 +140,14 @@ impl ApprovalGate {
             auto_approve: false,
             plan_mode: false,
             bash_allowlist: Vec::new(),
+            allowed_tools: Vec::new(),
             rx,
         }
+    }
+
+    pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
+        self.allowed_tools = tools;
+        self
     }
 
     pub fn with_bash_allowlist(mut self, allowlist: Vec<String>) -> Self {
@@ -139,11 +156,12 @@ impl ApprovalGate {
     }
 
     fn allowlisted(&self, name: &str, args: &Value) -> bool {
-        name.eq_ignore_ascii_case("bash")
-            && args
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| bash_command_allowlisted(command, &self.bash_allowlist))
+        tool_allowed(name, &self.allowed_tools)
+            || name.eq_ignore_ascii_case("bash")
+                && args
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| bash_command_allowlisted(command, &self.bash_allowlist))
     }
 
     pub fn with_plan_mode(mut self, plan_mode: bool) -> Self {
@@ -182,6 +200,10 @@ impl ApprovalGate {
                     self.bash_allowlist.push(prefix);
                     return Ok(());
                 }
+                Ok(ApprovalDecision::AllowTool(tool)) => {
+                    self.allowed_tools.push(tool);
+                    return Ok(());
+                }
                 Ok(ApprovalDecision::ApproveRest) => {
                     self.auto_approve = true;
                     return Ok(());
@@ -205,6 +227,36 @@ mod tests {
 
     fn list(entries: &[&str]) -> Vec<String> {
         entries.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn allowed_tools_skip_the_prompt_but_never_for_bash() {
+        let allowed = list(&["edit", "mcp__gh__create_issue", "bash"]);
+        assert!(tool_allowed("edit", &allowed));
+        assert!(tool_allowed("mcp__gh__create_issue", &allowed));
+        assert!(!tool_allowed("write", &allowed));
+        assert!(!tool_allowed("bash", &allowed));
+
+        let (tx, rx) = channel();
+        let (events, _events_rx) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let policy = ApprovalPolicy {
+            write_edit: true,
+            bash: true,
+        };
+        let mut gate = ApprovalGate::new(policy, rx).with_allowed_tools(list(&["edit"]));
+        assert!(gate.request(&events, &cancel, "edit", &Value::Null).is_ok());
+        // Allowing a tool from the prompt covers its later calls in the same run.
+        tx.send(ApprovalDecision::AllowTool("write".into()))
+            .unwrap();
+        assert!(
+            gate.request(&events, &cancel, "write", &Value::Null)
+                .is_ok()
+        );
+        assert!(
+            gate.request(&events, &cancel, "write", &Value::Null)
+                .is_ok()
+        );
     }
 
     #[test]
