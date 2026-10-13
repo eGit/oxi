@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-10-13
+
+### Added
+- **Tool calls:** Choose between Minimal (pills only), Balanced (current behavior), or Expanded (auto-unfold output and diffs) display modes.
+- **Updates:** Install new releases in the background and restart when ready; automatic updates can be toggled in About.
+
+### Changed
+- **Updates:** Check for new releases every 6 hours instead of only at startup.
+
+
 ## [1.15.0] - 2026-10-13
 
 ### Added
@@ -1034,7 +1044,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.16.0...HEAD
+[1.16.0]: https://github.com/maziluiosif/oxi/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/maziluiosif/oxi/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/maziluiosif/oxi/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/maziluiosif/oxi/compare/v1.12.0...v1.13.0
