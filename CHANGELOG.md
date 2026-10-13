@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-13
+
+### Added
+- **Providers:** Add GitHub Copilot over ACP with support for Copilot plans and optional token authentication.
+- **Chat:** Copy selected text directly from the message context menu.
+
+### Changed
+- **Chat:** Text selection is now preserved when opening the message menu.
+- **Chat:** Transcript layout is cached during window resizing for smoother performance on large conversations.
+
+
 ## [1.12.0] - 2026-10-12
 
 ### Added
@@ -992,7 +1003,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/maziluiosif/oxi/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/maziluiosif/oxi/compare/v1.11.3...v1.12.0
 [1.11.3]: https://github.com/maziluiosif/oxi/compare/v1.11.2...v1.11.3
 [1.11.2]: https://github.com/maziluiosif/oxi/compare/v1.11.1...v1.11.2
