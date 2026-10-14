@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-10-14
+
+### Fixed
+- **Agent:** mkdir now creates missing parent directories for nested paths like `src/main/java/com/example`, allowing models to scaffold project structures.
+- **Composer:** Empty-draft hint now displays correctly without being covered by the caret.
+
+
 ## [1.17.0] - 2026-10-13
 
 ### Added
@@ -1057,7 +1064,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.17.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.17.1...HEAD
+[1.17.1]: https://github.com/maziluiosif/oxi/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/maziluiosif/oxi/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/maziluiosif/oxi/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/maziluiosif/oxi/compare/v1.14.0...v1.15.0
