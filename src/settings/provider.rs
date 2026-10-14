@@ -508,10 +508,14 @@ impl ProviderConfig {
 
     /// Resolve the effective context window in tokens for this provider.
     ///
-    /// Order: explicit override > built-in catalog > provider/model default. ACP agents report
-    /// their real window in `usage_update`; until the first one arrives they get
+    /// Order: explicit override > built-in catalog > provider/model default.
+    /// Router defaults to 1M for transcript management; selected models keep their own limits.
+    /// ACP agents report their real window in `usage_update`; until the first one arrives they get
     /// [`Self::ACP_CONTEXT_WINDOW`], and overrides don't apply (the agent manages its context).
     pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if self.provider == LlmProviderKind::Router {
+            return self.context_window.filter(|w| *w > 0).unwrap_or(1_000_000);
+        }
         if self.is_acp() {
             return Self::ACP_CONTEXT_WINDOW;
         }
@@ -819,6 +823,16 @@ mod tests {
         let back: ProviderConfig =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.allow_self_signed_tls, Some(true));
+    }
+
+    #[test]
+    fn router_context_defaults_to_one_million_with_optional_override() {
+        let mut cfg = ProviderConfig::new(LlmProviderKind::Router);
+        assert_eq!(cfg.effective_context_window(128_000), 1_000_000);
+        cfg.context_window = Some(256_000);
+        assert_eq!(cfg.effective_context_window(128_000), 256_000);
+        cfg.context_window = Some(0);
+        assert_eq!(cfg.effective_context_window(128_000), 1_000_000);
     }
 
     #[test]

@@ -283,6 +283,8 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 "OpenRouter · anthropic/claude-sonnet-4.5 — score -8: pay per use, ~$0.17".into(),
             ],
             failover_from: None,
+        interrupted_providers: Vec::new(),
+            direct: false,
         })));
         rec.harness.run_steps(4);
         rec.still("chat-routed");
@@ -403,6 +405,43 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         println!("PROFILE text selection in the short demo chat: {selected}");
         rec.profile("chat idle", false);
         rec.profile("chat hover", true);
+        // Claude Code implements, Codex reviews in the same chat: the handoff line.
+        {
+            let app = rec.app();
+            let mut claude = message(
+                MsgRole::Assistant,
+                "",
+                vec![AssistantBlock::Answer(
+                    "Added retry with backoff to `fetch`.".into(),
+                )],
+            );
+            claude.route = Some(Box::new(crate::model::RouteNote::direct(
+                LlmProviderKind::ClaudeCodeAcp,
+                "opus",
+                "high",
+            )));
+            let mut codex = message(
+                MsgRole::Assistant,
+                "",
+                vec![AssistantBlock::Answer(
+                    "Reviewed it: the jitter can overflow for large attempts.".into(),
+                )],
+            );
+            codex.route = Some(Box::new(crate::model::RouteNote::direct(
+                LlmProviderKind::CodexAcp,
+                "gpt-5.5",
+                "high",
+            )));
+            app.active_session_mut().messages = vec![
+                message(MsgRole::User, "Add retry with backoff to fetch", vec![]),
+                claude,
+                message(MsgRole::User, "Review what Claude did", vec![]),
+                codex,
+            ];
+        }
+        rec.harness.run_steps(4);
+        rec.still("chat-handoff");
+
         // A long, markdown-heavy conversation, scrolled with the wheel.
         {
             let app = rec.app();

@@ -182,6 +182,50 @@ impl OxiApp {
         }
     }
 
+    /// The most recent other agent that answered in this chat, if any.
+    pub(crate) fn other_agent_in_chat(
+        &mut self,
+        key: SessionKey,
+    ) -> Option<crate::settings::LlmProviderKind> {
+        let current = self.ensure_session_config(key).provider;
+        self.session_by_key(key)
+            .messages
+            .iter()
+            .rev()
+            .filter_map(|m| m.route.as_deref())
+            .map(|r| r.provider)
+            .find(|p| *p != current && *p != crate::settings::LlmProviderKind::Router)
+    }
+
+    /// After a failed turn, switch the chat to `kind` and ask it to finish the request. Unlike
+    /// Retry, the failed turn stays: the new agent gets it as context, partial work included.
+    pub(crate) fn continue_with_agent(
+        &mut self,
+        kind: crate::settings::LlmProviderKind,
+        error: &str,
+    ) {
+        let key = self.active_session_key();
+        if self.active_waiting_response() || self.compaction_active_for(key) {
+            return;
+        }
+        let failed = self.ensure_session_config(key).provider;
+        self.set_active_session_provider(kind);
+        self.save_settings_quietly();
+        self.run_state_mut(key).stream_error = None;
+        let reason = error.lines().next().unwrap_or("").trim();
+        let text = format!(
+            "Continue my last request. {} stopped with an error before finishing ({reason}). Check what it already changed, then carry on from there.",
+            crate::app::composer::composer_provider_label(failed)
+        );
+        let draft_input = std::mem::replace(&mut self.conv.composer.input, text);
+        let draft_texts = std::mem::take(&mut self.conv.composer.pending_texts);
+        let draft_images = std::mem::take(&mut self.conv.composer.pending_images);
+        self.send_message_opts(false);
+        self.conv.composer.input = draft_input;
+        self.conv.composer.pending_texts = draft_texts;
+        self.conv.composer.pending_images = draft_images;
+    }
+
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
     /// the deferred message — it must not re-trigger the threshold check (loop guard).
     pub(crate) fn send_message_opts(&mut self, skip_autocompact: bool) {
@@ -638,10 +682,24 @@ impl OxiApp {
         let mut settings = self.conv.settings.clone();
         let session_config = self.ensure_session_config(key);
         session_config.apply_to_settings(&mut settings);
-        // Under the Router the real target arrives with `AgentEvent::Routed`.
-        self.run_state_mut(key).usage_target = (session_config.provider
-            != crate::settings::LlmProviderKind::Router)
-            .then(|| (session_config.provider, session_config.model_id.clone()));
+        // Under the Router the real target arrives with `AgentEvent::Routed`; a directly chosen
+        // model is recorded on the reply now.
+        let direct =
+            (session_config.provider != crate::settings::LlmProviderKind::Router).then(|| {
+                crate::model::RouteNote::direct(
+                    session_config.provider,
+                    &session_config.model_id,
+                    &session_config.effort,
+                )
+            });
+        self.run_state_mut(key).usage_target = direct
+            .as_ref()
+            .map(|note| (note.provider, note.model.clone()));
+        if let Some(note) = direct
+            && let Some(reply) = self.last_assistant_mut(key)
+        {
+            reply.route = Some(Box::new(note));
+        }
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file
             .clone();
@@ -731,6 +789,13 @@ impl OxiApp {
         }
         let session = self.session_mut_by_key(key);
         session.messages_loaded = true;
+        // The agent that ran last is the one still attached to the chat.
+        let route = session
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| m.route.clone())
+            .filter(|r| r.provider.is_acp());
         session.messages.push(ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
@@ -740,7 +805,7 @@ impl OxiApp {
             streaming: true,
             started_at: Some(std::time::Instant::now()),
             worked_duration: None,
-            route: None,
+            route,
             changes: None,
         });
         if key == self.active_session_key() {
@@ -792,10 +857,9 @@ impl OxiApp {
     /// (rewind, retry, fork): the next prompt starts a fresh agent session that is handed oxi's
     /// transcript instead.
     pub(crate) fn reset_acp_session(&mut self, key: SessionKey) {
-        if self.ensure_session_config(key).provider.is_acp() {
-            let session_key = self.acp_session_key(key);
-            self.acp.close(&session_key);
-        }
+        // Every agent the chat used keeps a session, not only the selected one.
+        let session_key = self.acp_session_key(key);
+        self.acp.close(&session_key);
     }
 
     pub(crate) fn invalidate_wire_cache(&mut self, key: SessionKey) {

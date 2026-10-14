@@ -166,6 +166,43 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
     }
 }
 
+/// Whether `command_line` starts without installing anything first: a managed adapter that is
+/// already installed (it was used before), or another command whose program exists.
+pub(super) async fn is_ready(command_line: &str) -> bool {
+    if let Some(adapter) = adapter_for(command_line) {
+        return adapter.installed_bin().is_some();
+    }
+    let Some(program) = first_word(command_line) else {
+        return false;
+    };
+    if program.contains('/') || program.contains('\\') {
+        return Path::new(&program).is_file();
+    }
+    let path = match shell_path().await {
+        Some(path) => path,
+        None => std::env::var("PATH").unwrap_or_default(),
+    };
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    std::env::split_paths(&path).any(|dir| {
+        exts.iter()
+            .any(|ext| dir.join(format!("{program}{ext}")).is_file())
+    })
+}
+
+/// The program of a command line, unquoting a leading `"…"`.
+fn first_word(command_line: &str) -> Option<String> {
+    let s = command_line.trim_start();
+    let word = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next()?,
+        None => s.split_whitespace().next()?,
+    };
+    (!word.is_empty()).then(|| word.to_string())
+}
+
 /// Update every adapter that has a managed install and hasn't been checked recently, then prune
 /// superseded versions. Silent: failures only reach stderr.
 pub(super) async fn update_installed() {
@@ -423,6 +460,24 @@ mod tests {
         ] {
             assert_eq!(adapter_for(cmd).map(|a| a.bin), Some("copilot"), "{cmd}");
         }
+    }
+
+    #[test]
+    fn first_word_unquotes_the_program() {
+        assert_eq!(
+            first_word("\"/a b/python\" -u x").as_deref(),
+            Some("/a b/python")
+        );
+        assert_eq!(first_word("  agent acp").as_deref(), Some("agent"));
+        assert_eq!(first_word("   "), None);
+    }
+
+    #[tokio::test]
+    async fn custom_commands_are_ready_only_when_the_program_exists() {
+        let exe = std::env::current_exe().unwrap();
+        assert!(is_ready(&format!("\"{}\" --acp", exe.display())).await);
+        assert!(!is_ready("/definitely/not/here --acp").await);
+        assert!(!is_ready("oxi-no-such-program-4e1f acp").await);
     }
 
     #[test]

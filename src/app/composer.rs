@@ -65,7 +65,7 @@ fn composer_thumb_texture(ui: &Ui, data: &[u8]) -> Option<TextureHandle> {
 
 /// Short provider names for the composer combo — full settings labels like
 /// "OpenAI Compatible" / "Claude Code (ACP)" make the bar jump around.
-fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static str {
+pub(crate) fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static str {
     use crate::settings::LlmProviderKind::*;
     match kind {
         OpenAi => "OpenAI",
@@ -302,6 +302,33 @@ impl OxiApp {
             .request_repaint_after(std::time::Duration::from_millis(250));
     }
 
+    /// While one agent is still working and another is picked: who gets the next message.
+    fn render_next_agent_hint(&mut self, ui: &mut Ui) {
+        let next = self.conv.settings.active_provider;
+        if next == crate::settings::LlmProviderKind::Router {
+            return;
+        }
+        let Some(working) = self
+            .run_state(self.active_session_key())
+            .filter(|run| run.waiting_response || run.agent_rx.is_some())
+            .and_then(|run| run.usage_target.as_ref())
+            .map(|(kind, _)| *kind)
+            .filter(|kind| *kind != next)
+        else {
+            return;
+        };
+        ui.label(
+            RichText::new(format!(
+                "{} is working · your next message goes to {}",
+                composer_provider_label(working),
+                composer_provider_label(next)
+            ))
+            .size(FS_TINY)
+            .color(c_text_muted()),
+        );
+        ui.add_space(COMPOSER_GAP);
+    }
+
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
         let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
@@ -344,6 +371,7 @@ impl OxiApp {
                         self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
+                        self.render_next_agent_hint(ui);
                         if self.conv.composer.editing_last_prompt.is_some() {
                             ui.horizontal(|ui| {
                                 ui.label(

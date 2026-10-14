@@ -56,6 +56,12 @@ pub use commands::{AcpSlashCommand, available as available_commands};
 #[path = "acp/install.rs"]
 mod install;
 
+/// Whether `cfg`'s agent can start without installing anything first, i.e. it is set up on this
+/// machine. Failover only moves a turn to agents that are.
+pub async fn is_ready(cfg: &crate::settings::ProviderConfig) -> bool {
+    install::is_ready(&cfg.effective_acp_command()).await
+}
+
 #[path = "acp/mcp_servers.rs"]
 mod mcp_servers;
 
@@ -187,6 +193,9 @@ pub struct AcpPrompt {
     /// Transcript of the chat before the latest message. Sent ahead of the prompt only when the
     /// agent had to start a fresh session (no resumable one), so it still knows the conversation.
     pub history: String,
+    /// Turns this agent has not seen because another one answered them. Sent ahead of the prompt
+    /// when the agent continues its own session, so it catches up on the other agent's work.
+    pub missed: String,
     /// Image attachments on the latest user message (`mime`, bytes).
     pub images: Vec<(String, Vec<u8>)>,
     /// Files and folders `@`-mentioned in the latest message, sent as ACP resources.
@@ -238,7 +247,7 @@ struct LaunchSpec<'a> {
 
 enum AcpCommand {
     Prompt {
-        req: AcpPrompt,
+        req: Box<AcpPrompt>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     Warm {
@@ -254,6 +263,9 @@ enum AcpCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
     Close {
+        session_key: String,
+    },
+    Stop {
         session_key: String,
     },
 }
@@ -337,7 +349,7 @@ impl AcpManager {
                                 };
                                 let ensured = ensure_conn(&agents, &spec).await;
                                 match ensured {
-                                    Ok(handles) => run_prompt(handles, req, reply).await,
+                                    Ok(handles) => run_prompt(handles, *req, reply).await,
                                     Err(e) => {
                                         let _ = reply.send(Err(e));
                                     }
@@ -389,6 +401,9 @@ impl AcpManager {
                             sessions::forget(&session_key);
                             config_options::forget(&session_key);
                         }
+                        AcpCommand::Stop { session_key } => {
+                            agents.stop(&session_key).await;
+                        }
                     }
                 }
             });
@@ -403,7 +418,7 @@ impl AcpManager {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(AcpCommand::Prompt {
-                req,
+                req: Box::new(req),
                 reply: reply_tx,
             })
             .map_err(|_| "ACP manager is not running".to_string())?;
@@ -456,9 +471,17 @@ impl AcpManager {
             .map_err(|_| "ACP manager dropped the request".to_string())?
     }
 
-    /// Tear down the subprocess for a session (e.g. when its tab is closed). No-op if none.
+    /// Tear down the subprocess for a session and forget every agent session bound to it (the
+    /// chat was deleted or its transcript rewritten). No-op if none.
     pub fn close(&self, session_key: &str) {
         let _ = self.tx.send(AcpCommand::Close {
+            session_key: session_key.to_string(),
+        });
+    }
+
+    /// Stop the session's subprocess but keep its agent sessions resumable.
+    pub fn stop(&self, session_key: &str) {
+        let _ = self.tx.send(AcpCommand::Stop {
             session_key: session_key.to_string(),
         });
     }
@@ -1138,6 +1161,7 @@ async fn run_prompt(
         command_line,
         text,
         history,
+        missed,
         images,
         resources,
         event_tx,
@@ -1198,10 +1222,12 @@ async fn run_prompt(
     } else {
         text
     };
-    let text = if !slash_command && handles.needs_history.swap(false, Ordering::SeqCst) {
+    let text = if slash_command {
+        text
+    } else if handles.needs_history.swap(false, Ordering::SeqCst) {
         with_history(&history, &text)
     } else {
-        text
+        with_missed(&missed, &text)
     };
     let prompt_params = json!({
         "sessionId": handles.session_id,
@@ -1417,6 +1443,17 @@ fn with_history(history: &str, text: &str) -> String {
     format!(
         "<conversation_history>\nThis conversation started earlier; the agent session was restarted, so here is the transcript so far. Treat it as context you already have: continue from it and do not redo earlier work unless asked.\n\n{}\n</conversation_history>\n\n{text}",
         history.trim()
+    )
+}
+
+/// Prefix the user's message with the turns another agent answered since this one last spoke.
+fn with_missed(missed: &str, text: &str) -> String {
+    if missed.trim().is_empty() {
+        return text.to_string();
+    }
+    format!(
+        "<conversation_update>\nWhile you were away this conversation continued with another agent, working in the same workspace. Here is what happened since your last reply; read it before you continue, and check the files it changed instead of assuming they are as you left them.\n\n{}\n</conversation_update>\n\n{text}",
+        missed.trim()
     )
 }
 

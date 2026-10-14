@@ -180,6 +180,10 @@ pub struct RouterSettings {
     /// Retry on the next-best provider when the chosen one is rate limited or out of quota.
     #[serde(default = "default_true")]
     pub failover: bool,
+    /// When every provider is out of quota, wait for the first one to reset and continue,
+    /// instead of failing the turn.
+    #[serde(default = "default_true")]
+    pub wait_for_quota: bool,
 }
 
 impl Default for RouterSettings {
@@ -192,6 +196,7 @@ impl Default for RouterSettings {
             read_claude_code_usage: false,
             read_codex_cli_usage: false,
             failover: true,
+            wait_for_quota: true,
         }
     }
 }

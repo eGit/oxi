@@ -103,7 +103,18 @@ impl OxiApp {
             .on_hover_text(
                 "Continue with the next eligible API or ACP provider after a quota failure, preserving reported progress and approval policies.",
             );
-            field_hint(ui, "Applies to API and ACP providers in Router mode. At most two switches per request; unfinished tools or pending approvals stop continuation. An explicit ‘only’ provider instruction disables switching.");
+            field_hint(ui, "In Router mode it may switch to any eligible provider. An agent picked in the composer only switches to other ACP agents already set up on this machine, so it stays on subscriptions. At most two switches at a time; unfinished tools or pending approvals stop continuation. An explicit ‘only’ provider instruction disables switching.");
+
+            ui.add_space(4.0);
+            ui.checkbox(
+                &mut router.wait_for_quota,
+                RichText::new("Wait for quota to reset when every provider is out")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            )
+            .on_hover_text(
+                "Keeps a long task going unattended: the turn pauses until the first provider resets (up to 24 hours), then continues.",
+            );
         });
     }
 

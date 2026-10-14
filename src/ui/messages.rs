@@ -277,7 +277,7 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
     }
 
     ui.vertical(|ui| {
-        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg));
+        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), None);
     })
     .response
 }
@@ -360,7 +360,14 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
     });
 }
 
-pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[ChatMessage]) {
+/// `previous_agent` answered the turn before this run; a different directly chosen agent here
+/// gets a handoff line.
+pub fn render_assistant_message_run(
+    ui: &mut Ui,
+    msg_idx: usize,
+    messages: &[ChatMessage],
+    previous_agent: Option<crate::settings::LlmProviderKind>,
+) {
     let col_w = content_wrap_width(ui);
     let mut blocks = Vec::new();
     let mut streaming = false;
@@ -384,12 +391,64 @@ pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[Cha
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
-        if let Some(route) = route {
-            render_route_note(ui, route);
+        match route {
+            Some(route) if route.direct => {
+                let from = previous_agent.filter(|p| *p != route.provider);
+                if from.is_some() || route.failover_from.is_some() {
+                    render_handoff_note(ui, from, route);
+                }
+            }
+            Some(route) => render_route_note(ui, route),
+            None => {}
         }
         render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
     });
     ui.add_space(8.0);
+}
+
+/// The chat moved to another agent with this turn: "Claude Code → Codex · gpt-5.5". The new
+/// agent got the earlier turns, so it is still one conversation. A turn that moved because the
+/// picked agent ran out of quota says so.
+fn render_handoff_note(
+    ui: &mut Ui,
+    from: Option<crate::settings::LlmProviderKind>,
+    route: &crate::model::RouteNote,
+) {
+    let short = |kind: crate::settings::LlmProviderKind| kind.label().trim_end_matches(" (ACP)");
+    let mut title = match from {
+        Some(from) => format!("{} → {}", short(from), short(route.provider)),
+        None => format!("→ {}", short(route.provider)),
+    };
+    if !route.model.is_empty() {
+        title.push_str(&format!(" · {}", route.model));
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.label(crate::ui::chrome::icon_glyph_rich(
+            ICON_PROVIDERS,
+            FS_TINY,
+            c_text_faint(),
+        ));
+        ui.label(RichText::new(title).size(FS_SMALL).color(c_text_muted()));
+        if route.failover_from.is_none() {
+            ui.label(
+                RichText::new("· same conversation, context handed over")
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+            );
+        }
+    });
+    if let Some(reason) = &route.failover_from {
+        ui.add(
+            Label::new(
+                RichText::new(format!("Switched automatically · {reason}"))
+                    .size(FS_TINY)
+                    .color(c_warning_fg()),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(4.0);
 }
 
 /// The Router's pick for this turn: "Router → Claude Code · opus · high" with the reason

@@ -228,6 +228,7 @@ fn acp_end_to_end_applies_model() {
         text: "Reply with ONLY one word naming your model family: Opus, Sonnet, or Haiku."
             .to_string(),
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -881,6 +882,7 @@ fn acp_live_features() {
             .unwrap_or_default(),
         text,
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -976,6 +978,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         mcp_servers: Vec::new(),
         text: "build it".into(),
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,

@@ -19,7 +19,13 @@ for line in sys.stdin:
     elif method == 'session/prompt':
         prompt_id = m['id']
         Path(log).write_text(json.dumps(m['params']))
-        if mode in ['quota', 'pending', 'error']:
+        if mode == 'quotaonce':
+            marker = Path(log + '.ran')
+            mode = 'success' if marker.exists() else 'quota'
+            marker.write_text('1')
+        if mode == 'auth':
+            send(dict(id=prompt_id, error=dict(code=-32000,message='not authenticated')))
+        elif mode in ['quota', 'pending', 'error']:
             update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='Parser updated.')))
             update(dict(sessionUpdate='tool_call', toolCallId='edit-1', kind='edit', status='in_progress' if mode == 'pending' else 'completed', rawInput=dict(path='parser.rs'), content=[dict(type='content', content=dict(type='text',text='Applied parser patch; tests passed.'))]))
             send(dict(id=prompt_id, error=dict(code=-32000,message='model not found' if mode == 'error' else 'usage limit reached')))
@@ -75,7 +81,10 @@ async fn run_case(
     let script = root.join("adapter.py");
     std::fs::write(&script, ADAPTER).unwrap();
     let mut settings = AppSettings {
-        active_provider: if mode == "pinned" {
+        active_provider: if matches!(
+            mode,
+            "pinned" | "direct" | "directwait" | "authwait" | "chain"
+        ) {
             LlmProviderKind::CodexAcp
         } else {
             LlmProviderKind::Router
@@ -83,6 +92,28 @@ async fn run_case(
         ..Default::default()
     };
     settings.router.use_jev = false;
+    settings.router.wait_for_quota = matches!(
+        mode,
+        "directwait" | "authwait" | "initialwait" | "initialcancel"
+    );
+    if matches!(
+        mode,
+        "directwait" | "authwait" | "initialwait" | "initialcancel"
+    ) {
+        // Codex's 5h window is used up and resets in a few seconds.
+        crate::router::quota::set_snapshot_for_tests(
+            LlmProviderKind::CodexAcp,
+            crate::router::quota::QuotaSnapshot {
+                windows: vec![crate::router::quota::UsageWindow {
+                    label: "5h".into(),
+                    used_pct: 100.0,
+                    resets_at: Some(crate::router::quota::now_secs() + 4),
+                    model_scope: None,
+                }],
+                ..Default::default()
+            },
+        );
+    }
     settings.require_write_edit_approval = true;
     for kind in LlmProviderKind::ALL {
         settings.router.prefs_mut(kind).enabled = false;
@@ -113,7 +144,11 @@ async fn run_case(
     for (kind, adapter_mode, log) in [
         (
             LlmProviderKind::CodexAcp,
-            if matches!(mode, "exhaust" | "tohttp" | "pinned") {
+            if matches!(mode, "directwait" | "authwait") {
+                "quotaonce"
+            } else if matches!(mode, "initialwait" | "initialcancel") {
+                "success"
+            } else if matches!(mode, "exhaust" | "tohttp" | "pinned" | "direct" | "chain") {
                 "quota"
             } else {
                 mode
@@ -122,7 +157,9 @@ async fn run_case(
         ),
         (
             LlmProviderKind::ClaudeCodeAcp,
-            if mode == "exhaust" {
+            if mode == "authwait" {
+                "auth"
+            } else if matches!(mode, "exhaust" | "directwait" | "chain") {
                 "quota"
             } else {
                 "success"
@@ -143,13 +180,13 @@ async fn run_case(
     if mode == "http" {
         settings.router.prefs_mut(LlmProviderKind::CodexAcp).enabled = false;
     }
-    if mode == "tohttp" {
+    if matches!(mode, "tohttp" | "initialwait" | "initialcancel") {
         settings
             .router
             .prefs_mut(LlmProviderKind::ClaudeCodeAcp)
             .enabled = false;
     }
-    if mode == "exhaust" {
+    if matches!(mode, "exhaust" | "chain") {
         settings
             .router
             .prefs_mut(LlmProviderKind::CursorAcp)
@@ -162,6 +199,10 @@ async fn run_case(
             script.display(),
             root.join("third.json").display()
         );
+    }
+    if mode == "chain" {
+        let cfg = settings.provider_mut(LlmProviderKind::CursorAcp);
+        cfg.acp_command = cfg.acp_command.replace(" quota ", " success ");
     }
     // Any optional quota probes stay on loopback in this test process.
     settings.provider_mut(LlmProviderKind::OpenRouter).base_url = "http://127.0.0.1:1/v1".into();
@@ -186,6 +227,11 @@ async fn run_case(
                 "Generează o imagine cu o pisică pe lună"
             } else if mode == "pinned" {
                 "foloseste claude care sunt stirile de azi?"
+            } else if matches!(
+                mode,
+                "direct" | "directwait" | "authwait" | "initialwait" | "initialcancel" | "chain"
+            ) {
+                "Fix the parser"
             } else if exclusive {
                 "Folosește doar Codex pentru asta"
             } else {
@@ -403,4 +449,144 @@ async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() 
         events.last(),
         Some(AgentEvent::Finished(AgentOutcome::Cancelled))
     ));
+
+    // An agent picked in the composer hands the turn to another ACP agent when its quota
+    // runs out, keeping that agent's own model.
+    let (events, replay) = run_case("direct", false, false, false).await;
+    let routes: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Routed(n) => Some((**n).clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(routes.len(), 1, "{events:?}");
+    assert_eq!(routes[0].provider, LlmProviderKind::ClaudeCodeAcp);
+    assert!(routes[0].direct);
+    assert!(
+        routes[0]
+            .failover_from
+            .as_deref()
+            .is_some_and(|f| f.contains("usage limit"))
+    );
+    assert!(replay.contains("Parser updated.") && replay.contains("Fix the parser"));
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+    ));
+    let (events, _) = run_case("chain", false, false, false).await;
+    let final_route = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Routed(note) => Some(note),
+            _ => None,
+        })
+        .next_back()
+        .unwrap();
+    assert_eq!(final_route.provider, LlmProviderKind::CursorAcp);
+    assert_eq!(
+        final_route.interrupted_providers,
+        [LlmProviderKind::CodexAcp, LlmProviderKind::ClaudeCodeAcp]
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+    ));
+    let (events, _) = run_case("initialcancel", false, false, true).await;
+    crate::router::quota::set_snapshot_for_tests(LlmProviderKind::CodexAcp, Default::default());
+    assert!(
+        events.iter().any(
+            |e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Continuing automatically"))
+        )
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Finished(AgentOutcome::Cancelled))
+    ));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Routed(_))));
+    // A setup failure on the replacement must not prevent waiting for the first agent.
+    // Initial Router selection must also wait when no provider has quota yet.
+    for mode in ["authwait", "initialwait"] {
+        let (events, _) = run_case(mode, false, false, false).await;
+        crate::router::quota::set_snapshot_for_tests(LlmProviderKind::CodexAcp, Default::default());
+        assert!(
+            events.iter().any(
+                |e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Continuing automatically"))
+            ),
+            "{mode}: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+            ),
+            "{mode}: {events:?}"
+        );
+        let routes: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Routed(note) => Some(note.provider),
+                _ => None,
+            })
+            .collect();
+        if mode == "authwait" {
+            assert_eq!(
+                routes,
+                [LlmProviderKind::ClaudeCodeAcp, LlmProviderKind::CodexAcp]
+            );
+        } else {
+            assert_eq!(routes, [LlmProviderKind::CodexAcp]);
+        }
+    }
+    // With every agent out of quota the turn waits for the first reset, then continues on
+    // the picked agent.
+    let (events, _) = run_case("directwait", false, false, false).await;
+    crate::router::quota::set_snapshot_for_tests(LlmProviderKind::CodexAcp, Default::default());
+    assert!(
+        events.iter().any(
+            |e| matches!(e, AgentEvent::TextDelta(t) if t.contains("Every agent is out of quota"))
+        ),
+        "{events:?}"
+    );
+    let routes: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Routed(n) => Some(n.provider),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        routes,
+        [LlmProviderKind::ClaudeCodeAcp, LlmProviderKind::CodexAcp]
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(t) if t == "Permission yes"))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+    ));
+}
+
+#[test]
+fn composer_pick_falls_back_to_agents_the_chat_used_first() {
+    let mut reply = user("");
+    reply.role = MsgRole::Assistant;
+    reply.route = Some(Box::new(RouteNote::direct(
+        LlmProviderKind::CopilotAcp,
+        "m",
+        "",
+    )));
+    let order = acp_fallback_order(LlmProviderKind::CodexAcp, &[user("hi"), reply]);
+    assert_eq!(
+        order[..2],
+        [LlmProviderKind::CodexAcp, LlmProviderKind::CopilotAcp]
+    );
+    assert!(order.iter().all(|k| k.is_acp()));
+    assert_eq!(
+        order.len(),
+        LlmProviderKind::ALL.iter().filter(|k| k.is_acp()).count()
+    );
 }
