@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oxi: the native coding agent for any model</title>
-  <meta name="description" content="oxi is a free, open-source desktop coding agent built in Rust. Run open GGUF models on your own machine or a GPU box, or bring your Claude Code, Codex or Cursor subscription. Agent, diff review, Git and plan mode in one native window, around 70 MB of RAM." />
+  <title>oxi: your Claude Code, Codex and Cursor subscriptions in one conversation</title>
+  <meta name="description" content="oxi is a free, open-source desktop coding agent built in Rust. Use your Claude Code, Codex, Cursor and Copilot subscriptions in one conversation, switching agents mid-chat with the context carried over, or run open GGUF models on your own machine. Agent, diff review, Git and plan mode in one native window, around 70 MB of RAM." />
 
   <!-- Open Graph / social -->
   <meta property="og:title" content="oxi: the native coding agent for any model" />
-  <meta property="og:description" content="Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for. One native Rust binary, free and open source." />
+  <meta property="og:description" content="Use your Claude Code, Codex and Cursor subscriptions in one conversation: switch agents mid-chat and the context comes along. Or run open models on your own machine. One native Rust binary, free and open source." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://maziluiosif.github.io/oxi/" />
   <meta property="og:image" content="https://maziluiosif.github.io/oxi/media/social-preview.png" />
@@ -21,7 +21,7 @@
     "name": "oxi",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
-    "description": "A native, open-source desktop coding agent. Run open GGUF models locally or bring Claude Code, Codex or Cursor.",
+    "description": "A native, open-source desktop coding agent. Use Claude Code, Codex, Cursor and Copilot in one conversation, or run open GGUF models locally.",
     "url": "https://maziluiosif.github.io/oxi/",
     "downloadUrl": "https://github.com/maziluiosif/oxi/releases/latest",
     "license": "https://opensource.org/licenses/MIT",
@@ -169,6 +169,7 @@
     .step ul { color: var(--muted); margin: 0; padding-left: 18px; }
     .step li { margin: 4px 0; }
     .frame { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(0,0,0,0.6); }
+    .frame video { display: block; width: 100%; height: auto; }
     @media (max-width: 860px) {
       .step, .step:nth-child(even) { grid-template-columns: 1fr; gap: 22px; }
       .step:nth-child(even) .step-text { order: 0; }
@@ -312,11 +313,11 @@
   <div class="hero">
     <div class="wrap">
       <span class="badge"><span class="dot"></span> Native Rust app · <b>free and open source</b></span>
-      <h1>The coding agent<br>for <span class="grad">any model</span></h1>
+      <h1>Your AI subscriptions,<br><span class="grad">one conversation</span></h1>
       <p class="subtitle">
-        Run open models on your own machine, or bring the Claude Code, Codex or Cursor
-        subscription you already pay for. Agent, diff review, Git and a terminal in one
-        fast native window.
+        Start a chat with Claude Code, hand it to Codex, Cursor or Copilot halfway through,
+        and the context comes along. Or run open models on your own machine. Agent, diff
+        review, Git and a terminal in one fast native window.
       </p>
 
       <div class="quick-install" aria-label="Install command">
@@ -363,7 +364,7 @@
             <p>Local models are a guided setup, not a wall of settings.</p>
             <ul>
               <li><b>Free and private:</b> install the <code>llama.cpp</code> runtime with one click, download a GGUF from HuggingFace, click <b>Run</b>.</li>
-              <li><b>Already subscribed?</b> Make Claude Code, Codex or Cursor active. They use your existing login.</li>
+              <li><b>Already subscribed?</b> Pick Claude Code, Codex, Cursor or Copilot. They use your existing login.</li>
               <li><b>Have a key?</b> OpenAI, OpenRouter, Azure, Anthropic-compatible and more.</li>
             </ul>
           </div>
@@ -372,6 +373,20 @@
         <div class="step">
           <div class="step-text">
             <span class="step-num">2</span>
+            <h3>Switch agents mid-chat</h3>
+            <p>One conversation is not tied to one subscription.</p>
+            <ul>
+              <li>Let Claude Code fix it, then ask Codex to double-check, in the same chat.</li>
+              <li>The new agent gets the conversation so far, so you never repeat yourself.</li>
+              <li>Hit a rate limit? Switch to the subscription that still has quota and keep going.</li>
+            </ul>
+          </div>
+          <div class="frame"><video autoplay muted loop playsinline preload="metadata" poster="media/switch-poster.jpg"
+               aria-label="Claude Code fixes a failing test, then the same chat is switched to Codex, which checks the fix knowing what Claude did"><source src="media/switch.mp4" type="video/mp4" /></video></div>
+        </div>
+        <div class="step">
+          <div class="step-text">
+            <span class="step-num">3</span>
             <h3>Ask, and watch it work</h3>
             <p>The agent reads, edits and runs commands in your workspace, and every step stays visible.</p>
             <ul>
@@ -384,7 +399,7 @@
         </div>
         <div class="step">
           <div class="step-text">
-            <span class="step-num">3</span>
+            <span class="step-num">4</span>
             <h3>Review, then commit</h3>
             <p>Every change opens in a real diff editor, next to the Git panel.</p>
             <ul>
@@ -413,8 +428,8 @@
           <p>Find a GGUF on HuggingFace and click Run. oxi installs <code>llama-server</code> and starts the model, here or on a GPU box over SSH. LM Studio and Ollama work too.</p>
         </div>
         <div class="card">
-          <h3>Use the subscription you have</h3>
-          <p>Drive Claude Code, Codex or Cursor inside oxi over ACP, or sign in with ChatGPT. The Router picks a provider per task and switches when a quota runs out.</p>
+          <h3>Every subscription, one chat</h3>
+          <p>Drive Claude Code, Codex, Cursor or Copilot inside oxi over ACP, and switch between them mid-conversation. The Router can pick a provider per task and switch when a quota runs out.</p>
         </div>
         <div class="card">
           <h3>Review like in your editor</h3>

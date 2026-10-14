@@ -37,6 +37,7 @@ impl OxiApp {
             let actions = ErrorActions {
                 retry: false,
                 settings: true,
+                switch_to: None,
             };
             match dismissible_error(ui, "Connection problem", &e, actions) {
                 Some(ErrorAction::Dismiss) => self.conn.connect_error = None,
@@ -46,16 +47,19 @@ impl OxiApp {
         }
         if let Some(e) = active_stream_error {
             let key = self.active_session_key();
+            let idle = !self.active_waiting_response()
+                && !self.compaction_active_for(key)
+                && self.last_user_prompt_index().is_some();
             let actions = ErrorActions {
-                retry: !self.active_waiting_response()
-                    && !self.compaction_active_for(key)
-                    && self.last_user_prompt_index().is_some(),
+                retry: idle,
                 settings: error_suggests_settings(&e),
+                switch_to: idle.then(|| self.other_agent_in_chat(key)).flatten(),
             };
             match dismissible_error(ui, "Something went wrong", &e, actions) {
                 Some(ErrorAction::Dismiss) => self.run_state_mut(key).stream_error = None,
                 Some(ErrorAction::Retry) => self.retry_last_prompt(),
                 Some(ErrorAction::OpenSettings) => self.open_provider_settings_for_active(),
+                Some(ErrorAction::SwitchAgent(kind)) => self.continue_with_agent(kind, &e),
                 None => {}
             }
         }
@@ -517,11 +521,18 @@ impl OxiApp {
                                     .collect();
                                 ui.scope_builder(egui::UiBuilder::new().id(unit_id), |ui| {
                                     if messages[start].role == MsgRole::Assistant {
+                                        let previous_agent = messages[..start]
+                                            .iter()
+                                            .rev()
+                                            .filter(|m| m.role == MsgRole::Assistant)
+                                            .find_map(|m| m.route.as_deref())
+                                            .map(|r| r.provider);
                                         render_assistant_message_run(
                                             ui,
                                             start,
                                             &self.conv.workspaces[wi].sessions[si].messages
                                                 [start..end],
+                                            previous_agent,
                                         );
                                     } else {
                                         render_message(
@@ -764,6 +775,8 @@ fn approval_question(tool: &str) -> String {
 struct ErrorActions {
     retry: bool,
     settings: bool,
+    /// Another agent this chat used, offered to carry on from where the failed one stopped.
+    switch_to: Option<crate::settings::LlmProviderKind>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -771,6 +784,7 @@ enum ErrorAction {
     Dismiss,
     Retry,
     OpenSettings,
+    SwitchAgent(crate::settings::LlmProviderKind),
 }
 
 /// True when the error text points at provider configuration (credentials, endpoint, model id)
@@ -857,6 +871,23 @@ fn dismissible_error(
                                 .clicked()
                             {
                                 action = Some(ErrorAction::Retry);
+                            }
+                            if let Some(kind) = actions.switch_to
+                                && crate::ui::chrome::mini_button_icon_enabled(
+                                    ui,
+                                    ICON_PROVIDERS,
+                                    &format!(
+                                        "Continue with {}",
+                                        crate::app::composer::composer_provider_label(kind)
+                                    ),
+                                    true,
+                                )
+                                .on_hover_text(
+                                    "Keep what was done so far and let this agent finish the request",
+                                )
+                                .clicked()
+                            {
+                                action = Some(ErrorAction::SwitchAgent(kind));
                             }
                             if actions.settings
                                 && crate::ui::chrome::mini_button_icon_enabled(

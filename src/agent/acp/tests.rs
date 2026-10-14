@@ -228,6 +228,7 @@ fn acp_end_to_end_applies_model() {
         text: "Reply with ONLY one word naming your model family: Opus, Sonnet, or Haiku."
             .to_string(),
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -881,6 +882,7 @@ fn acp_live_features() {
             .unwrap_or_default(),
         text,
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -976,6 +978,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         mcp_servers: Vec::new(),
         text: "build it".into(),
         history: String::new(),
+        missed: String::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -1022,4 +1025,89 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
     assert!(!pending_autonomous().contains(&session_key));
     mgr.close(&session_key);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn antigravity_authenticates_only_when_required_and_retries_session() {
+    const AGENT: &str = r#"
+import json, sys
+from pathlib import Path
+mode = sys.argv[1]
+authed = mode == 'existing'
+def send(id, **body):
+    print(json.dumps(dict(jsonrpc='2.0', id=id, **body)), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    with Path('calls').open('a') as f:
+        f.write(method + '\n')
+    if method == 'initialize':
+        name = 'other-agent' if mode == 'other' else 'antigravity-acp'
+        send(m['id'], result=dict(protocolVersion=1, agentInfo=dict(name=name), agentCapabilities={}))
+    elif method == 'session/new':
+        if not authed:
+            send(m['id'], error=dict(code=-32000, message='Authentication required'))
+        else:
+            send(m['id'], result=dict(sessionId='authenticated-session', models=dict(availableModels=[dict(modelId='gemini-test', name='Gemini test')])) )
+    elif method == 'authenticate':
+        assert m['params']['methodId'] == 'gemini-api-key'
+        if mode == 'failure':
+            send(m['id'], error=dict(code=-32000, message='invalid API key'))
+        else:
+            authed = True
+            send(m['id'], result={})
+    else:
+        send(m['id'], result={})
+"#;
+    for mode in ["new", "existing", "other", "failure"] {
+        let dir = std::env::temp_dir().join(format!("oxi-acp-auth-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("agent.py");
+        std::fs::write(&script, AGENT).unwrap();
+        let command = format!(
+            "{} {} {mode}",
+            install::shell_quote(&crate::agent::test_python_executable()),
+            install::shell_quote(&script)
+        );
+        let env = vec![("GEMINI_API_KEY".into(), "test-key".into())];
+        let spec = LaunchSpec {
+            session_key: &format!("agy-auth-{}", rand::random::<u64>()),
+            command_line: &command,
+            cwd: &dir,
+            env: &env,
+            model: "default",
+            effort: "",
+            mcp_servers: &[],
+        };
+        let result = tokio::time::timeout(Duration::from_secs(10), spawn_conn(&spec, vec![]))
+            .await
+            .unwrap();
+        match mode {
+            "new" | "existing" => {
+                let conn = result.unwrap();
+                assert_eq!(conn.handles.session_id, "authenticated-session");
+                assert_eq!(conn.handles.available_models, ["gemini-test"]);
+                drop(conn);
+            }
+            _ => {
+                let error = result.err().expect("session should fail");
+                assert!(error.contains(if mode == "other" {
+                    "Authentication required"
+                } else {
+                    "invalid API key"
+                }));
+            }
+        }
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        assert_eq!(
+            calls.lines().filter(|m| *m == "authenticate").count(),
+            usize::from(matches!(mode, "new" | "failure"))
+        );
+        assert_eq!(
+            calls.lines().filter(|m| *m == "session/new").count(),
+            if mode == "new" { 2 } else { 1 }
+        );
+        // Windows keeps the dir locked while the agent process is still exiting.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

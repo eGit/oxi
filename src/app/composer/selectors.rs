@@ -69,6 +69,26 @@ fn agent_option_width(option: &AcpConfigOption, model_w: f32) -> f32 {
     }
 }
 
+/// Show `value` as the current choice of the option `is_option` matches, when the agent offers
+/// it — the launch sets it the same way (`set_matching_config_option`).
+fn with_launch_choice(
+    options: &mut std::sync::Arc<Vec<AcpConfigOption>>,
+    is_option: fn(&AcpConfigOption) -> bool,
+    value: &str,
+) {
+    let value = value.trim();
+    let Some(i) = options.iter().position(|o| {
+        is_option(o)
+            && matches!(&o.kind, AcpConfigKind::Select { current, values }
+                if current != value && values.iter().any(|v| v.value == value))
+    }) else {
+        return;
+    };
+    if let AcpConfigKind::Select { current, .. } = &mut std::sync::Arc::make_mut(options)[i].kind {
+        *current = value.to_owned();
+    }
+}
+
 impl OxiApp {
     /// Config options the active chat's ACP agent advertised, once it has been started.
     fn active_agent_options(&self) -> Option<std::sync::Arc<Vec<AcpConfigOption>>> {
@@ -77,7 +97,21 @@ impl OxiApp {
             return None;
         }
         let session_key = self.acp_session_key(self.active_session_key());
-        config_options::options(&session_key, &cfg.effective_acp_command())
+        let command_line = cfg.effective_acp_command();
+        config_options::options(&session_key, &command_line)
+            .or_else(|| {
+                // Until the agent is up, what it offered last time, with the model and effort
+                // it will be launched with.
+                let mut options = config_options::before_launch(&session_key, &command_line)?;
+                with_launch_choice(&mut options, AcpConfigOption::is_model, &cfg.model_id);
+                let effort = if cfg.effort.trim().is_empty() {
+                    "default"
+                } else {
+                    cfg.effort.trim()
+                };
+                with_launch_choice(&mut options, AcpConfigOption::is_thought_level, effort);
+                Some(options)
+            })
             .filter(|options| !options.is_empty())
     }
 

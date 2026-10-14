@@ -146,12 +146,15 @@ pub(super) fn adapter_for(command_line: &str) -> Option<&'static Adapter> {
 
 /// The command line to actually spawn for `command_line`: the managed install of a known adapter
 /// (installing it first when missing), or `command_line` unchanged for anything else.
-pub(super) async fn resolve_command(command_line: &str) -> String {
+pub(super) async fn resolve_command(command_line: &str) -> Result<String, String> {
+    if super::antigravity::is_default(command_line) {
+        return super::antigravity::resolve().await;
+    }
     let Some(adapter) = adapter_for(command_line) else {
-        return command_line.to_string();
+        return Ok(command_line.to_string());
     };
     if let Some(bin) = adapter.installed_bin() {
-        return adapter.launch_line(shell_quote(&bin));
+        return Ok(adapter.launch_line(shell_quote(&bin)));
     }
     let lock = adapter.lock();
     let _guard = lock.lock().await;
@@ -160,10 +163,50 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
     {
         log::warn!("could not install ACP adapter {}: {e}", adapter.package);
     }
-    match adapter.installed_bin() {
+    Ok(match adapter.installed_bin() {
         Some(bin) => adapter.launch_line(shell_quote(&bin)),
         None => adapter.launch_line(format!("npx -y {}@latest", adapter.package)),
+    })
+}
+
+/// Whether `command_line` starts without installing anything first: a managed adapter that is
+/// already installed (it was used before), or another command whose program exists.
+pub(super) async fn is_ready(command_line: &str) -> bool {
+    if super::antigravity::is_default(command_line) {
+        return super::antigravity::is_ready();
     }
+    if let Some(adapter) = adapter_for(command_line) {
+        return adapter.installed_bin().is_some();
+    }
+    let Some(program) = first_word(command_line) else {
+        return false;
+    };
+    if program.contains('/') || program.contains('\\') {
+        return Path::new(&program).is_file();
+    }
+    let path = match shell_path().await {
+        Some(path) => path,
+        None => std::env::var("PATH").unwrap_or_default(),
+    };
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    std::env::split_paths(&path).any(|dir| {
+        exts.iter()
+            .any(|ext| dir.join(format!("{program}{ext}")).is_file())
+    })
+}
+
+/// The program of a command line, unquoting a leading `"…"`.
+fn first_word(command_line: &str) -> Option<String> {
+    let s = command_line.trim_start();
+    let word = match s.strip_prefix('"') {
+        Some(rest) => rest.split('"').next()?,
+        None => s.split_whitespace().next()?,
+    };
+    (!word.is_empty()).then(|| word.to_string())
 }
 
 /// Update every adapter that has a managed install and hasn't been checked recently, then prune
@@ -378,7 +421,7 @@ async fn login_shell_path() -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
-fn shell_quote(path: &Path) -> String {
+pub(super) fn shell_quote(path: &Path) -> String {
     let s = path.to_string_lossy();
     if cfg!(windows) {
         format!("\"{s}\"")
@@ -423,6 +466,24 @@ mod tests {
         ] {
             assert_eq!(adapter_for(cmd).map(|a| a.bin), Some("copilot"), "{cmd}");
         }
+    }
+
+    #[test]
+    fn first_word_unquotes_the_program() {
+        assert_eq!(
+            first_word("\"/a b/python\" -u x").as_deref(),
+            Some("/a b/python")
+        );
+        assert_eq!(first_word("  agent acp").as_deref(), Some("agent"));
+        assert_eq!(first_word("   "), None);
+    }
+
+    #[tokio::test]
+    async fn custom_commands_are_ready_only_when_the_program_exists() {
+        let exe = std::env::current_exe().unwrap();
+        assert!(is_ready(&format!("\"{}\" --acp", exe.display())).await);
+        assert!(!is_ready("/definitely/not/here --acp").await);
+        assert!(!is_ready("oxi-no-such-program-4e1f acp").await);
     }
 
     #[test]

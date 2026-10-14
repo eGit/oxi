@@ -71,6 +71,7 @@ impl AppSettings {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp => true,
             LlmProviderKind::AzureOpenAi => true,
             // Picks among the providers above; local runtimes always count as configured.

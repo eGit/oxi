@@ -382,6 +382,8 @@ pub fn decide(input: &DecideInput<'_>) -> Result<RouteNote, String> {
         reason,
         alternatives,
         failover_from: None,
+        interrupted_providers: Vec::new(),
+        direct: false,
     })
 }
 

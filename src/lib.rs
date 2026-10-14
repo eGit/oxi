@@ -98,6 +98,7 @@ pub fn run() -> eframe::Result<()> {
             });
             // Apply the persisted theme (installs fonts + builds egui visuals).
             theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
+            theme::load_system_cjk_fonts(&cc.egui_ctx);
             // Apply the persisted text/UI density (zoom).
             cc.egui_ctx
                 .set_zoom_factor(app.conv.settings.ui_density.zoom_factor());

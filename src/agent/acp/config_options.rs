@@ -5,6 +5,14 @@
 //!
 //! Lists are keyed by oxi session and launch command, so a chat that moved to another agent
 //! never shows the previous agent's options.
+//!
+//! Launching an agent takes seconds, so the options each launch command advertised by default
+//! are also kept on disk; until a chat's agent is up, the composer shows those instead of
+//! nothing. Values picked in that window wait in [`set_local`] and are applied at launch.
+//!
+//! ```text
+//! <data_dir>/oxi/acp/config-options.json   { "<launch command>": <configOptions> }
+//! ```
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -120,12 +128,134 @@ pub(crate) fn publish(session_key: &str, command_line: &str, options: &Value) {
     registry
         .get_or_insert_with(HashMap::new)
         .insert((session_key.to_owned(), command_line.to_owned()), parsed);
+    drop(registry);
+    // The agent's own list replaces whatever was picked before it ran.
+    let mut picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(map) = picks.as_mut() {
+        map.remove(&(session_key.to_owned(), command_line.to_owned()));
+    }
 }
 
 pub(super) fn forget(session_key: &str) {
     let mut registry = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(map) = registry.as_mut() {
         map.retain(|(key, _), _| key != session_key);
+    }
+    drop(registry);
+    let mut picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(map) = picks.as_mut() {
+        map.retain(|(key, _), _| key != session_key);
+    }
+}
+
+/// `(option id, value)` pairs in pick order.
+type Picks = Vec<(String, Value)>;
+
+/// Values picked for a chat whose agent was not running yet.
+static PICKS: Mutex<Option<HashMap<Key, Picks>>> = Mutex::new(None);
+
+/// The options each launch command advertised on its last `session/new`, before oxi changed
+/// anything; loaded from disk on first use.
+static DEFAULTS: Mutex<Option<HashMap<String, Arc<Vec<AcpConfigOption>>>>> = Mutex::new(None);
+
+fn defaults_path() -> std::path::PathBuf {
+    crate::app_dirs::data_dir()
+        .join("acp")
+        .join("config-options.json")
+}
+
+fn read_defaults() -> HashMap<String, Value> {
+    std::fs::read_to_string(defaults_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn with_defaults<R>(f: impl FnOnce(&mut HashMap<String, Arc<Vec<AcpConfigOption>>>) -> R) -> R {
+    let mut defaults = DEFAULTS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = defaults.get_or_insert_with(|| {
+        read_defaults()
+            .into_iter()
+            .map(|(command_line, options)| (command_line, Arc::new(parse(&options))))
+            .collect()
+    });
+    f(map)
+}
+
+/// Keep the options an agent advertised for a new session as what the composer shows the next
+/// time this command is launched.
+pub(super) fn remember_defaults(command_line: &str, options: &Value) {
+    let parsed = parse(options);
+    if parsed.is_empty() {
+        return;
+    }
+    let changed = with_defaults(|map| {
+        if map.get(command_line).is_some_and(|known| **known == parsed) {
+            return false;
+        }
+        map.insert(command_line.to_owned(), Arc::new(parsed));
+        true
+    });
+    if !changed {
+        return;
+    }
+    let mut stored = read_defaults();
+    stored.insert(command_line.to_owned(), options.clone());
+    let written = serde_json::to_vec_pretty(&stored)
+        .map_err(|e| e.to_string())
+        .and_then(|json| crate::fsutil::write_atomic(&defaults_path(), &json));
+    if let Err(e) = written {
+        log::warn!("could not save ACP config options: {e}");
+    }
+}
+
+/// What to show for a chat whose agent is not running: the command's remembered options with
+/// the values picked since applied. `None` when this command never ran.
+pub fn before_launch(session_key: &str, command_line: &str) -> Option<Arc<Vec<AcpConfigOption>>> {
+    let mut options = with_defaults(|map| map.get(command_line).cloned())?;
+    let picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(picks) = picks
+        .as_ref()
+        .and_then(|m| m.get(&(session_key.to_owned(), command_line.to_owned())))
+    {
+        let list = Arc::make_mut(&mut options);
+        for (id, value) in picks {
+            set_value(list, id, value);
+        }
+    }
+    Some(options)
+}
+
+/// The options picked before the agent launched, as they should end up on it.
+pub(super) fn picked_before_launch(session_key: &str, command_line: &str) -> Vec<AcpConfigOption> {
+    let ids: Vec<String> = {
+        let picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(picks) = picks
+            .as_ref()
+            .and_then(|m| m.get(&(session_key.to_owned(), command_line.to_owned())))
+        else {
+            return Vec::new();
+        };
+        picks.iter().map(|(id, _)| id.clone()).collect()
+    };
+    before_launch(session_key, command_line)
+        .map(|options| {
+            options
+                .iter()
+                .filter(|o| ids.contains(&o.id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn set_value(list: &mut [AcpConfigOption], id: &str, value: &Value) {
+    if let Some(option) = list.iter_mut().find(|o| o.id == id) {
+        match (&mut option.kind, value) {
+            (AcpConfigKind::Select { current, .. }, Value::String(v)) => *current = v.clone(),
+            (AcpConfigKind::Boolean(on), Value::Bool(v)) => *on = *v,
+            _ => {}
+        }
     }
 }
 
@@ -138,23 +268,23 @@ pub fn options(session_key: &str, command_line: &str) -> Option<Arc<Vec<AcpConfi
         .cloned()
 }
 
-/// Show a value the user just picked right away, before the agent confirms it.
+/// Show a value the user just picked right away, before the agent confirms it. Without a
+/// running agent the pick is kept for its launch.
 pub fn set_local(session_key: &str, command_line: &str, id: &str, value: &Value) {
+    let key = (session_key.to_owned(), command_line.to_owned());
     let mut registry = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(list) = registry
-        .as_mut()
-        .and_then(|m| m.get_mut(&(session_key.to_owned(), command_line.to_owned())))
-    else {
+    if let Some(list) = registry.as_mut().and_then(|m| m.get_mut(&key)) {
+        set_value(Arc::<Vec<_>>::make_mut(list), id, value);
         return;
-    };
-    let list = Arc::make_mut(list);
-    if let Some(option) = list.iter_mut().find(|o| o.id == id) {
-        match (&mut option.kind, value) {
-            (AcpConfigKind::Select { current, .. }, Value::String(v)) => *current = v.clone(),
-            (AcpConfigKind::Boolean(on), Value::Bool(v)) => *on = *v,
-            _ => {}
-        }
     }
+    drop(registry);
+    let mut picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
+    let list = picks
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_default();
+    list.retain(|(picked, _)| picked != id);
+    list.push((id.to_owned(), value.clone()));
 }
 
 #[cfg(test)]
@@ -187,6 +317,35 @@ mod tests {
         assert_eq!(values[0].group.as_deref(), Some("Anthropic"));
         assert_eq!(values[0].description, "Most capable");
         assert_eq!(options[2].kind, AcpConfigKind::Boolean(true));
+    }
+
+    #[test]
+    fn remembered_options_show_before_launch_with_picks_kept_for_it() {
+        let command = "agent --before-launch";
+        assert!(before_launch("chat", command).is_none());
+        remember_defaults(
+            command,
+            &json!([
+                {"id": "mode", "type": "select", "currentValue": "default",
+                 "options": [{"value": "default"}, {"value": "acceptEdits"}]},
+                {"id": "fast", "type": "boolean", "currentValue": false}
+            ]),
+        );
+        set_local("chat", command, "fast", &json!(true));
+        let shown = before_launch("chat", command).unwrap();
+        assert_eq!(shown[1].kind, AcpConfigKind::Boolean(true));
+        // Another chat on the same command still sees the agent's defaults.
+        assert_eq!(
+            before_launch("other", command).unwrap()[1].kind,
+            AcpConfigKind::Boolean(false)
+        );
+        let picked = picked_before_launch("chat", command);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].id, "fast");
+        // Once the agent publishes its own list, the picks are done with.
+        publish("chat", command, &json!([]));
+        assert!(picked_before_launch("chat", command).is_empty());
+        forget("chat");
     }
 
     #[test]

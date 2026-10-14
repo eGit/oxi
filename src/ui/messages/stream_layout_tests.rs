@@ -34,7 +34,7 @@ fn text_ys(ctx: &egui::Context, frame: &mut u32, msg: &ChatMessage, needle: &str
         };
         *frame += 1;
         let out = ctx.run_ui(raw, |ui| {
-            render_assistant_message_run(ui, 0, std::slice::from_ref(msg));
+            render_assistant_message_run(ui, 0, std::slice::from_ref(msg), None);
         });
         ys = out
             .shapes

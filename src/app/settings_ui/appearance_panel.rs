@@ -66,7 +66,9 @@ impl OxiApp {
             settings_card_header(
                 ui,
                 "Font",
-                Some("Interface and code fonts. System fonts are detected automatically."),
+                Some(
+                    "Inter and JetBrains Mono are included. You can also choose an installed font.",
+                ),
             );
             settings_caption(ui, "Interface");
             ui.add_space(4.0);

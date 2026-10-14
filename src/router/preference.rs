@@ -66,6 +66,9 @@ pub fn parse(text: &str) -> Option<Preference> {
             }
             rest = rest.strip_prefix("providerul ").unwrap_or(rest);
             let aliases = [
+                ("google antigravity", LlmProviderKind::AntigravityAcp),
+                ("antigravity", LlmProviderKind::AntigravityAcp),
+                ("agy", LlmProviderKind::AntigravityAcp),
                 ("router", LlmProviderKind::Router),
                 ("claude code", LlmProviderKind::ClaudeCodeAcp),
                 ("codex acp", LlmProviderKind::CodexAcp),
@@ -250,6 +253,27 @@ pub fn for_chat(chat: &[ChatMessage]) -> Option<Preference> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn antigravity_directives_accept_both_names_without_matching_mentions() {
+        for text in [
+            "Folosește agy pentru asta",
+            "Use Antigravity",
+            "Switch to Google Antigravity",
+        ] {
+            assert_eq!(
+                parse(text).unwrap().provider,
+                LlmProviderKind::AntigravityAcp
+            );
+        }
+        for text in [
+            "Use agywhatever",
+            "Compare Antigravity with Codex",
+            "Use agy or codex",
+        ] {
+            assert!(parse(text).is_none());
+        }
+    }
+
     #[test]
     fn directives_are_distinct_from_mentions() {
         assert_eq!(

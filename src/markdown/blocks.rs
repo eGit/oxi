@@ -148,9 +148,18 @@ pub(super) fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>
     ui.add_space(4.0);
 }
 
-pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
+pub(super) fn render_blockquote(
+    ui: &mut Ui,
+    wrap_w: f32,
+    it: &mut ParserPeek<'_>,
+    src: &str,
+    quote_idx: usize,
+) {
+    // Room kept free on the right of the first line for the copy chip.
+    const COPY_CHIP_W: f32 = 64.0;
+    let copy_id = ui.id().with("md_quote").with(quote_idx);
     allocate_full_width_block(ui, wrap_w, |ui| {
-        Frame::new()
+        let frame = Frame::new()
             .fill(c_md_code_block_bg())
             .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
@@ -162,12 +171,10 @@ pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let (bar_rect, _) =
                         ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(bar_rect, CornerRadius::same(2), c_md_quote_accent());
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
-                        let inner_w = (full_w - 24.0).max(32.0);
+                        let inner_w = (full_w - 24.0 - COPY_CHIP_W).max(32.0);
                         ui.set_width(inner_w);
                         while let Some(ev) = it.next() {
                             match ev {
@@ -193,8 +200,31 @@ pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_
                         }
                         ui.add_space(4.0);
                     });
-                });
+                    bar_rect.left()
+                })
+                .inner
             });
+        let rect = frame.response.rect;
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(frame.inner, rect.top() + 8.0),
+            egui::pos2(frame.inner + 3.0, rect.bottom() - 8.0),
+        );
+        ui.painter()
+            .rect_filled(bar, CornerRadius::same(2), c_md_quote_accent());
+        let chip_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - COPY_CHIP_W - 6.0, rect.top() + 6.0),
+            vec2(COPY_CHIP_W, 18.0),
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(chip_rect)
+                .layout(Layout::right_to_left(Align::Center)),
+            |ui| {
+                crate::ui::chrome::copy_chip_lazy(ui, copy_id, || {
+                    super::blockquote_source(src, quote_idx)
+                });
+            },
+        );
     });
     ui.add_space(7.0);
 }

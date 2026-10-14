@@ -10,6 +10,30 @@ fn default_has_all_provider_kinds() {
     assert_eq!(s.active_config().provider, s.active_provider);
 }
 
+#[test]
+fn antigravity_settings_preserve_command_and_keep_api_key_in_environment_only() {
+    let kind = LlmProviderKind::AntigravityAcp;
+    let mut settings = AppSettings {
+        active_provider: kind,
+        ..Default::default()
+    };
+    let config = settings.provider_mut(kind);
+    config.acp_command = "\"/custom path/agy_acp_server.par\" --debug".into();
+    config.api_key = "gemini-secret".into();
+    assert_eq!(
+        config.acp_env(),
+        [("GEMINI_API_KEY".into(), "gemini-secret".into())]
+    );
+    let command = config.effective_acp_command();
+    let json = serde_json::to_string(&settings).unwrap();
+    assert!(!json.contains("gemini-secret"));
+    let mut restored: AppSettings = serde_json::from_str(&json).unwrap();
+    restored.normalize();
+    assert_eq!(restored.active_provider, kind);
+    assert_eq!(restored.active_config().effective_acp_command(), command);
+    assert_eq!(restored.active_config().provider, kind);
+}
+
 /// Provider API keys must never be written to `settings.json` — they live in the OS
 /// keychain (see `migrate_secrets_to_keychain`). This doesn't touch the real keychain,
 /// just the serde attribute on `ProviderConfig::api_key`.

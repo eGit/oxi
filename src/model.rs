@@ -37,8 +37,10 @@ impl SessionConfig {
     }
 }
 
-/// Which provider/model the Router picked for an assistant turn, and why. Persisted with the
-/// message so the explanation survives a reload and the next turn can stay on the same model.
+/// Which provider/model answered an assistant turn: the Router's pick and why, or (`direct`) the
+/// one chosen in the composer. Persisted with the message so the explanation survives a reload,
+/// the next turn can stay on the same model, and an agent resuming its own session knows which
+/// turns it missed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RouteNote {
     pub provider: LlmProviderKind,
@@ -60,6 +62,30 @@ pub struct RouteNote {
     /// Set when this route replaced a provider that failed mid-turn (rate limit / quota).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failover_from: Option<String>,
+    /// All providers interrupted during this reply, retained across multiple switches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interrupted_providers: Vec<LlmProviderKind>,
+    /// Chosen in the composer rather than by the Router.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub direct: bool,
+}
+
+impl RouteNote {
+    /// A turn sent to the provider picked in the composer.
+    pub fn direct(provider: LlmProviderKind, model: &str, effort: &str) -> Self {
+        Self {
+            provider,
+            model: model.to_string(),
+            effort: effort.to_string(),
+            tier: String::new(),
+            strategy: String::new(),
+            reason: String::new(),
+            alternatives: Vec::new(),
+            failover_from: None,
+            interrupted_providers: Vec::new(),
+            direct: true,
+        }
+    }
 }
 
 /// Provider-native conversation cache. The transcript remains the source of truth; this cache is

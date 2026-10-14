@@ -208,7 +208,7 @@ pub(super) fn ease(t: f32) -> f32 {
 }
 
 fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+    let mut fonts = crate::theme::font_definitions(&crate::theme::FontSelection::default());
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
     let mut load = |key: &str, weight: fontdb::Weight| {

@@ -44,9 +44,28 @@ pub fn editor_selection_fill() -> Color32 {
 /// Lay out `job` and run egui's label text selection styled like the workspace editor.
 /// egui recolors selected glyphs to `selection.stroke.color`; feeding it the job's dominant
 /// section color keeps the text visually unchanged, so only the wash marks the selection.
-pub fn selectable_text_job(ui: &mut Ui, mut job: LayoutJob) {
+pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
+    selectable_text_job_with_links(ui, job, &[]);
+}
+
+/// A link's range counts characters, matching egui's selection cursors (not UTF-8 bytes).
+pub struct TextLink {
+    pub range: std::ops::Range<usize>,
+    pub url: String,
+}
+
+/// Links share the paragraph's galley and selection, with click targets on their text only.
+pub fn selectable_text_job_with_links(ui: &mut Ui, mut job: LayoutJob, links: &[TextLink]) {
     if job.text.is_empty() {
         return;
+    }
+    // set_fonts takes effect on the next frame; callers may render during setup.
+    if ui.fonts(|fonts| {
+        fonts
+            .families()
+            .contains(&eframe::egui::FontFamily::Name("emoji".into()))
+    }) {
+        use_emoji_font(&mut job);
     }
     let section_backgrounds = take_section_backgrounds(&mut job);
     let dominant = job
@@ -136,6 +155,97 @@ pub fn selectable_text_job(ui: &mut Ui, mut job: LayoutJob) {
         selection_slot,
         crate::ui::text_selection::selection_shape(&rects, editor_selection_fill()),
     );
+    if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+        for link in links {
+            let range = eframe::egui::text::CCursorRange::two(
+                eframe::egui::text::CCursor::new(link.range.start),
+                eframe::egui::text::CCursor::new(link.range.end),
+            );
+            let rects = crate::ui::text_selection::galley_selection_rects(
+                &original,
+                rect.left_top(),
+                range,
+            );
+            if response.contains_pointer() && rects.iter().any(|rect| rect.contains(pointer)) {
+                ui.set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
+                if response.clicked_with_open_in_background() || response.clicked() {
+                    ui.open_url(eframe::egui::OpenUrl {
+                        url: link.url.clone(),
+                        new_tab: response.clicked_with_open_in_background(),
+                    });
+                }
+                if ui.style().url_in_tooltip {
+                    response.clone().on_hover_text(&link.url);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Keep emoji graphemes in the emoji face. Font fallback otherwise chooses only the
+/// base character: hearts and keycap digits resolve to Inter, losing their sequence.
+/// Only formats change; byte/character offsets and the copied text remain intact.
+fn use_emoji_font(job: &mut LayoutJob) {
+    use eframe::egui::epaint::text::ByteIndex;
+    use unicode_segmentation::UnicodeSegmentation as _;
+    let emoji_ranges: Vec<_> = job
+        .text
+        .grapheme_indices(true)
+        .filter_map(|(start, grapheme)| {
+            let first = grapheme.chars().next()?;
+            let emoji = matches!(first, '\u{1f000}'..='\u{1faff}')
+                || grapheme.contains('\u{fe0f}')
+                || grapheme.contains('\u{20e3}')
+                || (matches!(first, '\u{2600}'..='\u{27bf}') && grapheme.contains('\u{200d}'));
+            emoji.then_some(start..start + grapheme.len())
+        })
+        .collect();
+    if emoji_ranges.is_empty() {
+        return;
+    }
+    let mut sections = Vec::new();
+    for section in std::mem::take(&mut job.sections) {
+        let start = section.byte_range.start.0;
+        let end = section.byte_range.end.0;
+        let mut cursor = start;
+        for range in emoji_ranges
+            .iter()
+            .skip(emoji_ranges.partition_point(|range| range.end <= start))
+            .take_while(|range| range.start < end)
+        {
+            let a = range.start.max(start);
+            let b = range.end.min(end);
+            if a >= b {
+                continue;
+            }
+            if cursor < a {
+                let mut before = section.clone();
+                before.byte_range = ByteIndex(cursor)..ByteIndex(a);
+                if cursor != start {
+                    before.leading_space = 0.0;
+                }
+                sections.push(before);
+            }
+            let mut emoji = section.clone();
+            emoji.byte_range = ByteIndex(a)..ByteIndex(b);
+            if a != start {
+                emoji.leading_space = 0.0;
+            }
+            emoji.format.font_id.family = eframe::egui::FontFamily::Name("emoji".into());
+            sections.push(emoji);
+            cursor = b;
+        }
+        if cursor < end || start == end {
+            let mut after = section;
+            after.byte_range = ByteIndex(cursor)..ByteIndex(end);
+            if cursor != start {
+                after.leading_space = 0.0;
+            }
+            sections.push(after);
+        }
+    }
+    job.sections = sections;
 }
 
 /// Clears every section background in `job` and returns them by section index, for
@@ -432,6 +542,32 @@ mod selection_tests {
     }
 
     #[test]
+    fn emoji_sequences_shape_as_one_visible_glyph_and_keep_original_text() {
+        let ctx = egui::Context::default();
+        crate::theme::setup_style(&ctx);
+        let _ = ctx.run_ui(RawInput::default(), |_| {});
+        for sample in ["1️⃣", "#️⃣", "❤️‍🔥", "❤️‍🩹", "👩‍💻", "🇷🇴"]
+        {
+            let mut job = LayoutJob::simple(
+                sample.into(),
+                FontId::proportional(20.0),
+                Color32::WHITE,
+                400.0,
+            );
+            use_emoji_font(&mut job);
+            let galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+            assert_eq!(galley.text(), sample);
+            let visible = galley
+                .rows
+                .iter()
+                .flat_map(|r| &r.glyphs)
+                .filter(|g| g.advance_width > 0.0)
+                .count();
+            assert_eq!(visible, 1, "sequence not shaped: {sample}");
+        }
+    }
+
+    #[test]
     fn custom_chat_selection_preserves_copy_across_blocks() {
         let ctx = egui::Context::default();
         let output = frame(&ctx, vec![]);
@@ -552,6 +688,56 @@ mod selection_tests {
         {
             assert_eq!(vertex.color, original.color);
         }
+    }
+
+    #[test]
+    #[ignore = "UI review artifact; run with --ignored"]
+    fn render_multilingual_font_review() {
+        crate::theme::system_cjk_fonts();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(850.0, 600.0))
+            .wgpu()
+            .build_ui(|ui| {
+                crate::theme::setup_style(ui.ctx());
+                for sample in [
+                    "Română: Știință, învățământ, țară, pâine, înghețată.",
+                    "日本語: こんにちは 世界",
+                    "中文: 你好，世界",
+                    "한국어: 안녕하세요 세계",
+                    "العربية: مرحبًا بالعالم",
+                    "עברית: שלום עולם",
+                    "हिन्दी: नमस्ते दुनिया",
+                    "Emoji: ❤️‍🔥 ❤️‍🩹 👩‍💻 👨‍🚀 👨‍👩‍👧‍👦 🏳️‍🌈 🇷🇴 🇯🇵",
+                    "Keycaps: 1️⃣ 2️⃣ 3️⃣ #️⃣ *️⃣  plain: 123#*",
+                    "Monochrome tones: 👍 👍🏻 👍🏼 👍🏽 👍🏾 👍🏿",
+                ] {
+                    selectable_text_job(
+                        ui,
+                        LayoutJob::simple(
+                            sample.into(),
+                            FontId::proportional(22.0),
+                            Color32::WHITE,
+                            820.0,
+                        ),
+                    );
+                    ui.add_space(8.0);
+                }
+                selectable_text_job(
+                    ui,
+                    LayoutJob::simple(
+                        "Code: 日本語 中文 한국어 हिन्दी 👩‍💻 1️⃣ ❤️‍🔥".into(),
+                        FontId::monospace(20.0),
+                        Color32::WHITE,
+                        820.0,
+                    ),
+                );
+            });
+        harness.run_steps(3);
+        harness
+            .render()
+            .unwrap()
+            .save("/tmp/oxi-multilingual-font-review.png")
+            .unwrap();
     }
 
     #[test]

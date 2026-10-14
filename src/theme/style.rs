@@ -10,10 +10,50 @@ use super::palette::active_palette;
 
 const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../../assets/fonts/NotoSans-Regular.ttf");
 const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/UbuntuMono-R.ttf");
-const APPLE_SYMBOLS: &[u8] = include_bytes!("../../assets/fonts/AppleSymbols.ttf");
+const INTER_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+const JETBRAINS_MONO_REGULAR: &[u8] =
+    include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
+/// Script-specific fallbacks stay behind the selected UI/code faces.
+const SCRIPT_FONTS: &[(&str, &[u8])] = &[
+    (
+        "noto_arabic",
+        include_bytes!("../../assets/fonts/NotoSansArabic-Regular.ttf"),
+    ),
+    (
+        "noto_hebrew",
+        include_bytes!("../../assets/fonts/NotoSansHebrew-Regular.ttf"),
+    ),
+    (
+        "noto_devanagari",
+        include_bytes!("../../assets/fonts/NotoSansDevanagari-Regular.ttf"),
+    ),
+    (
+        "noto_armenian",
+        include_bytes!("../../assets/fonts/NotoSansArmenian-Regular.ttf"),
+    ),
+    (
+        "noto_georgian",
+        include_bytes!("../../assets/fonts/NotoSansGeorgian-Regular.ttf"),
+    ),
+];
+/// Math operators, arrows, technical symbols, box drawing and braille, last in every chain.
+const SYMBOL_FONTS: &[(&str, &[u8])] = &[
+    (
+        "noto_math",
+        include_bytes!("../../assets/fonts/NotoSansMath-Regular.ttf"),
+    ),
+    (
+        "noto_symbols",
+        include_bytes!("../../assets/fonts/NotoSansSymbols-Regular.ttf"),
+    ),
+    (
+        "noto_symbols2",
+        include_bytes!("../../assets/fonts/NotoSansSymbols2-Regular.ttf"),
+    ),
+];
 /// Monochrome Noto Emoji (outline). egui/eframe renders glyphs single-channel, so emoji show
-/// as black-and-white outlines rather than in color, but this covers the full emoji range
-/// instead of the small subset bundled with egui's defaults.
+/// as black-and-white outlines rather than in color. Color and distinct skin tones are not
+/// available in this face.
 const NOTO_EMOJI: &[u8] = include_bytes!("../../assets/fonts/NotoEmoji-Regular.ttf");
 const SYMBOLS_NERD_FONT_MONO: &[u8] =
     include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
@@ -237,12 +277,23 @@ fn system_fonts() -> &'static SystemFontCatalog {
             entry.1 |= face.monospaced;
         }
 
-        let default = FontOption {
-            id: "default".to_string(),
-            name: "Default".to_string(),
+        let options = |entries: &[(&str, &str)]| {
+            entries
+                .iter()
+                .map(|(id, name)| FontOption {
+                    id: (*id).to_string(),
+                    name: (*name).to_string(),
+                })
+                .collect::<Vec<_>>()
         };
-        let mut all = vec![default.clone()];
-        let mut monospace = vec![default];
+        let mut all = options(&[
+            ("default", "Default — Inter"),
+            ("bundled:noto_sans", "Noto Sans (bundled)"),
+        ]);
+        let mut monospace = options(&[
+            ("default", "Default — JetBrains Mono"),
+            ("bundled:ubuntu_mono", "Ubuntu Mono (bundled)"),
+        ]);
         for (_, (name, is_monospace)) in families {
             let option = FontOption {
                 id: format!("system:{name}"),
@@ -257,12 +308,123 @@ fn system_fonts() -> &'static SystemFontCatalog {
     })
 }
 
-/// All installed font families, plus the bundled Noto Sans default.
+/// CJK faces borrowed from the system, set once by [`load_system_cjk_fonts`]. Every desktop OS
+/// ships one, so Oxi doesn't bundle a ~16 MiB CJK face of its own.
+static SYSTEM_CJK_FONTS: OnceLock<Vec<FontData>> = OnceLock::new();
+
+/// Preferred CJK families, best first: macOS, Windows, then common Linux packages. Any other
+/// installed face is tried only for scripts these leave uncovered.
+const CJK_FAMILIES: &[&str] = &[
+    "Hiragino Sans",
+    "PingFang SC",
+    "Apple SD Gothic Neo",
+    "Yu Gothic UI",
+    "Yu Gothic",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "Malgun Gothic",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK KR",
+    "Source Han Sans JP",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    "Droid Sans Fallback",
+];
+
+/// One sample per script the CJK fallbacks must cover: kana, Han, Hangul.
+const CJK_SAMPLES: [char; 3] = ['あ', '中', '한'];
+
+/// Find system CJK faces off the UI thread (scanning installed fonts takes a while), then
+/// reinstall the fonts with them as fallbacks.
+pub fn load_system_cjk_fonts(ctx: &egui::Context) {
+    let ctx = ctx.clone();
+    let _ = std::thread::Builder::new()
+        .name("cjk-fonts".into())
+        .spawn(move || {
+            if !system_cjk_fonts().is_empty() {
+                ctx.set_fonts(font_definitions(&active_fonts()));
+                ctx.request_repaint();
+            }
+        });
+}
+
+/// The system CJK fallbacks, searched for on first call (blocking).
+pub(crate) fn system_cjk_fonts() -> &'static [FontData] {
+    SYSTEM_CJK_FONTS.get_or_init(find_system_cjk_fonts)
+}
+
+/// Pick the fewest faces that cover [`CJK_SAMPLES`], preferring [`CJK_FAMILIES`].
+fn find_system_cjk_fonts() -> Vec<FontData> {
+    use skrifa::MetadataProvider as _;
+    let db = &system_fonts().db;
+    let preferred = CJK_FAMILIES.iter().filter_map(|name| {
+        db.query(&fontdb::Query {
+            families: &[fontdb::Family::Name(name)],
+            weight: fontdb::Weight::NORMAL,
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        })
+    });
+    let others = db
+        .faces()
+        .filter(|face| face.weight == fontdb::Weight::NORMAL && face.style == fontdb::Style::Normal)
+        .map(|face| face.id);
+    let mut missing = CJK_SAMPLES.to_vec();
+    let mut fonts = Vec::new();
+    for id in preferred.chain(others) {
+        if missing.is_empty() {
+            break;
+        }
+        let covered: Vec<char> = db
+            .with_face_data(id, |data, index| {
+                let font = skrifa::FontRef::from_index(data, index).ok()?;
+                let charmap = font.charmap();
+                Some(
+                    missing
+                        .iter()
+                        .copied()
+                        .filter(|&c| charmap.map(c).is_some())
+                        .collect(),
+                )
+            })
+            .flatten()
+            .unwrap_or_default();
+        if covered.is_empty() {
+            continue;
+        }
+        if let Some(data) = map_system_face(db, id) {
+            missing.retain(|c| !covered.contains(c));
+            fonts.push(centered_text_font(data));
+        }
+    }
+    fonts
+}
+
+/// Memory-map a system face for the process lifetime. CJK faces run 20–60 MiB; mapping keeps
+/// only the glyph pages actually rendered resident instead of copying whole files.
+fn map_system_face(db: &fontdb::Database, id: fontdb::ID) -> Option<FontData> {
+    let (source, index) = db.face_source(id)?;
+    let mut data = match source {
+        fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
+            let file = std::fs::File::open(path).ok()?;
+            // SAFETY: system font files are not rewritten while an app has them open; this is
+            // the same assumption fontdb's own memory mapping makes.
+            let map = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+            FontData::from_static(Box::leak(Box::new(map)))
+        }
+        fontdb::Source::Binary(bytes) => FontData::from_owned((*bytes).as_ref().to_vec()),
+    };
+    data.index = index;
+    Some(data)
+}
+
+/// All installed font families, plus the bundled interface fonts.
 pub fn ui_font_options() -> &'static [FontOption] {
     &system_fonts().all
 }
 
-/// Installed families reported as fixed-width, plus the bundled Ubuntu Mono default.
+/// Installed families reported as fixed-width, plus the bundled code fonts.
 pub fn mono_font_options() -> &'static [FontOption] {
     &system_fonts().monospace
 }
@@ -396,8 +558,20 @@ fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> 
     Some(key.to_string())
 }
 
-fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
+/// Every face Oxi renders with. egui's own default fonts are disabled in Cargo.toml: these
+/// cover all of their glyphs, so nothing else is needed at runtime.
+pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
+    let mut fonts = FontDefinitions::empty();
+    fonts.font_data.insert(
+        "inter".to_string(),
+        std::sync::Arc::new(centered_text_font(FontData::from_static(INTER_REGULAR))),
+    );
+    fonts.font_data.insert(
+        "jetbrains_mono".to_string(),
+        std::sync::Arc::new(centered_text_font(FontData::from_static(
+            JETBRAINS_MONO_REGULAR,
+        ))),
+    );
     fonts.font_data.insert(
         "noto_sans".to_string(),
         std::sync::Arc::new(centered_text_font(FontData::from_static(NOTO_SANS_REGULAR))),
@@ -409,10 +583,6 @@ fn install_fonts(ctx: &egui::Context) {
         ))),
     );
     fonts.font_data.insert(
-        "apple_symbols".to_string(),
-        std::sync::Arc::new(FontData::from_static(APPLE_SYMBOLS)),
-    );
-    fonts.font_data.insert(
         "noto_emoji".to_string(),
         std::sync::Arc::new(FontData::from_static(NOTO_EMOJI)),
     );
@@ -421,32 +591,72 @@ fn install_fonts(ctx: &egui::Context) {
         std::sync::Arc::new(FontData::from_static(SYMBOLS_NERD_FONT_MONO)),
     );
 
+    for &(key, bytes) in SCRIPT_FONTS {
+        fonts.font_data.insert(
+            key.into(),
+            std::sync::Arc::new(centered_text_font(FontData::from_static(bytes))),
+        );
+    }
+    let cjk = SYSTEM_CJK_FONTS.get().map_or(&[][..], Vec::as_slice);
+    let cjk_keys: Vec<String> = (0..cjk.len()).map(|i| format!("system_cjk_{i}")).collect();
+    for (key, data) in cjk_keys.iter().zip(cjk) {
+        fonts
+            .font_data
+            .insert(key.clone(), std::sync::Arc::new(data.clone()));
+    }
+    for &(key, bytes) in SYMBOL_FONTS {
+        fonts.font_data.insert(
+            key.into(),
+            std::sync::Arc::new(FontData::from_static(bytes)),
+        );
+    }
     // Optional user-selected system fonts, loaded from disk. A missing/unreadable file
     // yields `None` and the bundled font is used instead.
-    let sel = active_fonts();
     let sys_ui = selected_family(&sel.ui)
         .and_then(|family| install_system_font(&mut fonts, "sys_ui", family));
     let sys_mono = selected_family(&sel.mono)
         .and_then(|family| install_system_font(&mut fonts, "sys_mono", family));
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
-    proportional.insert(0, "noto_sans".to_string());
-    // Prefer full Noto Emoji over egui's trimmed default emoji font for glyph coverage.
-    proportional.insert(1, "noto_emoji".to_string());
-    proportional.push("apple_symbols".to_string());
-    // The chosen system font wins; the bundled Noto Sans stays as a glyph fallback.
+    proportional.extend(["inter", "noto_sans", "noto_emoji"].map(String::from));
+    if sel.ui == "bundled:noto_sans" {
+        proportional.retain(|key| key != "noto_sans");
+        proportional.insert(0, "noto_sans".to_string());
+    }
+    // The chosen system font wins; bundled faces stay as glyph fallbacks.
     if let Some(key) = &sys_ui {
         proportional.insert(0, key.clone());
     }
 
     let monospace = fonts.families.entry(FontFamily::Monospace).or_default();
-    monospace.insert(0, "ubuntu_mono".to_string());
-    monospace.push("noto_sans".to_string());
-    monospace.push("noto_emoji".to_string());
-    monospace.push("apple_symbols".to_string());
+    monospace
+        .extend(["jetbrains_mono", "ubuntu_mono", "noto_sans", "noto_emoji"].map(String::from));
+    if sel.mono == "bundled:ubuntu_mono" {
+        monospace.retain(|key| key != "ubuntu_mono");
+        monospace.insert(0, "ubuntu_mono".to_string());
+    }
     if let Some(key) = &sys_mono {
         monospace.insert(0, key.clone());
     }
+
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts.families.get_mut(&family).unwrap().extend(
+            SCRIPT_FONTS
+                .iter()
+                .map(|(key, _)| (*key).to_string())
+                .chain(cjk_keys.iter().cloned())
+                .chain(SYMBOL_FONTS.iter().map(|(key, _)| (*key).to_string())),
+        );
+    }
+
+    // Sequence emoji must shape with Noto Emoji even when their base (a digit or heart)
+    // also exists in the primary text face. Keep fallback coverage for unsupported bases.
+    let mut emoji_chain = fonts.families[&FontFamily::Proportional].clone();
+    emoji_chain.retain(|key| key != "noto_emoji");
+    emoji_chain.insert(0, "noto_emoji".into());
+    fonts
+        .families
+        .insert(FontFamily::Name("emoji".into()), emoji_chain);
 
     // Dedicated icon family — used only for tool pill glyphs.
     // Keeps Nerd Font PUA codepoints out of the proportional/monospace fallback chains
@@ -457,7 +667,11 @@ fn install_fonts(ctx: &egui::Context) {
         .or_default()
         .push("symbols_nerd_font_mono".to_string());
 
-    ctx.set_fonts(fonts);
+    fonts
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions(&active_fonts()));
 }
 
 /// Build egui visuals from the active palette: neutral surfaces, subtle borders, one accent.
@@ -594,6 +808,127 @@ mod tests {
         assert!((-0.1..-0.03).contains(&mono), "{mono}");
         assert_eq!(optical_center_offset(SYMBOLS_NERD_FONT_MONO, 0), None);
         assert_eq!(optical_center_offset(NOTO_EMOJI, 0), None);
+    }
+
+    /// The bundled defaults must cover Romanian text and code without replacement glyphs.
+    #[test]
+    fn bundled_defaults_cover_text_and_fixed_width_code() {
+        use skrifa::MetadataProvider as _;
+        for data in [INTER_REGULAR, JETBRAINS_MONO_REGULAR] {
+            let font = skrifa::FontRef::from_index(data, 0).unwrap();
+            for c in "ĂăÂâÎîȘșȚț0123456789{}[]()<>!=+-_".chars() {
+                assert!(font.charmap().map(c).is_some(), "missing {c}");
+            }
+            assert!(optical_center_offset(data, 0).is_some());
+        }
+        let font = skrifa::FontRef::from_index(JETBRAINS_MONO_REGULAR, 0).unwrap();
+        let metrics = font.glyph_metrics(
+            skrifa::instance::Size::unscaled(),
+            skrifa::instance::LocationRef::default(),
+        );
+        let width = |c| {
+            metrics
+                .advance_width(font.charmap().map(c).unwrap())
+                .unwrap()
+        };
+        for c in " iWM0{}".chars() {
+            assert_eq!(width(c), width('0'), "variable width for {c}");
+        }
+    }
+
+    #[test]
+    fn bundled_font_choices_keep_fallbacks() {
+        for (sel, ui, mono) in [
+            (FontSelection::default(), "inter", "jetbrains_mono"),
+            (
+                FontSelection {
+                    ui: "bundled:noto_sans".into(),
+                    mono: "bundled:ubuntu_mono".into(),
+                },
+                "noto_sans",
+                "ubuntu_mono",
+            ),
+            (
+                FontSelection {
+                    ui: "system:Oxi Missing Font 93A6".into(),
+                    mono: "system:Oxi Missing Font 93A6".into(),
+                },
+                "inter",
+                "jetbrains_mono",
+            ),
+        ] {
+            let fonts = font_definitions(&sel);
+            assert_eq!(fonts.families[&FontFamily::Proportional][0], ui);
+            assert_eq!(fonts.families[&FontFamily::Monospace][0], mono);
+            for (family, fallback) in [
+                (FontFamily::Proportional, "noto_sans"),
+                (FontFamily::Monospace, "ubuntu_mono"),
+            ] {
+                let chain = &fonts.families[&family];
+                assert!(chain.iter().any(|key| key == fallback));
+                assert!(chain.iter().any(|key| key == "noto_emoji"));
+                assert!(chain.iter().all(|key| fonts.font_data.contains_key(key)));
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_fallbacks_cover_multilingual_samples_in_both_families() {
+        use skrifa::MetadataProvider as _;
+        let definitions = font_definitions(&FontSelection::default());
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            for sample in [
+                "العربيةمرحبابالعالم",
+                "עבריתשלוםעולם",
+                "हिन्दीनमस्तेदुनिया",
+                "Հայերեն բարեւ",
+                "ქართული გამარჯობა",
+                // Previously covered only by Apple Symbols or egui's default fonts.
+                "☐☑∑∫≠≤≥∞√∀∃⊂⊆⟵⟶⇒⤴⨀⌘⌥⏎⎈⣿⠋⠙▲◆★✓✗♥",
+            ] {
+                for c in sample.chars() {
+                    assert!(
+                        definitions.families[&family].iter().any(|key| {
+                            let data = &definitions.font_data[key];
+                            skrifa::FontRef::from_index(&data.font, data.index)
+                                .unwrap()
+                                .charmap()
+                                .map(c)
+                                .is_some()
+                        }),
+                        "missing {c} in {family:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CJK comes from the system. Machines without a CJK face (bare CI images) find none, but
+    /// whatever is picked must cover what it was picked for and stay off the bundled list.
+    #[test]
+    fn system_cjk_fallbacks_cover_their_scripts() {
+        use skrifa::MetadataProvider as _;
+        let fonts = system_cjk_fonts();
+        assert!(fonts.len() <= CJK_SAMPLES.len());
+        let definitions = font_definitions(&FontSelection::default());
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            let chain = &definitions.families[&family];
+            let found = chain
+                .iter()
+                .filter(|k| k.starts_with("system_cjk_"))
+                .count();
+            assert_eq!(found, fonts.len(), "CJK fallbacks missing from {family:?}");
+        }
+        for c in CJK_SAMPLES {
+            let covered = fonts.iter().any(|data| {
+                skrifa::FontRef::from_index(&data.font, data.index)
+                    .unwrap()
+                    .charmap()
+                    .map(c)
+                    .is_some()
+            });
+            assert!(covered || cfg!(not(target_os = "macos")), "macOS ships {c}");
+        }
     }
 
     /// A spinner on screen must not pin the window to the display's refresh rate.

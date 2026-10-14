@@ -48,6 +48,8 @@ pub enum LlmProviderKind {
     MuseCodeAcp,
     /// GitHub Copilot CLI's built-in ACP server (`copilot --acp`), on the user's Copilot plan.
     CopilotAcp,
+    /// Google Antigravity through its official native ACP server.
+    AntigravityAcp,
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
     /// turn. Its `model_id` holds the routing strategy. See `crate::router`.
     Router,
@@ -57,7 +59,7 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 18] = [
+    pub const ALL: [LlmProviderKind; 19] = [
         LlmProviderKind::Router,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
@@ -69,6 +71,7 @@ impl LlmProviderKind {
         LlmProviderKind::CodexAcp,
         LlmProviderKind::MuseCodeAcp,
         LlmProviderKind::CopilotAcp,
+        LlmProviderKind::AntigravityAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
@@ -100,6 +103,7 @@ impl LlmProviderKind {
             LlmProviderKind::CodexAcp => "codexacp",
             LlmProviderKind::MuseCodeAcp => "musecodeacp",
             LlmProviderKind::CopilotAcp => "copilotacp",
+            LlmProviderKind::AntigravityAcp => "antigravityacp",
             LlmProviderKind::Router => "router",
         }
     }
@@ -111,6 +115,7 @@ impl LlmProviderKind {
                 | LlmProviderKind::CursorAcp
                 | LlmProviderKind::CodexAcp
                 | LlmProviderKind::MuseCodeAcp
+                | LlmProviderKind::AntigravityAcp
                 | LlmProviderKind::CopilotAcp
         )
     }
@@ -143,6 +148,7 @@ impl LlmProviderKind {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
             | LlmProviderKind::Router => "",
         }
@@ -167,6 +173,7 @@ impl LlmProviderKind {
             LlmProviderKind::CodexAcp => "Codex (ACP)",
             LlmProviderKind::MuseCodeAcp => "Muse Code (ACP)",
             LlmProviderKind::CopilotAcp => "GitHub Copilot (ACP)",
+            LlmProviderKind::AntigravityAcp => "Antigravity (ACP)",
             LlmProviderKind::Router => "Router (auto)",
         }
     }
@@ -191,6 +198,7 @@ impl LlmProviderKind {
             LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp => "default",
             LlmProviderKind::Router => "balanced",
         }
@@ -331,9 +339,8 @@ pub struct ProviderConfig {
     /// so existing/older settings files (no `location` field) behave exactly as before.
     #[serde(default)]
     pub location: ComputeLocation,
-    /// Command line used to launch the ACP agent subprocess (only for
-    /// [`LlmProviderKind::ClaudeCodeAcp`]). Empty = the built-in default
-    /// (`npx @zed-industries/claude-code-acp`). Run through the platform shell so `npx`,
+    /// Command line used to launch an ACP agent subprocess. Empty = that provider's
+    /// built-in default. Run through the platform shell so `npx`,
     /// PATH lookup, and arguments all work as typed.
     #[serde(default)]
     pub acp_command: String,
@@ -435,6 +442,18 @@ impl ProviderConfig {
     /// The Copilot CLI is its own ACP server; `--acp` serves it over stdio.
     pub const DEFAULT_COPILOT_ACP_COMMAND: &'static str = "npx -y @github/copilot --acp";
 
+    /// Native server from the official ACP registry. Linux requires an empty uid argument.
+    pub const DEFAULT_ANTIGRAVITY_ACP_COMMAND: &'static str = if cfg!(windows) {
+        "agy_acp_server.exe"
+    } else if cfg!(target_os = "linux") {
+        "agy_acp_server.par --uid="
+    } else {
+        "agy_acp_server.par"
+    };
+
+    /// Assumed window for an ACP agent that hasn't reported one yet.
+    pub const ACP_CONTEXT_WINDOW: usize = 1_000_000;
+
     pub fn is_acp(&self) -> bool {
         self.provider.is_acp()
     }
@@ -445,6 +464,7 @@ impl ProviderConfig {
             LlmProviderKind::CodexAcp => Self::DEFAULT_CODEX_ACP_COMMAND,
             LlmProviderKind::MuseCodeAcp => Self::DEFAULT_MUSE_ACP_COMMAND,
             LlmProviderKind::CopilotAcp => Self::DEFAULT_COPILOT_ACP_COMMAND,
+            LlmProviderKind::AntigravityAcp => Self::DEFAULT_ANTIGRAVITY_ACP_COMMAND,
             _ => Self::DEFAULT_ACP_COMMAND,
         }
     }
@@ -480,6 +500,9 @@ impl ProviderConfig {
                 LlmProviderKind::CopilotAcp => {
                     env.push(("COPILOT_GITHUB_TOKEN".to_string(), key.to_string()));
                 }
+                LlmProviderKind::AntigravityAcp => {
+                    env.push(("GEMINI_API_KEY".to_string(), key.to_string()));
+                }
                 _ => {}
             }
         }
@@ -506,7 +529,16 @@ impl ProviderConfig {
     /// Resolve the effective context window in tokens for this provider.
     ///
     /// Order: explicit override > built-in catalog > provider/model default.
+    /// Router defaults to 1M for transcript management; selected models keep their own limits.
+    /// ACP agents report their real window in `usage_update`; until the first one arrives they get
+    /// [`Self::ACP_CONTEXT_WINDOW`], and overrides don't apply (the agent manages its context).
     pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if self.provider == LlmProviderKind::Router {
+            return self.context_window.filter(|w| *w > 0).unwrap_or(1_000_000);
+        }
+        if self.is_acp() {
+            return Self::ACP_CONTEXT_WINDOW;
+        }
         if let Some(cw) = self.context_window
             && cw > 0
         {
@@ -811,6 +843,16 @@ mod tests {
         let back: ProviderConfig =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.allow_self_signed_tls, Some(true));
+    }
+
+    #[test]
+    fn router_context_defaults_to_one_million_with_optional_override() {
+        let mut cfg = ProviderConfig::new(LlmProviderKind::Router);
+        assert_eq!(cfg.effective_context_window(128_000), 1_000_000);
+        cfg.context_window = Some(256_000);
+        assert_eq!(cfg.effective_context_window(128_000), 256_000);
+        cfg.context_window = Some(0);
+        assert_eq!(cfg.effective_context_window(128_000), 1_000_000);
     }
 
     #[test]

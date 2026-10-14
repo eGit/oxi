@@ -22,203 +22,29 @@ impl OxiApp {
         }
 
         // ── Model ──────────────────────────────────────────────────────────
-        card_frame().show(ui, |ui| {
-            settings_card_header(ui, "Model", Some("Primary model id and context window for this provider."));
-
-            field_label_first(ui, "Model id");
-            let have = self
-                .conv
-                .fetched_models
-                .get(&kind)
-                .is_some_and(|f| !f.models.is_empty());
-            // Refresh button pinned to the right edge; the model field/combo fills the
-            // rest of the row on the left. Laying the whole row out right-to-left keeps
-            // the field flush-left instead of leaving it stranded on the right.
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let refresh = crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
-                        .on_hover_text("Load available models from provider")
-                        .clicked();
-                    if have {
-                        let fetched = self
-                            .conv
-                            .fetched_models
-                            .get(&kind)
-                            .map(|f| f.models.clone())
-                            .unwrap_or_default();
-                        let current = self.conv.settings.provider(kind).model_id.clone();
-                        let label = if current.is_empty() {
-                            "(custom)".to_string()
-                        } else {
-                            current.clone()
-                        };
-                        egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
-                            .icon(crate::ui::chrome::combo_chevron_icon)
-                            .selected_text(label)
-                            .width(ui.available_width())
-                            .show_ui(ui, |ui| {
-                                if !current.is_empty() && fetched.iter().all(|x| x != &current) {
-                                    let _ =
-                                        ui.selectable_label(false, format!("{current} (custom)"));
-                                }
-                                for m in &fetched {
-                                    if ui.selectable_label(*m == current, m.clone()).clicked() {
-                                        self.conv.settings.provider_mut(kind).model_id = m.clone();
-                                    }
-                                }
-                            });
-                    } else {
-                        settings_text_field(
-                            ui,
-                            &mut self.conv.settings.provider_mut(kind).model_id,
-                            "e.g. gpt-4o-mini or kimi-k2.7-code",
-                        );
-                    }
-                    if refresh {
-                        self.spawn_model_fetch(ui.ctx(), kind);
-                    }
-                });
-            });
-            // The combo replaces the free-text field once a list arrives, so keep an explicit
-            // escape hatch for ids the provider doesn't advertise (e.g. `claude-opus-5`, which
-            // the Claude Code ACP adapter only offers once it is named — see
-            // `ProviderConfig::acp_env`).
-            if have {
-                ui.add_space(4.0);
-                field_label(ui, "Custom model id");
+        // ACP agents advertise their own models and thinking levels, which the composer
+        // offers; only Claude Code needs a field, for ids its adapter doesn't list.
+        if kind == LlmProviderKind::ClaudeCodeAcp {
+            card_frame().show(ui, |ui| {
+                settings_card_header(ui, "Model", Some("Pick the model and effort in the composer."));
+                field_label_first(ui, "Model id");
                 settings_text_field(
                     ui,
                     &mut self.conv.settings.provider_mut(kind).model_id,
                     "e.g. claude-opus-5",
                 );
-            }
-            // Status line for the model fetch.
-            if let Some(f) = self.conv.fetched_models.get(&kind) {
-                if let Some(e) = f.error.clone() {
-                    ui.add_space(4.0);
-                    alert_banner(ui, &e, true);
-                } else if f.loading {
-                    ui.label(
-                        RichText::new("Loading models…")
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                } else if !f.models.is_empty() {
-                    ui.label(
-                        RichText::new(format!("{} models available", f.models.len()))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                }
-            }
-
-            // Context window (auto from catalog; editable override).
-            {
-                let cw = self.conv.settings.provider(kind).context_window;
-                let resolved = self
-                    .conv
-                    .settings
-                    .provider(kind)
-                    .effective_context_window(self.conv.settings.context_window_default);
-                field_label(ui, "Context window (tokens, empty = auto)");
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    // Empty when automatic, so the hint shows what "auto" resolves to.
-                    let mut value = cw.map(|n| n.to_string()).unwrap_or_default();
-                    let hint = format!("auto ({})", group_thousands(resolved as u64));
-                    if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
-                        let parsed = value.trim().parse::<usize>().ok();
-                        self.conv.settings.provider_mut(kind).context_window =
-                            parsed.filter(|&n| n > 0);
-                    }
-                    if crate::ui::chrome::ghost_button(ui, "Auto", false)
-                        .on_hover_text("Resolve context window from the model catalog")
-                        .clicked()
-                    {
-                        self.conv.settings.provider_mut(kind).context_window = None;
-                    }
-                    ui.label(
-                        RichText::new(format!(
-                            "Effective: {} tokens",
-                            group_thousands(resolved as u64)
-                        ))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                });
-            }
-
-            if matches!(
-                kind,
-                LlmProviderKind::OpenAi
-                    | LlmProviderKind::GptCodex
-                    | LlmProviderKind::OpenCodeGo
-                    | LlmProviderKind::AzureOpenAi
-                    | LlmProviderKind::CustomAnthropic
-                    | LlmProviderKind::ClaudeCodeAcp
-                    | LlmProviderKind::CodexAcp
-                    | LlmProviderKind::CursorAcp
-                    | LlmProviderKind::MuseCodeAcp
-            ) {
-                let is_gpt = matches!(
-                    kind,
-                    LlmProviderKind::OpenAi
-                        | LlmProviderKind::GptCodex
-                        | LlmProviderKind::AzureOpenAi
-                        | LlmProviderKind::CodexAcp
-                        | LlmProviderKind::CursorAcp
-                        | LlmProviderKind::MuseCodeAcp
-                );
-                field_label(
-                    ui,
-                    if is_gpt {
-                        "Thinking / reasoning level"
-                    } else {
-                        "Claude effort (4.6+ adaptive thinking)"
-                    },
-                );
-                let current = self.conv.settings.provider(kind).effort.clone();
-                let values: &[(&str, &str)] = if is_gpt {
-                    &[("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high")]
-                } else {
-                    &[
-                        ("", "default (high)"),
-                        ("low", "low"),
-                        ("medium", "medium"),
-                        ("high", "high"),
-                        ("xhigh", "xhigh"),
-                        ("max", "max"),
-                    ]
-                };
-                let selected = values
-                    .iter()
-                    .find(|(value, _)| *value == current)
-                    .map(|(_, label)| *label)
-                    .unwrap_or("default");
-                egui::ComboBox::from_id_salt(("effort_combo", kind.slug()))
-                    .icon(crate::ui::chrome::combo_chevron_icon)
-                    .selected_text(selected)
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for (value, label) in values {
-                            if ui.selectable_label(current == *value, *label).clicked() {
-                                self.conv.settings.provider_mut(kind).effort = value.to_string();
-                            }
-                        }
-                    });
                 field_hint(
                     ui,
-                    if is_gpt {
-                        "Sent as reasoning_effort for GPT reasoning models (gpt-5/o-series) and as reasoning.effort for ChatGPT Codex."
-                    } else {
-                        "Sent as output_config.effort only for Claude 4.6+ adaptive-thinking models."
-                    },
+                    "Follows the composer's picker. Type an id the agent doesn't list (e.g. claude-opus-5) to launch with it.",
                 );
-            }
-        });
+            });
+            ui.add_space(12.0);
+        } else if !kind.is_acp() {
+            self.render_model_card(ui, kind);
+            ui.add_space(12.0);
+        }
 
         // ── Connection ─────────────────────────────────────────────────────
-        ui.add_space(12.0);
         card_frame().show(ui, |ui| {
             settings_card_header(
                 ui,
@@ -237,8 +63,20 @@ impl OxiApp {
                 );
                 field_hint(
                     ui,
-                    "Shell command for the ACP server. Leave empty for the recommended default. Refresh models to verify that it can launch; failures include installation hints.",
+                    "Shell command for the ACP server. Leave empty for the recommended default.",
                 );
+                if kind == LlmProviderKind::AntigravityAcp {
+                    field_hint(ui, "The official server is downloaded on first launch. Sign in with Google in the browser when prompted, or provide a Gemini API key below. Models are listed in the composer.");
+                    ui.hyperlink_to("Antigravity authentication and plans", "https://antigravity.google/docs/ide/extensions/zed/");
+                }
+                ui.add_space(4.0);
+                if crate::ui::chrome::ghost_button(ui, "Test launch", false)
+                    .on_hover_text("Start the agent once to check it runs; failures include installation hints")
+                    .clicked()
+                {
+                    self.spawn_model_fetch(ui.ctx(), kind);
+                }
+                self.model_fetch_status(ui, kind);
             } else if kind.has_custom_endpoint() {
                 field_label_first(ui, "Base URL (optional)");
                 settings_text_field(
@@ -309,6 +147,7 @@ impl OxiApp {
                 LlmProviderKind::CopilotAcp => {
                     "Optional COPILOT_GITHUB_TOKEN (else Copilot CLI's own login is used)"
                 }
+                LlmProviderKind::AntigravityAcp => "Optional GEMINI_API_KEY (else Google account sign-in is used)",
                 LlmProviderKind::Router => "",
             };
             settings_password_field(
@@ -347,5 +186,206 @@ impl OxiApp {
         ) {
             self.render_compute_target_section(ui, kind);
         }
+    }
+
+    /// Status line for the provider's model fetch (also the ACP launch check).
+    fn model_fetch_status(&self, ui: &mut Ui, kind: LlmProviderKind) {
+        if let Some(f) = self.conv.fetched_models.get(&kind) {
+            if let Some(e) = f.error.clone() {
+                ui.add_space(4.0);
+                alert_banner(ui, &e, true);
+            } else if f.loading {
+                ui.label(
+                    RichText::new(if kind.is_acp() {
+                        "Starting agent…"
+                    } else {
+                        "Loading models…"
+                    })
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+                );
+            } else if !f.models.is_empty() {
+                ui.label(
+                    RichText::new(if kind.is_acp() {
+                        format!("Agent runs · {} models", f.models.len())
+                    } else {
+                        format!("{} models available", f.models.len())
+                    })
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+                );
+            }
+        }
+    }
+
+    /// Model id, context window and effort for providers oxi talks to directly.
+    fn render_model_card(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
+        card_frame().show(ui, |ui| {
+            settings_card_header(ui, "Model", Some("Primary model id and context window for this provider."));
+
+            field_label_first(ui, "Model id");
+            let have = self
+                .conv
+                .fetched_models
+                .get(&kind)
+                .is_some_and(|f| !f.models.is_empty());
+            // Refresh button pinned to the right edge; the model field/combo fills the
+            // rest of the row on the left. Laying the whole row out right-to-left keeps
+            // the field flush-left instead of leaving it stranded on the right.
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let refresh = crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
+                        .on_hover_text("Load available models from provider")
+                        .clicked();
+                    if have {
+                        let fetched = self
+                            .conv
+                            .fetched_models
+                            .get(&kind)
+                            .map(|f| f.models.clone())
+                            .unwrap_or_default();
+                        let current = self.conv.settings.provider(kind).model_id.clone();
+                        let label = if current.is_empty() {
+                            "(custom)".to_string()
+                        } else {
+                            current.clone()
+                        };
+                        egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
+                            .icon(crate::ui::chrome::combo_chevron_icon)
+                            .selected_text(label)
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                if !current.is_empty() && fetched.iter().all(|x| x != &current) {
+                                    let _ =
+                                        ui.selectable_label(false, format!("{current} (custom)"));
+                                }
+                                for m in &fetched {
+                                    if ui.selectable_label(*m == current, m.clone()).clicked() {
+                                        self.conv.settings.provider_mut(kind).model_id = m.clone();
+                                    }
+                                }
+                            });
+                    } else {
+                        settings_text_field(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).model_id,
+                            "e.g. gpt-4o-mini or kimi-k2.7-code",
+                        );
+                    }
+                    if refresh {
+                        self.spawn_model_fetch(ui.ctx(), kind);
+                    }
+                });
+            });
+            // The combo replaces the free-text field once a list arrives, so keep an explicit
+            // escape hatch for ids the provider doesn't advertise.
+            if have {
+                ui.add_space(4.0);
+                field_label(ui, "Custom model id");
+                settings_text_field(
+                    ui,
+                    &mut self.conv.settings.provider_mut(kind).model_id,
+                    "e.g. claude-opus-5",
+                );
+            }
+            self.model_fetch_status(ui, kind);
+
+            // Context window (auto from catalog; editable override).
+            {
+                let cw = self.conv.settings.provider(kind).context_window;
+                let resolved = self
+                    .conv
+                    .settings
+                    .provider(kind)
+                    .effective_context_window(self.conv.settings.context_window_default);
+                field_label(ui, "Context window (tokens, empty = auto)");
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    // Empty when automatic, so the hint shows what "auto" resolves to.
+                    let mut value = cw.map(|n| n.to_string()).unwrap_or_default();
+                    let hint = format!("auto ({})", group_thousands(resolved as u64));
+                    if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
+                        let parsed = value.trim().parse::<usize>().ok();
+                        self.conv.settings.provider_mut(kind).context_window =
+                            parsed.filter(|&n| n > 0);
+                    }
+                    if crate::ui::chrome::ghost_button(ui, "Auto", false)
+                        .on_hover_text("Resolve context window from the model catalog")
+                        .clicked()
+                    {
+                        self.conv.settings.provider_mut(kind).context_window = None;
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "Effective: {} tokens",
+                            group_thousands(resolved as u64)
+                        ))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                });
+            }
+
+            if matches!(
+                kind,
+                LlmProviderKind::OpenAi
+                    | LlmProviderKind::GptCodex
+                    | LlmProviderKind::OpenCodeGo
+                    | LlmProviderKind::AzureOpenAi
+                    | LlmProviderKind::CustomAnthropic
+            ) {
+                let is_gpt = matches!(
+                    kind,
+                    LlmProviderKind::OpenAi
+                        | LlmProviderKind::GptCodex
+                        | LlmProviderKind::AzureOpenAi
+                );
+                field_label(
+                    ui,
+                    if is_gpt {
+                        "Thinking / reasoning level"
+                    } else {
+                        "Claude effort (4.6+ adaptive thinking)"
+                    },
+                );
+                let current = self.conv.settings.provider(kind).effort.clone();
+                let values: &[(&str, &str)] = if is_gpt {
+                    &[("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high")]
+                } else {
+                    &[
+                        ("", "default (high)"),
+                        ("low", "low"),
+                        ("medium", "medium"),
+                        ("high", "high"),
+                        ("xhigh", "xhigh"),
+                        ("max", "max"),
+                    ]
+                };
+                let selected = values
+                    .iter()
+                    .find(|(value, _)| *value == current)
+                    .map(|(_, label)| *label)
+                    .unwrap_or("default");
+                egui::ComboBox::from_id_salt(("effort_combo", kind.slug()))
+                    .icon(crate::ui::chrome::combo_chevron_icon)
+                    .selected_text(selected)
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in values {
+                            if ui.selectable_label(current == *value, *label).clicked() {
+                                self.conv.settings.provider_mut(kind).effort = value.to_string();
+                            }
+                        }
+                    });
+                field_hint(
+                    ui,
+                    if is_gpt {
+                        "Sent as reasoning_effort for GPT reasoning models (gpt-5/o-series) and as reasoning.effort for ChatGPT Codex."
+                    } else {
+                        "Sent as output_config.effort only for Claude 4.6+ adaptive-thinking models."
+                    },
+                );
+            }
+        });
     }
 }

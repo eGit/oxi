@@ -8,6 +8,27 @@ use crate::ui::chrome::{card_frame, hairline, settings_caption, settings_section
 use super::super::OxiApp;
 use super::super::state::UpdateInstall;
 
+/// License texts shipped with the bundled fonts (see `assets/fonts/README.md`).
+const FONT_LICENSES: &[(&str, &str)] = &[
+    ("Inter", include_str!("../../../assets/fonts/Inter-OFL.txt")),
+    (
+        "JetBrains Mono",
+        include_str!("../../../assets/fonts/JetBrainsMono-OFL.txt"),
+    ),
+    (
+        "Noto Sans, Noto Emoji, scripts and symbols",
+        include_str!("../../../assets/fonts/NotoScripts-OFL.txt"),
+    ),
+    (
+        "Ubuntu Mono",
+        include_str!("../../../assets/fonts/UbuntuMono-UFL.txt"),
+    ),
+    (
+        "Symbols Nerd Font",
+        include_str!("../../../assets/fonts/SymbolsNerdFont-LICENSE.txt"),
+    ),
+];
+
 impl OxiApp {
     pub(super) fn render_settings_about_panel(&mut self, ui: &mut Ui) {
         settings_section_title(ui, "About", Some("Version and updates."));
@@ -161,6 +182,14 @@ impl OxiApp {
 
             ui.add_space(10.0);
             hairline(ui);
+            ui.add_space(8.0);
+            ui.collapsing("Bundled font licenses", |ui| {
+                for &(name, license) in FONT_LICENSES {
+                    ui.collapsing(name, |ui| {
+                        ui.label(RichText::new(license).size(FS_TINY).color(c_text_muted()));
+                    });
+                }
+            });
             ui.add_space(8.0);
             settings_caption(ui, "Keyboard shortcuts");
             ui.add_space(6.0);
