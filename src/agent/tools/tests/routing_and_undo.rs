@@ -185,6 +185,8 @@ fn mkdir_creates_missing_parents_and_undo_removes_them() {
 
     let cwd = temp_workspace("undo-nested-mkdir");
     fs::create_dir(cwd.join("src")).unwrap();
+    // Undo also prunes parents left empty, so keep `src` occupied like a real project.
+    fs::write(cwd.join("src/lib.rs"), "").unwrap();
     let journal = Arc::new(Mutex::new(crate::agent::tools::TurnUndoJournal::default()));
     let mut env = all_enabled();
     env.undo_journal = Some(journal.clone());
@@ -203,7 +205,7 @@ fn mkdir_creates_missing_parents_and_undo_removes_them() {
         .unwrap_or_else(|e| e.into_inner())
         .restore(&cwd)
         .unwrap();
-    assert!(cwd.join("src").is_dir());
+    assert!(cwd.join("src/lib.rs").exists());
     assert!(!cwd.join("src/main").exists());
 }
 
