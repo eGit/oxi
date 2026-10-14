@@ -10,7 +10,8 @@
 # keychain, so your settings, chats and keys are never touched.
 #
 # Usage: scripts/render-demo.sh          the tour, screenshots and poster
-#        scripts/render-demo.sh switch   the README clip of a chat moving from Claude Code to Codex
+#        scripts/render-demo.sh switch   the clip of a chat moving from Claude Code to Codex (README
+#                                        GIF and website video)
 # Requires ffmpeg (brew install ffmpeg).
 # Keep this script LF-only: Bash treats a CR after `pipefail` as part of the option name.
 set -euo pipefail
@@ -34,8 +35,14 @@ if [ "${1:-}" = "switch" ]; then
   echo "Rendering the agent switch…"
   OXI_DEMO_VIDEO="$WORK/switch.mkv" \
     cargo test --release record_switch -- --ignored --nocapture
+  ffmpeg -v error -y -i "$WORK/switch.mkv" \
+    -vf "scale=1920:-2:flags=lanczos,format=yuv420p" \
+    -c:v libx264 -preset slow -crf 24 -tune animation -movflags +faststart \
+    "$SITE/switch.mp4"
   ffmpeg -v error -y -i "$WORK/switch.mkv" -vf "$GIF_FILTER" "$DEMO/switch.gif"
-  ls -la "$DEMO/switch.gif"
+  ffmpeg -v error -y -sseof -3 -i "$WORK/switch.mkv" -frames:v 1 \
+    -vf "scale=1600:-2:flags=lanczos" -q:v 3 "$SITE/switch-poster.jpg"
+  ls -la "$DEMO/switch.gif" "$SITE/switch.mp4" "$SITE/switch-poster.jpg"
   echo "Done."
   exit 0
 fi
