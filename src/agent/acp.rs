@@ -786,8 +786,15 @@ async fn spawn_conn(
         }
     };
     sessions::remember(session_key, command_line, cwd, &session_id);
-    // What the composer showed for this chat before, when its agent ran last.
-    let previous = config_options::options(session_key, command_line);
+    if needs_history && let Some(options) = res.get("configOptions") {
+        config_options::remember_defaults(command_line, options);
+    }
+    // What the composer showed for this chat before: when its agent ran last, or what was
+    // picked from the remembered options while it launched.
+    let previous = config_options::options(session_key, command_line).or_else(|| {
+        let picked = config_options::picked_before_launch(session_key, command_line);
+        (!picked.is_empty()).then(|| std::sync::Arc::new(picked))
+    });
     let available_models = parse_available_models(&res);
     let mut config_options = res.get("configOptions").cloned().unwrap_or(Value::Null);
     config_options = set_matching_config_option(
