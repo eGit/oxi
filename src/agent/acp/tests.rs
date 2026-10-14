@@ -1107,6 +1107,7 @@ for line in sys.stdin:
             calls.lines().filter(|m| *m == "session/new").count(),
             if mode == "new" { 2 } else { 1 }
         );
-        std::fs::remove_dir_all(dir).unwrap();
+        // Windows keeps the dir locked while the agent process is still exiting.
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
