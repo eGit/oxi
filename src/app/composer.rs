@@ -85,6 +85,7 @@ pub(crate) fn composer_provider_label(kind: crate::settings::LlmProviderKind) ->
         CodexAcp => "Codex",
         MuseCodeAcp => "Muse Code",
         CopilotAcp => "Copilot",
+        AntigravityAcp => "Antigravity",
         Router => "Router",
     }
 }

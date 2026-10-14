@@ -33,6 +33,7 @@ pub fn wire_fingerprint_for(
         | LlmProviderKind::CursorAcp
         | LlmProviderKind::CodexAcp
         | LlmProviderKind::MuseCodeAcp
+        | LlmProviderKind::AntigravityAcp
         | LlmProviderKind::CopilotAcp => "acp",
         _ => "openai-chat",
     };

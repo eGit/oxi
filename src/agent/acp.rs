@@ -53,6 +53,7 @@ pub mod config_options;
 use client_fs::fs_write_text;
 pub use commands::{AcpSlashCommand, available as available_commands};
 
+mod antigravity;
 #[path = "acp/install.rs"]
 mod install;
 
@@ -703,8 +704,8 @@ async fn spawn_conn(
             cwd.display()
         ));
     }
-    // Default npx commands launch oxi's managed, auto-updated install of the adapter instead.
-    let launch_line = install::resolve_command(command_line).await;
+    // Default commands launch oxi's managed adapter install instead.
+    let launch_line = install::resolve_command(command_line).await?;
     let mut cmd = build_command(&launch_line);
     cmd.current_dir(cwd);
     if let Some(path) = install::shell_path().await {
@@ -804,7 +805,20 @@ async fn spawn_conn(
     let (session_id, res, needs_history) = match resumed {
         Some((id, res)) => (id, res, false),
         None => {
-            let (id, res) = new_session(&stdin, &next_id, &pending, cwd, &mcp).await?;
+            let session = new_session(&stdin, &next_id, &pending, cwd, &mcp).await;
+            let (id, res) = match session {
+                Err(error) if antigravity::needs_authentication(&init, &error) => {
+                    let method = antigravity::auth_method(env);
+                    tokio::time::timeout(
+                        Duration::from_secs(300),
+                        request(&stdin, &next_id, &pending, "authenticate", json!({"methodId": method})),
+                    ).await
+                        .map_err(|_| "Antigravity sign-in timed out. Complete Google sign-in in the browser and retry.".to_string())?
+                        .map_err(|e| format!("Antigravity authentication failed: {e}"))?;
+                    new_session(&stdin, &next_id, &pending, cwd, &mcp).await?
+                }
+                result => result?,
+            };
             (id, res, true)
         }
     };

@@ -146,12 +146,15 @@ pub(super) fn adapter_for(command_line: &str) -> Option<&'static Adapter> {
 
 /// The command line to actually spawn for `command_line`: the managed install of a known adapter
 /// (installing it first when missing), or `command_line` unchanged for anything else.
-pub(super) async fn resolve_command(command_line: &str) -> String {
+pub(super) async fn resolve_command(command_line: &str) -> Result<String, String> {
+    if super::antigravity::is_default(command_line) {
+        return super::antigravity::resolve().await;
+    }
     let Some(adapter) = adapter_for(command_line) else {
-        return command_line.to_string();
+        return Ok(command_line.to_string());
     };
     if let Some(bin) = adapter.installed_bin() {
-        return adapter.launch_line(shell_quote(&bin));
+        return Ok(adapter.launch_line(shell_quote(&bin)));
     }
     let lock = adapter.lock();
     let _guard = lock.lock().await;
@@ -160,15 +163,18 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
     {
         log::warn!("could not install ACP adapter {}: {e}", adapter.package);
     }
-    match adapter.installed_bin() {
+    Ok(match adapter.installed_bin() {
         Some(bin) => adapter.launch_line(shell_quote(&bin)),
         None => adapter.launch_line(format!("npx -y {}@latest", adapter.package)),
-    }
+    })
 }
 
 /// Whether `command_line` starts without installing anything first: a managed adapter that is
 /// already installed (it was used before), or another command whose program exists.
 pub(super) async fn is_ready(command_line: &str) -> bool {
+    if super::antigravity::is_default(command_line) {
+        return super::antigravity::is_ready();
+    }
     if let Some(adapter) = adapter_for(command_line) {
         return adapter.installed_bin().is_some();
     }
@@ -415,7 +421,7 @@ async fn login_shell_path() -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
-fn shell_quote(path: &Path) -> String {
+pub(super) fn shell_quote(path: &Path) -> String {
     let s = path.to_string_lossy();
     if cfg!(windows) {
         format!("\"{s}\"")

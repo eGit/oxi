@@ -193,6 +193,7 @@ pub(crate) async fn run_provider_loop(
         | LlmProviderKind::CursorAcp
         | LlmProviderKind::CodexAcp
         | LlmProviderKind::MuseCodeAcp
+        | LlmProviderKind::AntigravityAcp
         | LlmProviderKind::CopilotAcp => {
             Err(
                 "ACP agents run their own agent loop; oxi cannot drive them as a plain model."

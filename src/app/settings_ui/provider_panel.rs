@@ -65,6 +65,10 @@ impl OxiApp {
                     ui,
                     "Shell command for the ACP server. Leave empty for the recommended default.",
                 );
+                if kind == LlmProviderKind::AntigravityAcp {
+                    field_hint(ui, "The official server is downloaded on first launch. Sign in with Google in the browser when prompted, or provide a Gemini API key below. Models are listed in the composer.");
+                    ui.hyperlink_to("Antigravity authentication and plans", "https://antigravity.google/docs/ide/extensions/zed/");
+                }
                 ui.add_space(4.0);
                 if crate::ui::chrome::ghost_button(ui, "Test launch", false)
                     .on_hover_text("Start the agent once to check it runs; failures include installation hints")
@@ -143,6 +147,7 @@ impl OxiApp {
                 LlmProviderKind::CopilotAcp => {
                     "Optional COPILOT_GITHUB_TOKEN (else Copilot CLI's own login is used)"
                 }
+                LlmProviderKind::AntigravityAcp => "Optional GEMINI_API_KEY (else Google account sign-in is used)",
                 LlmProviderKind::Router => "",
             };
             settings_password_field(
