@@ -368,6 +368,14 @@ fn option_row(ui: &mut Ui, option: &SelectOption, highlighted: bool) -> Response
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            option.selected,
+            &option.label,
+        )
+    });
     let painter = ui.painter();
     if highlighted {
         painter.rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
@@ -419,6 +427,9 @@ fn quiet_button(ui: &mut Ui, text: &str, max_w: f32, open: bool) -> Response {
     let size = egui::vec2(galley.size().x + CHEVRON_W + 2.0 * pad.x, height);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), text)
+    });
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if open || resp.hovered() {
