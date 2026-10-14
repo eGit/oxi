@@ -272,7 +272,11 @@ impl OxiApp {
         }
 
         // Auto-compaction: if the context is near full, summarize first and defer this send.
-        if !skip_autocompact && self.conv.compaction.is_none() {
+        // ACP agents compact their own context, which oxi's transcript summary can't shrink.
+        if !skip_autocompact
+            && self.conv.compaction.is_none()
+            && !self.ensure_session_config(key).provider.is_acp()
+        {
             let config = self.ensure_session_config(key);
             let mut provider = self.conv.settings.provider(config.provider).clone();
             provider.model_id = config.model_id;

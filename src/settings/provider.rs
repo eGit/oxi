@@ -435,6 +435,9 @@ impl ProviderConfig {
     /// The Copilot CLI is its own ACP server; `--acp` serves it over stdio.
     pub const DEFAULT_COPILOT_ACP_COMMAND: &'static str = "npx -y @github/copilot --acp";
 
+    /// Assumed window for an ACP agent that hasn't reported one yet.
+    pub const ACP_CONTEXT_WINDOW: usize = 1_000_000;
+
     pub fn is_acp(&self) -> bool {
         self.provider.is_acp()
     }
@@ -505,8 +508,13 @@ impl ProviderConfig {
 
     /// Resolve the effective context window in tokens for this provider.
     ///
-    /// Order: explicit override > built-in catalog > provider/model default.
+    /// Order: explicit override > built-in catalog > provider/model default. ACP agents report
+    /// their real window in `usage_update`; until the first one arrives they get
+    /// [`Self::ACP_CONTEXT_WINDOW`], and overrides don't apply (the agent manages its context).
     pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if self.is_acp() {
+            return Self::ACP_CONTEXT_WINDOW;
+        }
         if let Some(cw) = self.context_window
             && cw > 0
         {
