@@ -12,8 +12,9 @@ keywords = ["gui", "llm", "coding-agent", "egui", "chat"]
 categories = ["development-tools", "gui"]
 
 [dependencies]
-eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wayland", "wgpu", "x11"] }
-egui = "0.35"
+eframe = { version = "0.35", default-features = false, features = ["accesskit", "wayland", "wgpu", "x11"] }
+egui = { version = "0.35", default-features = false }
+unicode-segmentation = "1.13"
 egui_extras = { version = "0.35", features = ["all_loaders", "syntect"] }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 tree-sitter = "0.27.0"
@@ -51,6 +52,7 @@ walkdir = "2"
 # ripgrep's walker: the agent's search tools honour .gitignore like rg does.
 ignore = "0.4"
 fontdb = "0.24"
+memmap2 = "0.9"
 # Same version egui reads font metrics with; used to center text faces optically in their rows.
 skrifa = "0.42"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
@@ -96,6 +98,9 @@ zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 winresource = "0.1"
 
 [dev-dependencies]
+# Bare test contexts that never call `theme::setup_style` still need some font; release builds
+# install only Oxi's bundled faces (resolver 2 keeps dev features out of them).
+egui = { version = "0.35", features = ["default_fonts"] }
 egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
 wiremock = "0.6"
 

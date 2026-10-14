@@ -7,9 +7,7 @@ use std::hash::{Hash, Hasher};
 use base64::Engine as _;
 use eframe::egui::load::BytesPoll;
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{
-    Align, CornerRadius, CursorIcon, FontId, Hyperlink, Image, RichText, Sense, Stroke, Ui,
-};
+use eframe::egui::{Align, CornerRadius, CursorIcon, FontId, Image, RichText, Sense, Stroke, Ui};
 use pulldown_cmark::{Event, Tag, TagEnd};
 
 use crate::theme::*;
@@ -189,15 +187,16 @@ pub(super) fn render_inline_until(
     end: InlineEnd,
     density: InlineDensity,
 ) {
-    // Links and inline images must participate in the same wrapping row as the surrounding
-    // text. Without this horizontal layout, every flushed text run and `Hyperlink` is added to
-    // the parent's default vertical layout, making each link look like it has a newline around it.
+    // Inline images participate in the same wrapping row as the surrounding text. Links
+    // stay inside the text galley so selection and copying remain continuous.
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
 
         let mut job = LayoutJob::default();
         set_job_wrap(&mut job, wrap_w);
 
+        let mut links = Vec::new();
+        let mut active_link: Option<(usize, usize, String)> = None;
         let mut bold = 0u32;
         let mut italic = 0u32;
         let mut strike = 0u32;
@@ -238,67 +237,24 @@ pub(super) fn render_inline_until(
                         inline_text_format(SZ_BODY, bold, italic > 0, density),
                     );
                 }
-                Event::Start(Tag::Link {
-                    link_type: _,
-                    dest_url,
-                    title: _,
-                    id: _,
-                }) => {
-                    if !job.text.is_empty() {
-                        selectable_job(ui, std::mem::take(&mut job));
-                        set_job_wrap(&mut job, wrap_w);
-                    }
-                    let dest = dest_url.to_string();
-                    let mut label = String::new();
-                    while let Some(inner) = it.next() {
-                        match inner {
-                            Event::End(TagEnd::Link) => break,
-                            Event::Text(t) => label.push_str(t.as_ref()),
-                            Event::Code(c) => label.push_str(c.as_ref()),
-                            Event::SoftBreak => label.push(' '),
-                            Event::HardBreak => label.push('\n'),
-                            Event::Html(t) | Event::InlineHtml(t) => label.push_str(t.as_ref()),
-                            Event::FootnoteReference(t) => {
-                                label.push_str(&format!("[^{}]", t));
-                            }
-                            Event::TaskListMarker(done) => {
-                                label.push_str(if done { "[x] " } else { "[ ] " });
-                            }
-                            Event::Start(Tag::Image { dest_url, .. }) => {
-                                if !label.is_empty() {
-                                    ui.add(Hyperlink::from_label_and_url(
-                                        RichText::new(std::mem::take(&mut label))
-                                            .color(c_accent())
-                                            .size(SZ_BODY),
-                                        &dest,
-                                    ));
-                                }
-                                let mut alt = String::new();
-                                for inner in it.by_ref() {
-                                    match inner {
-                                        Event::End(TagEnd::Image) => break,
-                                        Event::Text(text) | Event::Code(text) => {
-                                            alt.push_str(&text)
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                render_markdown_inline_image(ui, wrap_w, &dest_url, &alt, false);
-                            }
-                            Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                            _ => {}
-                        }
-                    }
-                    if !label.is_empty() {
-                        ui.add(Hyperlink::from_label_and_url(
-                            RichText::new(label).color(c_accent()).size(SZ_BODY),
-                            dest,
-                        ));
-                    }
+                Event::Start(Tag::Link { dest_url, .. }) => {
+                    active_link = Some((
+                        job.text.chars().count(),
+                        job.text.len(),
+                        dest_url.into_string(),
+                    ));
+                }
+                Event::End(TagEnd::Link) => {
+                    finish_link(&mut job, &mut links, active_link.take());
                 }
                 Event::Start(Tag::Image { dest_url, .. }) => {
                     if !job.text.is_empty() {
-                        selectable_job(ui, std::mem::take(&mut job));
+                        if let Some((start, section, url)) = active_link.take() {
+                            finish_link(&mut job, &mut links, Some((start, section, url.clone())));
+                            active_link = Some((0, 0, url));
+                        }
+                        selectable_text_job_with_links(ui, std::mem::take(&mut job), &links);
+                        links.clear();
                         set_job_wrap(&mut job, wrap_w);
                     }
                     let mut alt = String::new();
@@ -345,7 +301,8 @@ pub(super) fn render_inline_until(
                 _ => {}
             }
         }
-        selectable_job(ui, job);
+        finish_link(&mut job, &mut links, active_link.take());
+        selectable_text_job_with_links(ui, job, &links);
     });
     let tail = match (end, density) {
         (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::Normal) => 1.5,
@@ -356,4 +313,192 @@ pub(super) fn render_inline_until(
 
 pub(super) fn selectable_job(ui: &mut Ui, job: LayoutJob) {
     crate::theme::selectable_text_job(ui, job);
+}
+
+/// Record the link inside the same galley, preserving emphasis and inline-code formatting.
+/// `link` holds the start as (char offset, byte offset, url). `LayoutJob::append` merges runs
+/// with equal formats, so the section holding the link start may also hold preceding text and
+/// must be split before recoloring.
+fn finish_link(
+    job: &mut LayoutJob,
+    links: &mut Vec<TextLink>,
+    link: Option<(usize, usize, String)>,
+) {
+    let Some((start, start_byte, url)) = link else {
+        return;
+    };
+    let end = job.text.chars().count();
+    if start >= end {
+        return;
+    }
+    if let Some(i) = job
+        .sections
+        .iter()
+        .position(|s| s.byte_range.start.0 < start_byte && start_byte < s.byte_range.end.0)
+    {
+        let mut tail = job.sections[i].clone();
+        job.sections[i].byte_range.end.0 = start_byte;
+        tail.byte_range.start.0 = start_byte;
+        tail.leading_space = 0.0;
+        job.sections.insert(i + 1, tail);
+    }
+    for section in &mut job.sections {
+        if section.byte_range.start.0 >= start_byte {
+            section.format.color = c_accent();
+            section.format.underline = Stroke::new(1.0, c_accent());
+        }
+    }
+    links.push(TextLink {
+        range: start..end,
+        url,
+    });
+}
+
+#[cfg(test)]
+mod link_selection_tests {
+    use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
+
+    const MARKDOWN: &str = "Și înainte [**open source cu diacritice șț 🔗 1️⃣ ❤️‍🔥 și mai multe cuvinte**](https://example.com/font) după.";
+    const TEXT: &str =
+        "Și înainte open source cu diacritice șț 🔗 1️⃣ ❤️‍🔥 și mai multe cuvinte după.";
+
+    fn frame(ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(270.0, 300.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| crate::markdown::render_markdown(ui, MARKDOWN),
+        )
+    }
+
+    fn pointer(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    fn text_shape(output: &egui::FullOutput) -> &egui::epaint::TextShape {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == TEXT => Some(text),
+                _ => None,
+            })
+            .expect("the paragraph and its link must be one selectable text galley")
+    }
+
+    fn opens_url(output: &egui::FullOutput) -> bool {
+        output.platform_output.commands.iter().any(|command| {
+            matches!(command,
+            egui::OutputCommand::OpenUrl(url) if url.url == "https://example.com/font")
+        })
+    }
+
+    /// A plain link after plain text shares its format, so `append` merges the two runs.
+    #[test]
+    fn plain_link_after_plain_text_gets_link_style() {
+        let ctx = egui::Context::default();
+        crate::theme::setup_style(&ctx);
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            crate::markdown::render_markdown(ui, "Este [open source](https://rsms.me/inter/).")
+        });
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Este open source." => {
+                    Some(text.galley.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let styled = |range: std::ops::Range<usize>| {
+            galley.job.sections.iter().any(|s| {
+                s.byte_range.start.0 <= range.start
+                    && range.end <= s.byte_range.end.0
+                    && s.format.color == crate::theme::c_accent()
+                    && s.format.underline.width > 0.0
+            })
+        };
+        assert!(styled(5..16), "link text must be accent + underlined");
+        assert!(
+            !styled(0..4) && !styled(16..17),
+            "surrounding text keeps body style"
+        );
+    }
+
+    #[test]
+    fn wrapped_link_is_selected_and_copied_in_both_directions() {
+        for backwards in [false, true] {
+            let ctx = egui::Context::default();
+            crate::theme::setup_style(&ctx);
+            let output = frame(&ctx, vec![]);
+            let text = text_shape(&output);
+            assert!(text.galley.rows.len() > 1);
+            let first = text.galley.rows.first().unwrap();
+            let last = text.galley.rows.last().unwrap();
+            let a = text.pos + first.pos.to_vec2() + egui::vec2(0.0, first.row.height() / 2.0);
+            let b = text.pos
+                + last.pos.to_vec2()
+                + egui::vec2(last.row.size.x, last.row.height() / 2.0);
+            let (start, end) = if backwards { (b, a) } else { (a, b) };
+            frame(&ctx, vec![Event::PointerMoved(start), pointer(start, true)]);
+            let selected = frame(&ctx, vec![Event::PointerMoved(end)]);
+            let selected_text = text_shape(&selected);
+            assert!(selected_text.galley.rows.iter().zip(&text.galley.rows).all(
+                |(selected, original)| selected.row.visuals.mesh.vertices.len()
+                    == original.row.visuals.mesh.vertices.len() + 4
+            ));
+            assert!(!opens_url(&selected));
+            let released = frame(&ctx, vec![pointer(end, false)]);
+            assert!(!opens_url(&released));
+            let copied = frame(&ctx, vec![Event::Copy]);
+            assert!(
+                copied
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command,
+                egui::OutputCommand::CopyText(text) if text == TEXT))
+            );
+        }
+    }
+
+    #[test]
+    fn link_click_opens_but_drag_from_link_selects() {
+        let ctx = egui::Context::default();
+        crate::theme::setup_style(&ctx);
+        let output = frame(&ctx, vec![]);
+        let text = text_shape(&output);
+        let range = egui::text::CCursorRange::two(
+            egui::text::CCursor::new("Și înainte ".chars().count()),
+            egui::text::CCursor::new(TEXT.chars().count() - " după.".chars().count()),
+        );
+        let rects =
+            crate::ui::text_selection::galley_selection_rects(&text.galley, text.pos, range);
+        assert!(rects.len() > 1, "exercise a link spanning wrapped rows");
+        let point = rects.last().unwrap().center();
+        frame(&ctx, vec![Event::PointerMoved(point), pointer(point, true)]);
+        assert!(opens_url(&frame(&ctx, vec![pointer(point, false)])));
+
+        frame(&ctx, vec![Event::PointerMoved(point), pointer(point, true)]);
+        let end = text.pos + egui::vec2(0.0, text.galley.rows[0].row.height() / 2.0);
+        frame(&ctx, vec![Event::PointerMoved(end)]);
+        assert!(!opens_url(&frame(&ctx, vec![pointer(end, false)])));
+        let copied = frame(&ctx, vec![Event::Copy]);
+        assert!(
+            copied
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(command,
+            egui::OutputCommand::CopyText(text) if text.contains("Și înainte open source")))
+        );
+    }
 }

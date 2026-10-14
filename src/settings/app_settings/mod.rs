@@ -132,7 +132,7 @@ pub struct AppSettings {
     /// How much tool output the transcript shows without a click.
     #[serde(default)]
     pub tool_detail: ToolDetail,
-    /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
+    /// Interface font id — `"default"` uses Inter; `bundled:<id>` or `system:<family>` selects a face.
     #[serde(default = "default_font_id")]
     pub ui_font: String,
     /// Code (monospace) font id — see `crate::theme::mono_font_options`.
