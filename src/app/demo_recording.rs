@@ -25,6 +25,7 @@ use crate::settings::LlmProviderKind;
 
 mod fixtures;
 mod stage;
+mod switch;
 
 use fixtures::{
     chunks, create_project, heavy_transcript, message, paint_traffic_lights, seed_chats,
@@ -42,7 +43,7 @@ const MODEL: &str = "qwen2.5-coder-7b-instruct-q4_k_m.gguf";
 fn record_demo() {
     let video = PathBuf::from(std::env::var("OXI_DEMO_VIDEO").expect("OXI_DEMO_VIDEO"));
     let stills = std::env::var_os("OXI_DEMO_STILLS").map(PathBuf::from);
-    let mut rec = setup(stills, Some(&video));
+    let mut rec = setup(stills, Some(&video), TOUR_CHAPTERS.to_vec());
     tour(&mut rec);
     if let Some(stage) = rec.stage.take() {
         stage.finish();
@@ -55,13 +56,17 @@ fn record_demo() {
 #[ignore = "renders UI review stills; set OXI_GALLERY to the output folder"]
 fn render_gallery() {
     let stills = PathBuf::from(std::env::var("OXI_GALLERY").expect("OXI_GALLERY"));
-    let mut rec = setup(Some(stills), None);
+    let mut rec = setup(Some(stills), None, Vec::new());
     run_gallery(&mut rec);
 }
 
 /// A fresh sample project, throwaway home and seeded app. With `video`, frames are composed on
-/// the stage and encoded there, paced to `FPS`.
-fn setup(stills: Option<PathBuf>, video: Option<&Path>) -> Recorder<'static> {
+/// the stage (with `chapters` on its rail) and encoded there, paced to `FPS`.
+fn setup(
+    stills: Option<PathBuf>,
+    video: Option<&Path>,
+    chapters: Vec<&'static str>,
+) -> Recorder<'static> {
     let scratch = std::env::temp_dir().join(format!("oxi-demo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let home = scratch.join("home");
@@ -101,7 +106,7 @@ fn setup(stills: Option<PathBuf>, video: Option<&Path>) -> Recorder<'static> {
         });
     Recorder {
         harness,
-        stage: video.map(|video| stage::Stage::new(video, FPS, TOUR_CHAPTERS.to_vec())),
+        stage: video.map(|video| stage::Stage::new(video, FPS, chapters)),
         stills,
         frame: 0,
         project: project.clone(),
@@ -1899,7 +1904,9 @@ impl Recorder<'_> {
         let (tx, rx) = mpsc::channel();
         let app = self.app();
         let key = app.active_session_key();
-        app.active_session_mut().title = crate::model::make_session_title(text);
+        if app.active_session().messages.is_empty() {
+            app.active_session_mut().title = crate::model::make_session_title(text);
+        }
         app.conv.composer.input.clear();
         app.conv.transcript.scroll_to_bottom_once = true;
         {

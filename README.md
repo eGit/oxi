@@ -5,8 +5,8 @@
 <h1 align="center">oxi</h1>
 
 <p align="center">
-  <b>The native coding agent for any model.</b><br />
-  Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for.<br />
+  <b>Your Claude Code, Codex and Cursor subscriptions in one conversation.</b><br />
+  Switch agents mid-chat and the context comes along. Or run open models on your own machine.<br />
   One Rust binary. No Electron, no account, around 70 MB of RAM.
 </p>
 
@@ -25,9 +25,9 @@
 </p>
 
 <p align="center">
-  <a href="https://maziluiosif.github.io/oxi/#demo"><img src="assets/demo/demo.gif" alt="A one-minute tour of oxi: local models, providers, the agent fixing a failing test, reviewing the diff, committing, plan mode and themes" /></a>
+  <img src="assets/demo/switch.gif" alt="Claude Code fixes a failing test, then the same chat is switched to Codex, which checks the fix knowing what Claude did" />
   <br />
-  <sub>One-minute tour, recorded from the real app. <a href="https://maziluiosif.github.io/oxi/#demo">Watch it in HD</a>.</sub>
+  <sub>Recorded from the real app. More in the <a href="https://maziluiosif.github.io/oxi/#demo">one-minute tour</a>.</sub>
 </p>
 
 ## Install
