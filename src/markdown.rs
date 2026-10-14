@@ -136,6 +136,45 @@ const MD_OPTIONS: Options = Options::ENABLE_STRIKETHROUGH
     .union(Options::ENABLE_SMART_PUNCTUATION)
     .union(Options::ENABLE_GFM);
 
+/// Markdown source of the `idx`-th top-level blockquote with its `>` markers removed, so a
+/// quoted reply pastes as the markdown it was written in. Parsed on demand (copy clicks only).
+fn blockquote_source(src: &str, idx: usize) -> String {
+    let mut depth = 0usize;
+    let mut seen = 0usize;
+    for (ev, range) in Parser::new_ext(src, MD_OPTIONS).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::BlockQuote(_)) if depth == 0 => {
+                if seen == idx {
+                    return strip_quote_markers(&src[range]);
+                }
+                seen += 1;
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    String::new()
+}
+
+/// Drop one level of `>` from each line; lazy continuation lines are kept as written.
+fn strip_quote_markers(quote: &str) -> String {
+    let lines: Vec<&str> = quote
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            match trimmed.strip_prefix('>') {
+                Some(rest) if line.len() - trimmed.len() <= 3 => {
+                    rest.strip_prefix([' ', '\t']).unwrap_or(rest)
+                }
+                _ => line,
+            }
+        })
+        .collect();
+    lines.join("\n").trim().to_string()
+}
+
 #[inline]
 fn line_height_for_body_size(size: f32) -> f32 {
     (size * 1.35).max(16.0)
@@ -164,6 +203,7 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
 
     let mut it = markdown_parser(src, base_dir);
     let mut fence_idx = 0u32;
+    let mut quote_idx = 0usize;
     while let Some(ev) = it.next() {
         match ev {
             Event::Start(Tag::Paragraph) => blocks::render_paragraph(ui, wrap_w, &mut it),
@@ -177,7 +217,10 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
                 fence_idx += 1;
                 render_fenced_block(ui, wrap_w, kind, &mut it, base);
             }
-            Event::Start(Tag::BlockQuote(_)) => render_blockquote(ui, wrap_w, &mut it),
+            Event::Start(Tag::BlockQuote(_)) => {
+                render_blockquote(ui, wrap_w, &mut it, src, quote_idx);
+                quote_idx += 1;
+            }
             Event::Start(Tag::HtmlBlock) => render_html_block(ui, wrap_w, &mut it),
             Event::Start(Tag::MetadataBlock(k)) => {
                 consume_until_end(&mut it, TagEnd::MetadataBlock(k));
@@ -409,5 +452,24 @@ mod image_uri_tests {
             .as_deref(),
             Some("file://server/share/oxi docs/imagine ș.png")
         );
+    }
+}
+
+#[cfg(test)]
+mod blockquote_source_tests {
+    use super::*;
+
+    #[test]
+    fn copies_the_nth_top_level_quote_as_markdown() {
+        let src = "Intro\n\n> First `code`\n>\n> second para\n\n- item\n  > in a list\n\n> Second\nlazy line\n";
+        assert_eq!(blockquote_source(src, 0), "First `code`\n\nsecond para");
+        // The quote nested in the list is not rendered as a top-level quote, so it is skipped.
+        assert_eq!(blockquote_source(src, 1), "Second\nlazy line");
+        assert_eq!(blockquote_source(src, 2), "");
+    }
+
+    #[test]
+    fn strips_only_one_marker_level() {
+        assert_eq!(strip_quote_markers("> a\n> > b\n>c"), "a\n> b\nc");
     }
 }

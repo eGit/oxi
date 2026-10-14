@@ -30,6 +30,11 @@ pub fn copied_recently(ctx: &egui::Context, id: egui::Id) -> bool {
 
 /// Frameless copy chip with transient success feedback.
 pub fn copy_chip(ui: &mut Ui, id: egui::Id, text: &str) {
+    copy_chip_lazy(ui, id, || text.to_string());
+}
+
+/// [`copy_chip`] that only builds the copied text when clicked.
+pub fn copy_chip_lazy(ui: &mut Ui, id: egui::Id, text: impl FnOnce() -> String) {
     let copied = copied_recently(ui.ctx(), id);
     let (icon, label, ink) = if copied {
         (ICON_CHECK, "Copied", crate::theme::c_success())
@@ -38,7 +43,7 @@ pub fn copy_chip(ui: &mut Ui, id: egui::Id, text: &str) {
     };
     let resp = flat_button_icon(ui, icon, label, FS_TINY, egui::vec2(0.0, 18.0), ink);
     if resp.clicked() {
-        ui.ctx().copy_text(text.to_string());
+        ui.ctx().copy_text(text());
         mark_copied(ui.ctx(), id);
     }
 }
