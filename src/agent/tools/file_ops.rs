@@ -526,20 +526,26 @@ pub(crate) fn tool_mkdir(
     if abs.exists() {
         return mutation_error(format!("Path already exists: {}", abs.display()));
     }
-    let Some(parent) = abs.parent() else {
-        return mutation_error("directory has no parent");
-    };
-    if !parent.is_dir() {
-        return mutation_error("parent directory does not exist; create it first");
+    // Like `mkdir -p`: models ask for `src/main/java/com/example` in one call. Every missing
+    // level is journaled so undo removes the whole chain, not just the leaf.
+    let missing: Vec<&Path> = abs.ancestors().take_while(|dir| !dir.exists()).collect();
+    if let Some(blocker) = missing.last().and_then(|top| top.parent())
+        && !blocker.is_dir()
+    {
+        return mutation_error(format!("Not a directory: {}", blocker.display()));
     }
-    if let Err(e) = journal_before(undo, &abs) {
-        return mutation_error(e);
+    for dir in &missing {
+        if let Err(e) = journal_before(undo, dir) {
+            return mutation_error(e);
+        }
     }
-    if let Err(e) = fs::create_dir(&abs) {
+    if let Err(e) = fs::create_dir_all(&abs) {
         return mutation_error(format!("Create directory {}: {e}", abs.display()));
     }
-    if let Err(e) = journal_after(undo, &abs) {
-        return mutation_error(e);
+    for dir in &missing {
+        if let Err(e) = journal_after(undo, dir) {
+            return mutation_error(e);
+        }
     }
     ToolResult {
         output: format!("Created directory {}", abs.display()),

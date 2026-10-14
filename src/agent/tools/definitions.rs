@@ -116,7 +116,7 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                 "type": "function",
                 "function": {
                     "name": "mkdir",
-                    "description": "Create one directory inside the workspace. Its parent directory must already exist.",
+                    "description": "Create a directory inside the workspace, including any missing parent directories (like `mkdir -p`).",
                     "parameters": {
                         "type": "object",
                         "properties": {
