@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-10-14
+
+### Added
+- **Fonts:** Support for Arabic, Hebrew, Devanagari, Armenian, Georgian, and mathematical symbols; system fonts for CJK characters load on startup instead of bundling.
+- **Agents:** Google Antigravity provider available through official ACP server with Google or Gemini API key sign-in.
+- **Chat:** Preserve conversations when switching between agents and resume after quota resets.
+- **UI:** Selectable and clickable markdown links with accent color and underline; copy button on blockquotes.
+- **Settings:** Show agent configuration options in the composer before launch completes, with defaults remembered from previous launches.
+
+### Changed
+- **Fonts:** Default interface font changed to Inter, code font to JetBrains Mono; Noto Sans and Ubuntu Mono remain as fallbacks.
+- **Settings:** ACP model card removed in favor of composer pickers; test launch moved to Connection panel.
+- **Agents:** Context window defaults to 1M for ACP agents, which now handle their own compaction.
+
+### Fixed
+- **UI:** Select menus and options now have accessible labels for screen readers and UI tests.
+- **Security:** Updated rustls to 0.23.46 for security fixes.
+
+
 ## [1.17.1] - 2026-10-14
 
 ### Fixed
@@ -1064,7 +1083,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.17.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.18.0...HEAD
+[1.18.0]: https://github.com/maziluiosif/oxi/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/maziluiosif/oxi/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/maziluiosif/oxi/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/maziluiosif/oxi/compare/v1.15.0...v1.16.0
