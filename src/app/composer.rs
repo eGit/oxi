@@ -157,6 +157,9 @@ fn composer_text_edit(
                 .max_height(160.0)
                 .show(ui, |ui| {
                     let selection_shape = ui.painter().add(egui::Shape::Noop);
+                    // Under the TextEdit: painted on top, the hint's first glyph (the stem of
+                    // "M") hid the caret, which sits at the same x on an empty draft.
+                    let hint_shape = ui.painter().add(egui::Shape::Noop);
                     let output = ui
                         .scope(|ui| {
                             ui.visuals_mut().selection.bg_fill = Color32::TRANSPARENT;
@@ -184,10 +187,9 @@ fn composer_text_edit(
                                 output.response.rect.width(),
                                 egui::TextStyle::Body,
                             );
-                        ui.painter().with_clip_rect(output.response.rect).galley(
-                            output.galley_pos,
-                            galley,
-                            c_text_faint(),
+                        ui.painter().with_clip_rect(output.response.rect).set(
+                            hint_shape,
+                            egui::Shape::galley(output.galley_pos, galley, c_text_faint()),
                         );
                     }
                     if let Some(range) = output.cursor_range
