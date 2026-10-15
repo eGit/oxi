@@ -212,6 +212,8 @@ struct Server {
     chats: HashMap<String, Chat>,
     /// Provider/model last picked in the editor; new chats start with it.
     last_config: Option<SessionConfig>,
+    /// Git requests run one after another on their own thread, in the order they came.
+    git_jobs: Option<Sender<(Value, String, crate::git::GitOp)>>,
     next_run: u64,
     last_flush: Instant,
 }
@@ -231,6 +233,7 @@ impl Server {
             mcp: crate::agent::mcp::McpManager::new(),
             chats: HashMap::new(),
             last_config: None,
+            git_jobs: None,
             next_run: 1,
             last_flush: Instant::now(),
         }
@@ -310,6 +313,20 @@ impl Server {
                 // Answered from a worker thread once the agent is up.
                 Ok(None) => return true,
                 Ok(Some(result)) => Ok(result),
+                Err(e) => Err(e),
+            },
+            "chat.image" => self.chat_image(&params),
+            // Answered from worker threads.
+            "git" => match self.git(&params, id.clone()) {
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
+            "git.commit_message" => match self.commit_message(&params, id.clone()) {
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
+            "quota.get" => match self.quota(&params, id.clone()) {
+                Ok(()) => return true,
                 Err(e) => Err(e),
             },
             "shutdown" => {
@@ -522,17 +539,7 @@ impl Server {
                 .to_string(),
             attachments: params["attachments"]
                 .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|a| {
-                            Some(UserAttachment::Text {
-                                name: a["name"].as_str().unwrap_or("Attached text").to_string(),
-                                text: a["text"].as_str()?.to_string(),
-                            })
-                        })
-                        .collect()
-                })
+                .map(|items| items.iter().filter_map(attachment_param).collect())
                 .unwrap_or_default(),
             plan: params["plan"].as_bool(),
         };
@@ -601,8 +608,14 @@ impl Server {
             }
         };
         if chat.session.messages.is_empty() && chat.session.session_file.is_none() {
+            let image = prompt
+                .attachments
+                .iter()
+                .any(|a| matches!(a, UserAttachment::Image { .. }));
             chat.session.title = if !prompt.text.is_empty() {
                 make_session_title(&prompt.text)
+            } else if image {
+                "Image".to_string()
             } else {
                 "Pasted text".to_string()
             };
@@ -1042,6 +1055,130 @@ impl Server {
         Ok(None)
     }
 
+    /// An image attached to a user message, as base64.
+    fn chat_image(&mut self, params: &Value) -> Result<Value, String> {
+        use base64::Engine as _;
+        let root = root_param(params)?;
+        let id = str_param(params, "chat")?;
+        let message = params["message"]
+            .as_u64()
+            .ok_or("missing parameter: message")? as usize;
+        let index = params["index"].as_u64().ok_or("missing parameter: index")? as usize;
+        let chat = self.load_chat(&root, &id)?;
+        match chat
+            .session
+            .messages
+            .get(message)
+            .and_then(|m| m.attachments.get(index))
+        {
+            Some(UserAttachment::Image { mime, data }) => Ok(json!({
+                "mime": mime,
+                "data": base64::engine::general_purpose::STANDARD.encode(data),
+            })),
+            _ => Err("No image there".into()),
+        }
+    }
+
+    /// Queue a git operation on the workspace's repository; the reply is the repository
+    /// state after it (see [`git_state_json`]).
+    fn git(&mut self, params: &Value, id: Value) -> Result<(), String> {
+        let root = root_param(params)?;
+        let op = git_op_param(params)?;
+        let jobs = match &self.git_jobs {
+            Some(jobs) => jobs.clone(),
+            None => {
+                let (jobs, rx) = mpsc::channel::<(Value, String, crate::git::GitOp)>();
+                let tx = self.tx.clone();
+                std::thread::Builder::new()
+                    .name("oxi-headless-git".into())
+                    .spawn(move || {
+                        for (id, root, op) in rx {
+                            let state = crate::git::run_op(&root, op);
+                            let result = Ok(git_state_json(&state));
+                            if tx.send(Input::Reply { id, result }).is_err() {
+                                return;
+                            }
+                        }
+                    })
+                    .map_err(|e| format!("Start the git worker: {e}"))?;
+                self.git_jobs = Some(jobs.clone());
+                jobs
+            }
+        };
+        jobs.send((id, root, op))
+            .map_err(|_| "The git worker stopped".to_string())
+    }
+
+    /// Write a commit message for the staged changes (or all of them when nothing is
+    /// staged) with the model set for commit messages in the app.
+    fn commit_message(&mut self, params: &Value, id: Value) -> Result<(), String> {
+        self.refresh_settings();
+        let root = root_param(params)?;
+        let settings = self.settings.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let state = crate::git::run_op(&root, crate::git::GitOp::CollectCommitDiff);
+                let diff = state.commit_diff.ok_or_else(|| {
+                    state
+                        .error
+                        .unwrap_or_else(|| "No changes to summarize.".to_string())
+                })?;
+                let config = crate::router::helper_config(
+                    &settings,
+                    settings.commit_msg_config(),
+                    diff.len(),
+                );
+                let (rx, _handle) = crate::agent::spawn_completion(crate::agent::CompleteRequest {
+                    config,
+                    system_prompt: settings.commit_msg_system_prompt.clone(),
+                    user_prompt: format!(
+                        "Write a git commit message for the following diff.\n\n```diff\n{diff}\n```"
+                    ),
+                    max_chars: Some(1500),
+                    effort_override: Some("low".to_string()),
+                });
+                for event in rx {
+                    if let crate::agent::CompleteEvent::Done(result) = event {
+                        return result.map(|text| json!({"message": text.trim()}));
+                    }
+                }
+                Err("Generation stopped unexpectedly.".to_string())
+            })();
+            let _ = tx.send(Input::Reply { id, result });
+        });
+        Ok(())
+    }
+
+    /// The subscription usage windows (5h, weekly) of a provider whose usage oxi can read.
+    fn quota(&mut self, params: &Value, id: Value) -> Result<(), String> {
+        use crate::router::quota;
+        self.refresh_settings();
+        let kind = provider_from_slug(&str_param(params, "provider")?)?;
+        let router = &self.settings.router;
+        let enabled = match kind {
+            LlmProviderKind::ClaudeCodeAcp => Some(router.read_claude_code_usage),
+            LlmProviderKind::CodexAcp => Some(router.read_codex_cli_usage),
+            LlmProviderKind::GptCodex => Some(true),
+            _ => None,
+        };
+        if enabled == Some(false) {
+            self.reply(id, Ok(quota_json(kind, enabled, None)));
+            return Ok(());
+        }
+        let settings = self.settings.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            // Throttled inside: a call soon after the last one only reads the board.
+            if let Ok(rt) = crate::runtime::runtime() {
+                rt.block_on(quota::refresh(&settings, false));
+            }
+            let result = Ok(quota_json(kind, enabled, quota::snapshot(kind)));
+            let _ = tx.send(Input::Reply { id, result });
+        });
+        Ok(())
+    }
+
     fn send_message_snapshot(&self, id: &str, index: usize) {
         if let Some(message) = self
             .chats
@@ -1162,6 +1299,145 @@ fn provider_from_slug(slug: &str) -> Result<LlmProviderKind, String> {
         .ok_or_else(|| format!("unknown provider: {slug}"))
 }
 
+/// A prompt attachment: `{"name", "text"}` for text, `{"mime", "data"}` (base64) for images.
+fn attachment_param(value: &Value) -> Option<UserAttachment> {
+    use base64::Engine as _;
+    if let Some(data) = value["data"].as_str() {
+        let mime = value["mime"].as_str().unwrap_or("image/png");
+        if !mime.starts_with("image/") {
+            return None;
+        }
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data.trim())
+            .ok()?;
+        return Some(UserAttachment::Image {
+            mime: mime.to_string(),
+            data,
+        });
+    }
+    Some(UserAttachment::Text {
+        name: value["name"]
+            .as_str()
+            .unwrap_or("Attached text")
+            .to_string(),
+        text: value["text"].as_str()?.to_string(),
+    })
+}
+
+fn paths_param(params: &Value) -> Result<Vec<String>, String> {
+    let paths: Vec<String> = params["paths"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return Err("missing parameter: paths".into());
+    }
+    Ok(paths)
+}
+
+fn git_op_param(params: &Value) -> Result<crate::git::GitOp, String> {
+    use crate::git::GitOp;
+    Ok(match params["op"].as_str().unwrap_or("refresh") {
+        "refresh" => GitOp::Refresh,
+        "stage" => GitOp::Stage(paths_param(params)?),
+        "unstage" => GitOp::Unstage(paths_param(params)?),
+        "discard" => GitOp::Discard(paths_param(params)?),
+        "commit" => {
+            let message = str_param(params, "message")?;
+            if message.trim().is_empty() {
+                return Err("The commit message is empty".into());
+            }
+            GitOp::Commit(message)
+        }
+        "checkout" => GitOp::Checkout(str_param(params, "branch")?),
+        "new_branch" => GitOp::NewBranch(str_param(params, "branch")?.trim().to_string()),
+        "diff" => GitOp::ShowDiff {
+            path: str_param(params, "path")?,
+            staged: params["staged"].as_bool().unwrap_or(false),
+        },
+        "show_commit" => GitOp::ShowCommit(str_param(params, "hash")?),
+        "fetch" => GitOp::Fetch,
+        "pull" => GitOp::Pull,
+        "push" => GitOp::Push,
+        other => return Err(format!("unknown git op: {other}")),
+    })
+}
+
+fn git_state_json(state: &crate::git::GitState) -> Value {
+    let entries = |entries: &[crate::git::GitEntry]| {
+        entries
+            .iter()
+            .map(|e| json!({"path": e.path, "status": e.status.to_string()}))
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "repo": state.repo,
+        "branch": state.branch,
+        "branches": state.branches,
+        "ahead": state.ahead,
+        "behind": state.behind,
+        "staged": entries(&state.staged),
+        "unstaged": entries(&state.unstaged),
+        "log": state.log.iter().map(|c| json!({
+            "hash": c.hash,
+            "date": c.date,
+            "author": c.author,
+            "message": c.message,
+        })).collect::<Vec<_>>(),
+        "diff": state.diff.as_ref().map(|(title, text)| json!({"title": title, "text": text})),
+        "error": state.error,
+    })
+}
+
+fn quota_json(
+    kind: LlmProviderKind,
+    enabled: Option<bool>,
+    snapshot: Option<crate::router::quota::QuotaSnapshot>,
+) -> Value {
+    let now = crate::router::quota::now_secs();
+    let Some(snap) = snapshot else {
+        return json!({
+            "provider": kind.slug(),
+            "supported": enabled.is_some(),
+            "enabled": enabled.unwrap_or(false),
+            "windows": [],
+        });
+    };
+    let windows: Vec<Value> = snap
+        .windows
+        .iter()
+        .map(|w| {
+            // A window whose reset already passed is empty again.
+            let (used, resets_in) = match w.resets_at {
+                Some(t) if t <= now => (0.0, None),
+                Some(t) => (w.used_pct, Some(t - now)),
+                None => (w.used_pct, None),
+            };
+            json!({
+                "label": w.label,
+                "used_pct": used,
+                "resets_in": resets_in,
+                "scope": w.model_scope,
+            })
+        })
+        .collect();
+    json!({
+        "provider": kind.slug(),
+        "supported": true,
+        "enabled": true,
+        "windows": windows,
+        "plan": snap.plan,
+        "credits_left": snap.credits_left,
+        "limit_reached": snap.limit_reached,
+        "error": snap.error,
+    })
+}
+
 fn config_json(config: &SessionConfig) -> Value {
     json!({
         "provider": config.provider.slug(),
@@ -1224,11 +1500,21 @@ fn message_json(message: &ChatMessage) -> Value {
                 UserAttachment::Image { mime, .. } => json!(format!("image ({mime})")),
             })
             .collect();
+        let images: Vec<Value> = message
+            .attachments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, a)| match a {
+                UserAttachment::Image { mime, .. } => Some(json!({"index": index, "mime": mime})),
+                UserAttachment::Text { .. } => None,
+            })
+            .collect();
         return json!({
             "role": "user",
             "text": crate::app::mentions::strip_mention_context(&message.text),
             "summary": message.is_summary,
             "attachments": attachments,
+            "images": images,
         });
     }
     let blocks: Vec<Value> = message
@@ -1362,6 +1648,67 @@ mod tests {
         let value = message_json(&ChatMessage::user(&expanded, &[]));
         assert_eq!(value["text"], "look at @a.txt");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_attachments_round_trip_as_base64() {
+        use base64::Engine as _;
+        let data = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+        let image = attachment_param(&json!({"mime": "image/png", "data": data}));
+        assert!(
+            matches!(&image, Some(UserAttachment::Image { mime, data }) if mime == "image/png" && data == &[1, 2, 3])
+        );
+        assert!(attachment_param(&json!({"mime": "text/plain", "data": data})).is_none());
+        let text = attachment_param(&json!({"name": "a", "text": "b"}));
+        assert!(matches!(text, Some(UserAttachment::Text { .. })));
+
+        let message = ChatMessage::user("look", &[image.unwrap()]);
+        let value = message_json(&message);
+        assert_eq!(value["images"][0]["index"], 0);
+        assert_eq!(value["images"][0]["mime"], "image/png");
+    }
+
+    #[test]
+    fn git_ops_need_their_parameters() {
+        use crate::git::GitOp;
+        assert!(matches!(git_op_param(&json!({})), Ok(GitOp::Refresh)));
+        assert!(matches!(
+            git_op_param(&json!({"op": "stage", "paths": ["a"]})),
+            Ok(GitOp::Stage(p)) if p == ["a"]
+        ));
+        assert!(git_op_param(&json!({"op": "stage"})).is_err());
+        assert!(git_op_param(&json!({"op": "commit", "message": "  "})).is_err());
+        assert!(git_op_param(&json!({"op": "rebase"})).is_err());
+    }
+
+    #[test]
+    fn quota_windows_past_their_reset_read_empty() {
+        use crate::router::quota::{QuotaSnapshot, UsageWindow, now_secs};
+        let now = now_secs();
+        let snap = QuotaSnapshot {
+            windows: vec![
+                UsageWindow {
+                    label: "5h".into(),
+                    used_pct: 40.0,
+                    resets_at: Some(now + 600),
+                    model_scope: None,
+                },
+                UsageWindow {
+                    label: "7d".into(),
+                    used_pct: 90.0,
+                    resets_at: Some(now.saturating_sub(5)),
+                    model_scope: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let value = quota_json(LlmProviderKind::ClaudeCodeAcp, Some(true), Some(snap));
+        assert_eq!(value["windows"][0]["used_pct"], 40.0);
+        assert!(value["windows"][0]["resets_in"].as_u64().unwrap() <= 600);
+        assert_eq!(value["windows"][1]["used_pct"], 0.0);
+        let off = quota_json(LlmProviderKind::ClaudeCodeAcp, Some(false), None);
+        assert_eq!(off["enabled"], false);
+        assert_eq!(off["supported"], true);
     }
 
     #[test]

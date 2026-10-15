@@ -296,6 +296,9 @@ class Panel:
         self.approval = None
         self.status = None
         self.context = None
+        # Usage windows of the chat's provider (`quota.get`), shown in the toolbar.
+        self.quota = None
+        self.quota_provider = None
         self.loading = False
         self.chats = []
         self.chat_rows = []
@@ -382,6 +385,43 @@ class Panel:
             self.open_chat(last_chat)
         self.refresh_chats()
         self.focus_composer()
+        self.poll_quota()
+
+    def poll_quota(self):
+        if not self.alive():
+            return
+        self.refresh_quota()
+        sublime.set_timeout(self.poll_quota, QUOTA_POLL_MS)
+
+    def refresh_quota(self):
+        provider = (self.config or {}).get("provider")
+        self.quota_provider = provider
+        if not provider:
+            return
+
+        def done(result, error):
+            if self.quota_provider != provider or not self.alive():
+                return
+            self.quota = None if error else result
+            self.refresh_toolbar()
+
+        request("quota.get", {"provider": provider}, done)
+
+    def quota_html(self):
+        quota = self.quota or {}
+        if quota.get("provider") != self.quota_provider or not quota.get("windows"):
+            return ""
+        parts = []
+        for window in quota["windows"]:
+            used = float(window.get("used_pct") or 0)
+            text = "{} {:.0f}%".format(window.get("label") or "", used)
+            if window.get("resets_in"):
+                text += " ↻" + render.format_duration(window["resets_in"])
+            level = "full" if used >= 90 else "high" if used >= 70 else "muted"
+            parts.append('<span class="{}">{}</span>'.format(level, html.escape(text)))
+        if quota.get("limit_reached"):
+            parts.append('<span class="full">limit reached</span>')
+        return " · ".join(parts)
 
     def editor_group(self):
         """A group for files opened from the chat, outside the oxi columns.
@@ -724,6 +764,7 @@ class Panel:
         outcome = params.get("outcome")
         if outcome:
             self.status = None
+            self.refresh_quota()
             self.render_all()
             if outcome == "failed" and params.get("error"):
                 sublime.status_message("oxi: " + render.one_line(params["error"], 160))
@@ -882,8 +923,13 @@ class Panel:
             ))
         if composer.size() == 0 and not notes:
             notes.append("Enter sends · Shift+Enter new line · @ attaches a file")
-        content = '<body id="oxi-toolbar">{}{} <span class="muted">{}</span></body>'.format(
-            TOOLBAR_STYLE, " ".join(items), html.escape(" · ".join(notes))
+        if config.get("provider") != self.quota_provider:
+            self.quota = None
+            self.refresh_quota()
+        quota = self.quota_html()
+        content = '<body id="oxi-toolbar">{}{} <span class="muted">{}</span>{}</body>'.format(
+            TOOLBAR_STYLE, " ".join(items), html.escape(" · ".join(notes)),
+            '<br><span class="muted">usage</span> ' + quota if quota else "",
         )
         # Under the last line, so it never splits a multi-line message.
         end = composer.size()
@@ -1083,7 +1129,12 @@ a { text-decoration: none; color: var(--foreground); }
 .on { background-color: color(var(--bluish) alpha(0.3)); }
 .stop { color: var(--redish); }
 .muted { color: color(var(--foreground) alpha(0.55)); }
+.high { color: var(--yellowish); }
+.full { color: var(--redish); }
 </style>"""
+
+# `quota.get` is throttled in oxi, so polling only rereads usage now and then.
+QUOTA_POLL_MS = 120000
 
 APPROVAL_STYLE = """<style>
 .card { background-color: color(var(--yellowish) alpha(0.12)); border-left: 0.25rem solid var(--yellowish); padding: 0.6rem 0.8rem; margin: 0.4rem 0; }
@@ -1569,6 +1620,14 @@ class OxiEvents(sublime_plugin.EventListener):
             panel = PANELS.pop(window.id(), None)
             if panel is not None:
                 panel.closing = True
+
+    def on_post_window_command(self, window, command, args):
+        # Images open as image sheets, which never reach `on_pre_close`: catch their tab
+        # closing here so the files column goes away as it does for text files.
+        if command.startswith("close"):
+            panel = PANELS.get(window.id())
+            if panel is not None and getattr(panel, "files_group", None) is not None:
+                sublime.set_timeout(panel.collapse_files, 0)
 
 
 def plugin_loaded():

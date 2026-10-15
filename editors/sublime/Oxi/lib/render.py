@@ -62,6 +62,18 @@ def format_tokens(n):
     return str(n)
 
 
+def format_duration(seconds):
+    """Compact time left: 45m, 3h20m, 2d4h."""
+    minutes = max(1, int(seconds or 0) // 60)
+    if minutes < 60:
+        return "{}m".format(minutes)
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return "{}h{:02d}m".format(hours, minutes) if minutes else "{}h".format(hours)
+    days, hours = divmod(hours, 24)
+    return "{}d{}h".format(days, hours) if hours else "{}d".format(days)
+
+
 def diff_stats(diff):
     added = removed = 0
     for line in (diff or "").splitlines():
