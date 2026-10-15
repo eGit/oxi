@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-10-15
+
+### Added
+- **Sublime Text:** New package for Sublime Text that connects to oxi's chat engine, with chat list, transcript, file attachments, and Markdown styling.
+- **Headless mode:** `oxi headless` runs the chat engine over stdio with JSON commands for chats, prompts, approvals, and configuration.
+- **Chat:** Provider usage windows now display in the composer toolbar.
+- **Chat:** Image files can be attached to prompts.
+- **Installers:** Sublime Text package is automatically installed when Sublime is present (configurable with OXI_SUBLIME environment variable).
+
+### Changed
+- **Chat:** Image tabs now close cleanly without leaving orphaned files.
+
+
 ### Added
 - **Sublime Text:** oxi chat inside Sublime Text: the chat list on the left, the transcript with the composer under it, files opened from the chat in their own column, with @file mentions, tool approvals, plan mode, agent/model pickers and Markdown styled like a preview. Chats are shared with the app. See `editors/sublime/README.md`.
 - **Editors:** `oxi headless` runs the chat engine without a window, driven over stdio, for editor integrations.
@@ -1087,7 +1100,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.18.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.19.0...HEAD
+[1.19.0]: https://github.com/maziluiosif/oxi/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/maziluiosif/oxi/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/maziluiosif/oxi/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/maziluiosif/oxi/compare/v1.16.0...v1.17.0
