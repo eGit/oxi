@@ -1,0 +1,22 @@
+%YAML 1.2
+---
+# The oxi chat list (lib/render.py: render_chat_list).
+name: oxi Chats
+scope: text.oxi.chats
+hidden: true
+
+contexts:
+  main:
+    - match: '^＋ New chat$'
+      scope: keyword.other.oxi markup.bold.oxi
+    - match: '^(!)(\s*\S+)'
+      captures:
+        1: markup.deleted.oxi invalid.oxi
+        2: comment.line.oxi
+    - match: '^(◐)(\s*\S+)'
+      captures:
+        1: markup.changed.oxi
+        2: comment.line.oxi
+    - match: '^ (\s*\S+)'
+      captures:
+        1: comment.line.oxi

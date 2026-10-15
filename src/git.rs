@@ -704,6 +704,12 @@ fn non_repo(error: Option<String>) -> GitState {
     }
 }
 
+/// Run one operation on the repository at `cwd` and return the snapshot after it, on the
+/// caller's thread (`oxi headless` answers git requests this way).
+pub fn run_op(cwd: &str, op: GitOp) -> GitState {
+    handle_op(cwd, op)
+}
+
 fn handle_op(cwd: &str, op: GitOp) -> GitState {
     let repo = match open_repo(cwd) {
         Ok(repo) if !repo.is_bare() => repo,

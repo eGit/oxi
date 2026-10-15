@@ -1,0 +1,25 @@
+[
+    {"caption": "Oxi: Open Chat Panel", "command": "oxi_open"},
+    {"caption": "Oxi: Toggle Chat Panel", "command": "oxi_toggle"},
+    {"caption": "Oxi: Close Chat Panel", "command": "oxi_close"},
+    {"caption": "Oxi: New Chat", "command": "oxi_new_chat"},
+    {"caption": "Oxi: Switch Chat…", "command": "oxi_switch_chat"},
+    {"caption": "Oxi: Add Selection to Chat", "command": "oxi_add_to_chat"},
+    {"caption": "Oxi: Choose Agent / Provider…", "command": "oxi_choose_provider"},
+    {"caption": "Oxi: Choose Model…", "command": "oxi_choose_model"},
+    {"caption": "Oxi: Choose Reasoning Effort…", "command": "oxi_choose_effort"},
+    {"caption": "Oxi: Toggle Plan Mode", "command": "oxi_toggle_plan"},
+    {"caption": "Oxi: Stop", "command": "oxi_stop"},
+    {"caption": "Oxi: Allow Pending Tool Call", "command": "oxi_approval", "args": {"decision": "approve"}},
+    {"caption": "Oxi: Allow Rest of This Turn", "command": "oxi_approval", "args": {"decision": "approve_rest"}},
+    {"caption": "Oxi: Deny Pending Tool Call", "command": "oxi_approval", "args": {"decision": "deny"}},
+    {"caption": "Oxi: Rename Chat…", "command": "oxi_rename_chat"},
+    {"caption": "Oxi: Delete Chat", "command": "oxi_delete_chat"},
+    {"caption": "Oxi: Restart oxi", "command": "oxi_restart"},
+    {"caption": "Oxi: Show Log", "command": "oxi_show_log"},
+    {
+        "caption": "Preferences: Oxi Settings",
+        "command": "edit_settings",
+        "args": {"base_file": "${packages}/Oxi/Oxi.sublime-settings", "default": "{\n\t$0\n}\n"}
+    }
+]

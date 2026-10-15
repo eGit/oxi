@@ -1,0 +1,51 @@
+%YAML 1.2
+---
+# Transcript of an oxi chat. Line prefixes come from lib/render.py; keep them in sync.
+name: oxi Transcript
+scope: text.oxi.transcript
+hidden: true
+
+contexts:
+  main:
+    - include: markers
+    - match: '^(?=.)'
+      embed: scope:text.html.markdown
+      escape: '^(?=▌ |◆ |  [⏺✻─☐☑◐] |    │ )'
+
+  markers:
+    - match: '^(▌ )([^+\n]*)(.*)$'
+      captures:
+        1: punctuation.definition.heading.oxi
+        2: markup.heading.oxi.user entity.name.section.oxi
+        3: comment.line.oxi
+    - match: '^(◆ )([^·\n]*)(.*)$'
+      captures:
+        1: punctuation.definition.heading.oxi keyword.other.oxi
+        2: markup.heading.oxi.assistant entity.name.section.oxi
+        3: comment.line.oxi
+    - match: '^(  ⏺ )(\S+)(.*?)(  ✓)?(  ✗)?(  …)?(  ■)?$'
+      captures:
+        1: punctuation.definition.tool.oxi comment.line.oxi
+        2: entity.name.function.oxi
+        3: string.unquoted.oxi
+        4: markup.inserted.oxi
+        5: markup.deleted.oxi invalid.oxi
+        6: markup.changed.oxi
+        7: comment.line.oxi
+    - match: '^    │ .*$'
+      scope: comment.line.output.oxi
+    - match: '^  ✻ .*$'
+      scope: comment.line.thinking.oxi
+    - match: '^  ─ .*$'
+      scope: comment.line.footer.oxi
+    - match: '^(  ☑ )(.*)$'
+      captures:
+        1: markup.inserted.oxi
+        2: comment.line.oxi
+    - match: '^(  ◐ )(.*)$'
+      captures:
+        1: markup.changed.oxi
+        2: markup.bold.oxi
+    - match: '^(  ☐ )(.*)$'
+      captures:
+        1: comment.line.oxi

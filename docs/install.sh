@@ -11,6 +11,8 @@
 #   OXI_BIN_DIR      where the `oxi` command goes; defaults to ~/.local/bin
 #   OXI_APP_DIR      macOS only: where oxi.app goes; defaults to /Applications
 #                    when writable, ~/Applications otherwise
+#   OXI_SUBLIME      1 always installs the Sublime Text package, 0 never does;
+#                    by default it is installed when Sublime Text is
 
 set -eu
 
@@ -29,6 +31,41 @@ sha256_of() {
     else
         shasum -a 256 "$1" | cut -d ' ' -f 1
     fi
+}
+
+# Checks a file in $tmp against the release's SHA256SUMS.
+verify() {
+    expected=$(awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")
+    [ -n "$expected" ] || fail "$1 is missing from SHA256SUMS"
+    actual=$(sha256_of "$tmp/$1")
+    [ "$expected" = "$actual" ] || fail "checksum mismatch for $1 (expected $expected, got $actual)"
+}
+
+# The Sublime Text package (oxi's chat inside Sublime), next to the app.
+install_sublime() {
+    want="${OXI_SUBLIME:-}"
+    case "$want" in 0 | no | false) return 0 ;; esac
+    if [ "$os" = "Darwin" ]; then
+        data="$HOME/Library/Application Support/Sublime Text"
+    else
+        data="${XDG_CONFIG_HOME:-$HOME/.config}/sublime-text"
+    fi
+    if [ ! -d "$data" ]; then
+        case "$want" in 1 | yes | true) ;; *) return 0 ;; esac
+    fi
+    if [ -e "$data/Packages/Oxi" ]; then
+        say "kept the Sublime Text package already in $data/Packages/Oxi"
+        return 0
+    fi
+    package="oxi-sublime.sublime-package"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/$package" "$base/$package" 2>/dev/null; then
+        say "this release has no Sublime Text package; skipped it"
+        return 0
+    fi
+    verify "$package"
+    mkdir -p "$data/Installed Packages"
+    mv "$tmp/$package" "$data/Installed Packages/Oxi.sublime-package"
+    say "installed the Sublime Text package; in Sublime run \`Oxi: Toggle Chat Panel\`"
 }
 
 main() {
@@ -62,10 +99,7 @@ main() {
     curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" \
         || fail "download failed: $base/SHA256SUMS"
 
-    expected=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1 }' "$tmp/SHA256SUMS")
-    [ -n "$expected" ] || fail "$asset is missing from SHA256SUMS"
-    actual=$(sha256_of "$tmp/$asset")
-    [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset (expected $expected, got $actual)"
+    verify "$asset"
     say "checksum verified"
 
     mkdir -p "$tmp/extract"
@@ -92,6 +126,7 @@ main() {
         install -m 755 "$tmp/extract/oxi" "$bin_dir/oxi"
     fi
     say "installed the oxi command at $bin_dir/oxi"
+    install_sublime
 
     case ":$PATH:" in
         *":$bin_dir:"*) ;;

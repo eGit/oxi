@@ -46,6 +46,8 @@ irm https://maziluiosif.github.io/oxi/install.ps1 | iex
 
 Then run `oxi` inside a project folder, or open it from your apps menu. To update, run `oxi update` or the same command again.
 
+If Sublime Text is installed, the same command adds oxi's [Sublime Text package](editors/sublime/README.md) too.
+
 <details>
 <summary>Homebrew, manual download, install options</summary>
 
@@ -69,6 +71,7 @@ Get the archive for your platform from [Releases](https://github.com/maziluiosif
 | `OXI_BIN_DIR` | macOS/Linux: where the `oxi` command goes (default `~/.local/bin`) |
 | `OXI_APP_DIR` | macOS: where `oxi.app` goes (default `/Applications`) |
 | `OXI_INSTALL_DIR` | Windows: install folder (default `%LOCALAPPDATA%\Programs\oxi`) |
+| `OXI_SUBLIME` | `1` always installs the Sublime Text package, `0` never does |
 
 </details>
 

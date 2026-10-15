@@ -1,0 +1,26 @@
+{
+    // Path of the oxi executable. Empty: look for `oxi` on PATH, ~/.local/bin/oxi and the
+    // usual app locations. It needs a build with the `oxi headless` command.
+    "oxi_path": "",
+
+    // Shares of the window taken by the chat list and by the chat, and of the chat column
+    // taken by the composer. With no file open, the chat takes the rest of the window.
+    "chats_width": 0.18,
+    "panel_width": 0.42,
+    "composer_height": 0.22,
+
+    // Hide the minimap while the oxi column is open (Sublime can't hide it per view).
+    "hide_minimap": true,
+
+    // Style the transcript's Markdown like a preview: headings, bold and code styled, the
+    // markers (#, **, `, fences) faded. Adds rules for oxi transcripts only to your color
+    // scheme, in Packages/User/oxi-transcript-colors.
+    "markdown_preview": true,
+
+    // Last lines of command output shown under a tool call (0 hides them).
+    "tool_output_lines": 4,
+    "show_thinking": true,
+
+    // Echo oxi's log to the Sublime console.
+    "debug": false
+}

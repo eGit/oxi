@@ -185,6 +185,15 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Package the Sublime Text plugin
+        # Installers save it as `Installed Packages/Oxi.sublime-package`. `.python-version`
+        # stays in: it picks Sublime's plugin host.
+        working-directory: editors/sublime/Oxi
+        run: |
+          zip -r -X "$GITHUB_WORKSPACE/dist/oxi-sublime.sublime-package" . \
+            -x '*.DS_Store' -x '*__pycache__*'
+          unzip -l "$GITHUB_WORKSPACE/dist/oxi-sublime.sublime-package"
+
       - name: Write SHA-256 checksums
         working-directory: dist
         run: |

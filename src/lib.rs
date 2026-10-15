@@ -13,6 +13,7 @@ mod code_nav;
 mod compute;
 pub mod fsutil;
 mod git;
+mod headless;
 mod hydrate;
 mod local_models;
 mod local_models_remote;
@@ -52,7 +53,8 @@ pub(crate) fn app_icon() -> IconData {
     }
 }
 
-/// Process entry point: handles the `update` and ACP todo-MCP subcommands, then runs the GUI.
+/// Process entry point: handles the `update`, ACP todo-MCP and `headless` (editor plugin)
+/// subcommands, then runs the GUI.
 pub fn run() -> eframe::Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
@@ -60,6 +62,7 @@ pub fn run() -> eframe::Result<()> {
         Some(agent::acp::todo_mcp::SUBCOMMAND) => {
             std::process::exit(agent::acp::todo_mcp::run_stdio())
         }
+        Some(headless::SUBCOMMAND) => std::process::exit(headless::run()),
         _ => {}
     }
     logging::init();
