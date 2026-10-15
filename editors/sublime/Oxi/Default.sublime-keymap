@@ -1,0 +1,30 @@
+[
+    // Composer: Enter sends, Shift+Enter is a new line, Escape stops a running turn.
+    // `oxi.composer` is answered by the plugin (OxiEvents.on_query_context).
+    {
+        "keys": ["enter"], "command": "oxi_composer_send",
+        "context": [
+            {"key": "oxi.composer"},
+            {"key": "auto_complete_visible", "operand": false}
+        ]
+    },
+    {"keys": ["primary+enter"], "command": "oxi_composer_send", "context": [{"key": "oxi.composer"}]},
+    {"keys": ["keypad_enter"], "command": "oxi_composer_send", "context": [{"key": "oxi.composer"}]},
+    {"keys": ["shift+enter"], "command": "oxi_newline", "context": [{"key": "oxi.composer"}]},
+    {
+        "keys": ["escape"], "command": "oxi_stop",
+        "context": [
+            {"key": "oxi.composer"},
+            {"key": "oxi.running"},
+            {"key": "auto_complete_visible", "operand": false},
+            {"key": "num_selections", "operand": 1}
+        ]
+    },
+    // Chat list: Enter opens the chat under the caret.
+    {"keys": ["enter"], "command": "oxi_open_selected_chat", "context": [{"key": "oxi.chats"}]},
+    // Transcript: Enter on a tool or thinking line opens its details.
+    {"keys": ["enter"], "command": "oxi_open_details", "context": [{"key": "oxi.transcript"}]},
+    // Anywhere: show or hide the oxi column, and send the selection to it.
+    {"keys": ["ctrl+alt+o"], "command": "oxi_toggle"},
+    {"keys": ["ctrl+alt+l"], "command": "oxi_add_to_chat"}
+]

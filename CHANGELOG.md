@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sublime Text:** oxi chat inside Sublime Text: the chat list on the left, the transcript with the composer under it, files opened from the chat in their own column, with @file mentions, tool approvals, plan mode, agent/model pickers and Markdown styled like a preview. Chats are shared with the app. See `editors/sublime/README.md`.
+- **Editors:** `oxi headless` runs the chat engine without a window, driven over stdio, for editor integrations.
+
 ## [1.18.0] - 2026-10-14
 
 ### Added

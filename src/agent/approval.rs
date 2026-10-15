@@ -29,6 +29,24 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+/// Build a short human-readable summary of a pending tool call for the approval prompt.
+pub fn approval_summary(name: &str, args: &Option<Value>) -> String {
+    let Some(args) = args else {
+        return name.to_string();
+    };
+    let field = match name {
+        "bash" => "command",
+        "write" | "edit" | "delete" | "mkdir" => "path",
+        "move" => "from",
+        "scratchpad" => "mode",
+        _ => "",
+    };
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
 /// Approval switches for tool categories that can mutate the workspace or run shell commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApprovalPolicy {

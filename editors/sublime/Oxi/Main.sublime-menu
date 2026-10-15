@@ -1,0 +1,36 @@
+[
+    {
+        "id": "tools",
+        "children": [
+            {
+                "caption": "oxi",
+                "children": [
+                    {"caption": "Toggle Chat Panel", "command": "oxi_toggle"},
+                    {"caption": "New Chat", "command": "oxi_new_chat"},
+                    {"caption": "Switch Chat…", "command": "oxi_switch_chat"},
+                    {"caption": "Add Selection to Chat", "command": "oxi_add_to_chat"},
+                    {"caption": "-"},
+                    {"caption": "Restart oxi", "command": "oxi_restart"},
+                    {"caption": "Show Log", "command": "oxi_show_log"}
+                ]
+            }
+        ]
+    },
+    {
+        "id": "preferences",
+        "children": [
+            {
+                "caption": "Package Settings",
+                "mnemonic": "P",
+                "id": "package-settings",
+                "children": [
+                    {
+                        "caption": "Oxi",
+                        "command": "edit_settings",
+                        "args": {"base_file": "${packages}/Oxi/Oxi.sublime-settings", "default": "{\n\t$0\n}\n"}
+                    }
+                ]
+            }
+        ]
+    }
+]

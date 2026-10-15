@@ -207,6 +207,203 @@ impl ChatMessage {
             self.worked_duration = Some(self.started_at.map(|t| t.elapsed()).unwrap_or_default());
         }
     }
+
+    /// A sent prompt.
+    pub fn user(text: &str, attachments: &[UserAttachment]) -> Self {
+        Self {
+            role: MsgRole::User,
+            text: text.to_string(),
+            is_summary: false,
+            attachments: attachments.to_vec(),
+            blocks: vec![],
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+            route: None,
+            changes: None,
+        }
+    }
+
+    /// The empty reply a turn streams into.
+    pub fn streaming_assistant(route: Option<Box<RouteNote>>) -> Self {
+        Self {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            is_summary: false,
+            attachments: vec![],
+            blocks: vec![],
+            streaming: true,
+            started_at: Some(std::time::Instant::now()),
+            worked_duration: None,
+            route,
+            changes: None,
+        }
+    }
+
+    /// `TextStart`: open a new answer segment unless an empty one is already waiting.
+    pub fn begin_text_block(&mut self) {
+        if let Some(AssistantBlock::Answer(s)) = self.blocks.last()
+            && s.is_empty()
+        {
+            return;
+        }
+        self.blocks.push(AssistantBlock::Answer(String::new()));
+    }
+
+    /// Append to the current answer segment (also used for error notes).
+    pub fn append_answer(&mut self, delta: &str) {
+        match self.blocks.last_mut() {
+            Some(AssistantBlock::Answer(s)) => s.push_str(delta),
+            _ => self.blocks.push(AssistantBlock::Answer(delta.to_string())),
+        }
+    }
+
+    pub fn append_thinking(&mut self, delta: &str) {
+        // TextStart creates an empty Answer before any SSE deltas; reasoning often streams first.
+        // Keep Thinking before that placeholder so the collapsible block is not hidden after an empty answer.
+        if let Some(AssistantBlock::Thinking(s)) = self.blocks.last_mut() {
+            s.push_str(delta);
+            return;
+        }
+        if matches!(self.blocks.last(), Some(AssistantBlock::Answer(s)) if s.is_empty()) {
+            let n = self.blocks.len();
+            if n >= 2 {
+                let i = n - 2;
+                if let AssistantBlock::Thinking(s) = &mut self.blocks[i] {
+                    s.push_str(delta);
+                    return;
+                }
+            }
+            if let Some(empty) = self.blocks.pop() {
+                self.blocks
+                    .push(AssistantBlock::Thinking(delta.to_string()));
+                self.blocks.push(empty);
+            }
+            return;
+        }
+        self.blocks
+            .push(AssistantBlock::Thinking(delta.to_string()));
+    }
+
+    /// Drop the partial text/thinking of the round being retried after a mid-stream
+    /// failure, so the regenerated round is not shown twice. Tool blocks from
+    /// completed rounds are kept; in-flight tools (early `ToolStart` before args
+    /// finished / execution began) are dropped so they don't linger as ghost pills.
+    pub fn reset_streaming_tail(&mut self) {
+        if !self.streaming {
+            return;
+        }
+        while matches!(
+            self.blocks.last(),
+            Some(
+                AssistantBlock::Answer(_)
+                    | AssistantBlock::Thinking(_)
+                    | AssistantBlock::Tool { is_error: None, .. }
+            )
+        ) {
+            self.blocks.pop();
+        }
+    }
+
+    /// `ToolStart`: add a tool block, or fill in the args of the one already started.
+    pub fn start_tool(
+        &mut self,
+        name: &str,
+        tool_call_id: Option<&str>,
+        args: Option<&serde_json::Value>,
+    ) {
+        let id = tool_call_id.unwrap_or("").to_string();
+        let args_summary = args.map(|a| {
+            // The scratchpad pill needs only the mode, not the potentially large global notes.
+            if name == "scratchpad" {
+                return serde_json::json!({"mode": a.get("mode")}).to_string();
+            }
+            let s = a.to_string();
+            // Edit/write arguments are also the live diff preview. Keep enough of them for the
+            // UI to parse the replacement while the filesystem operation runs; other tools only
+            // need a compact one-line summary.
+            // The checklist panel rebuilds `todo_write` lists from here, so keep them whole too.
+            let limit = if name.eq_ignore_ascii_case("edit")
+                || name.eq_ignore_ascii_case("write")
+                || name == "todo_write"
+            {
+                crate::agent::tools::MAX_TOOL_OUTPUT_CHARS
+            } else {
+                800
+            };
+            s.chars().take(limit).collect::<String>()
+        });
+        // Providers may emit an early ToolStart (name+id, args still streaming) and a
+        // second ToolStart with full args right before execution. Update the existing
+        // block's summary instead of creating a duplicate pill.
+        if !id.is_empty() {
+            for b in self.blocks.iter_mut().rev() {
+                if let AssistantBlock::Tool {
+                    tool_call_id: tid,
+                    args_summary: existing,
+                    ..
+                } = b
+                    && tid == &id
+                {
+                    if args_summary.is_some() {
+                        *existing = args_summary;
+                    }
+                    return;
+                }
+            }
+        } else if let Some(AssistantBlock::Tool {
+            name: n,
+            output,
+            args_summary: existing,
+            ..
+        }) = self.blocks.last_mut()
+            && n == name
+            && output.is_empty()
+        {
+            if args_summary.is_some() {
+                *existing = args_summary;
+            }
+            return;
+        }
+        self.blocks.push(AssistantBlock::Tool {
+            tool_call_id: id,
+            name: name.to_string(),
+            args_summary,
+            output: String::new(),
+            diff: None,
+            is_error: None,
+            full_output_path: None,
+            output_truncated: false,
+            metadata: None,
+        });
+    }
+
+    /// `ToolEnd`: record the result of the matching (or, without an id, the latest) tool.
+    pub fn finish_tool(
+        &mut self,
+        tool_call_id: Option<&str>,
+        is_error: Option<bool>,
+        full_output_path: Option<String>,
+        diff: Option<String>,
+    ) {
+        let tid = tool_call_id.unwrap_or("");
+        for b in self.blocks.iter_mut().rev() {
+            if let AssistantBlock::Tool {
+                tool_call_id: id,
+                diff: d,
+                is_error: ie,
+                full_output_path: fp,
+                ..
+            } = b
+                && (tid.is_empty() || id == tid)
+            {
+                *d = diff;
+                *ie = is_error;
+                *fp = full_output_path;
+                return;
+            }
+        }
+    }
 }
 
 pub struct Session {

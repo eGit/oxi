@@ -32,7 +32,7 @@ fn mime_from_image_format(f: image::ImageFormat) -> &'static str {
     }
 }
 
-fn delete_session_file_from_disk(path: &Path) -> Result<(), String> {
+pub(crate) fn delete_session_file_from_disk(path: &Path) -> Result<(), String> {
     let mut trash_error: Option<String> = None;
     let file_name_starts_with_dash = path
         .file_name()

@@ -1,0 +1,62 @@
+# oxi for Sublime Text
+
+oxi's chat inside a Sublime Text window: the chat list in a narrow column on the left, the
+transcript on its right and the composer under the transcript. With files open, the oxi
+columns go to the right of them. The agents, approvals and chat
+history are oxi's own. The package starts `oxi headless` and talks to it over stdio, so a
+chat started in Sublime also appears in the oxi app for the same folder, and the other way
+round.
+
+## Install
+
+1. Install oxi (a build that has the `oxi headless` command).
+2. Link or copy the `Oxi` folder into Sublime's `Packages` folder
+   (*Preferences → Browse Packages…*):
+
+   ```sh
+   # macOS
+   ln -s "$PWD/editors/sublime/Oxi" ~/Library/Application\ Support/Sublime\ Text/Packages/Oxi
+   # Linux
+   ln -s "$PWD/editors/sublime/Oxi" ~/.config/sublime-text/Packages/Oxi
+   ```
+
+3. If oxi is not on `PATH`, in `~/.local/bin` or in the usual app folder, set its path in
+   *Preferences → Package Settings → Oxi*:
+
+   ```json
+   { "oxi_path": "/path/to/oxi" }
+   ```
+
+## Use
+
+- **Ctrl+Alt+O** (or *Oxi: Toggle Chat Panel*) opens the oxi columns for the window's first
+  folder, moves to the composer when they are open, and closes them from the composer. The
+  minimap is hidden while they are open (`"hide_minimap": false` keeps it).
+- **Enter** sends, **Shift+Enter** adds a line, **Esc** stops a running turn.
+- `@path` mentions attach files or folders (completion appears after `@`), `/plan` toggles
+  plan mode, `/new` starts a chat.
+- The line above the composer picks the agent or provider, the model, the reasoning effort and
+  plan mode.
+- **Ctrl+Alt+L** (or *Add to oxi Chat* in the context menu) puts the selection, with its file
+  and lines, into the composer.
+- Click a chat in the list to open it; **☰ Chats** and **＋ New chat** at the top of the
+  transcript bring the list back or start a chat. Errors show as a red card at the end of
+  the transcript. Double-click (or Enter on) a tool or thinking line in
+  the transcript to open its full input, output and diff. `diff` and `open` links sit next to
+  tools that changed or point at files.
+- When a tool needs approval a card with Allow / Allow for this turn / Always allow / Deny
+  appears at the end of the transcript.
+
+- The transcript's Markdown is styled like a preview: headings, bold, italics and code are
+  styled and the markers (`#`, `**`, backticks, fences, table pipes) are faded. The rules go
+  into `Packages/User/oxi-transcript-colors/`, named after your color scheme, and only match
+  oxi transcripts; `"markdown_preview": false` removes them.
+
+Everything is also in the command palette under `Oxi:`.
+
+## Protocol
+
+`oxi headless` reads one JSON request per line on stdin (`{"id", "method", "params"}`) and
+writes one JSON object per line on stdout: responses (`{"id", "result" | "error"}`) and
+notifications (`{"method", "params"}`). See `src/headless.rs` for the methods; other editors
+can use the same server.

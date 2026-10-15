@@ -58,6 +58,26 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
         .collect()
 }
 
+/// One chat read from its session file, transcript and provider cache included.
+pub fn load_session(path: &str) -> Option<Session> {
+    let summary = parse_session_file(Path::new(path))?;
+    let (loaded, wire_cache) = load_session_messages_with_wire(path)?;
+    Some(Session {
+        title: summary.title,
+        messages: loaded.messages,
+        config: loaded.config.or(summary.config),
+        session_file: Some(summary.path),
+        messages_loaded: true,
+        input_text: String::new(),
+        pending_images: Vec::new(),
+        pending_texts: Vec::new(),
+        modified: summary.modified,
+        chars_per_token: None,
+        agent_context: None,
+        wire_cache,
+    })
+}
+
 struct LoadedSession {
     path: String,
     title: String,

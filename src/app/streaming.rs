@@ -430,30 +430,8 @@ impl OxiApp {
     ) {
         let sess = self.session_mut_by_key(key);
         sess.messages_loaded = true;
-        sess.messages.push(ChatMessage {
-            role: MsgRole::User,
-            text: text.to_string(),
-            is_summary: false,
-            attachments: attachments.to_vec(),
-            blocks: vec![],
-            streaming: false,
-            started_at: None,
-            worked_duration: None,
-            route: None,
-            changes: None,
-        });
-        sess.messages.push(ChatMessage {
-            role: MsgRole::Assistant,
-            text: String::new(),
-            is_summary: false,
-            attachments: vec![],
-            blocks: vec![],
-            streaming: true,
-            started_at: Some(std::time::Instant::now()),
-            worked_duration: None,
-            route: None,
-            changes: None,
-        });
+        sess.messages.push(ChatMessage::user(text, attachments));
+        sess.messages.push(ChatMessage::streaming_assistant(None));
     }
 
     pub(crate) fn last_assistant_mut(&mut self, key: SessionKey) -> Option<&mut ChatMessage> {
@@ -465,85 +443,33 @@ impl OxiApp {
     }
 
     pub(crate) fn on_text_block_start(&mut self, key: SessionKey) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        if let Some(AssistantBlock::Answer(s)) = m.blocks.last()
-            && s.is_empty()
-        {
-            return;
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.begin_text_block();
         }
-        m.blocks.push(AssistantBlock::Answer(String::new()));
     }
 
     pub(crate) fn append_text_delta(&mut self, key: SessionKey, delta: &str) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        match m.blocks.last_mut() {
-            Some(AssistantBlock::Answer(s)) => s.push_str(delta),
-            _ => m.blocks.push(AssistantBlock::Answer(delta.to_string())),
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.append_answer(delta);
         }
     }
 
     pub(crate) fn append_thinking_delta(&mut self, key: SessionKey, delta: &str) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        // TextStart creates an empty Answer before any SSE deltas; reasoning often streams first.
-        // Keep Thinking before that placeholder so the collapsible block is not hidden after an empty answer.
-        if let Some(AssistantBlock::Thinking(s)) = m.blocks.last_mut() {
-            s.push_str(delta);
-            return;
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.append_thinking(delta);
         }
-        if matches!(m.blocks.last(), Some(AssistantBlock::Answer(s)) if s.is_empty()) {
-            let n = m.blocks.len();
-            if n >= 2 {
-                let i = n - 2;
-                if let AssistantBlock::Thinking(s) = &mut m.blocks[i] {
-                    s.push_str(delta);
-                    return;
-                }
-            }
-            if let Some(empty) = m.blocks.pop() {
-                m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
-                m.blocks.push(empty);
-            }
-            return;
-        }
-        m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
     }
 
-    /// Drop the partial text/thinking of the round being retried after a mid-stream
-    /// failure, so the regenerated round is not shown twice. Tool blocks from
-    /// completed rounds are kept; in-flight tools (early `ToolStart` before args
-    /// finished / execution began) are dropped so they don't linger as ghost pills.
+    /// See [`ChatMessage::reset_streaming_tail`].
     pub(crate) fn reset_streaming_tail(&mut self, key: SessionKey) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        if !m.streaming {
-            return;
-        }
-        while matches!(
-            m.blocks.last(),
-            Some(
-                AssistantBlock::Answer(_)
-                    | AssistantBlock::Thinking(_)
-                    | AssistantBlock::Tool { is_error: None, .. }
-            )
-        ) {
-            m.blocks.pop();
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.reset_streaming_tail();
         }
     }
 
     pub(crate) fn append_assistant_answer(&mut self, key: SessionKey, s: &str) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        match m.blocks.last_mut() {
-            Some(AssistantBlock::Answer(a)) => a.push_str(s),
-            _ => m.blocks.push(AssistantBlock::Answer(s.to_string())),
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.append_answer(s);
         }
     }
 
@@ -554,73 +480,9 @@ impl OxiApp {
         tool_call_id: Option<&str>,
         args: Option<&serde_json::Value>,
     ) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        let id = tool_call_id.unwrap_or("").to_string();
-        let args_summary = args.map(|a| {
-            // The scratchpad pill needs only the mode, not the potentially large global notes.
-            if name == "scratchpad" {
-                return serde_json::json!({"mode": a.get("mode")}).to_string();
-            }
-            let s = a.to_string();
-            // Edit/write arguments are also the live diff preview. Keep enough of them for the
-            // UI to parse the replacement while the filesystem operation runs; other tools only
-            // need a compact one-line summary.
-            // The checklist panel rebuilds `todo_write` lists from here, so keep them whole too.
-            let limit = if name.eq_ignore_ascii_case("edit")
-                || name.eq_ignore_ascii_case("write")
-                || name == "todo_write"
-            {
-                crate::agent::tools::MAX_TOOL_OUTPUT_CHARS
-            } else {
-                800
-            };
-            s.chars().take(limit).collect::<String>()
-        });
-        // Providers may emit an early ToolStart (name+id, args still streaming) and a
-        // second ToolStart with full args right before execution. Update the existing
-        // block's summary instead of creating a duplicate pill.
-        if !id.is_empty() {
-            for b in m.blocks.iter_mut().rev() {
-                if let AssistantBlock::Tool {
-                    tool_call_id: tid,
-                    args_summary: existing,
-                    ..
-                } = b
-                    && tid == &id
-                {
-                    if args_summary.is_some() {
-                        *existing = args_summary;
-                    }
-                    return;
-                }
-            }
-        } else if let Some(AssistantBlock::Tool {
-            name: n,
-            output,
-            args_summary: existing,
-            ..
-        }) = m.blocks.last_mut()
-            && n == name
-            && output.is_empty()
-        {
-            if args_summary.is_some() {
-                *existing = args_summary;
-            }
-            return;
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.start_tool(name, tool_call_id, args);
         }
-        m.blocks.push(AssistantBlock::Tool {
-            tool_call_id: id,
-            name: name.to_string(),
-            args_summary,
-            output: String::new(),
-            diff: None,
-            is_error: None,
-            full_output_path: None,
-            output_truncated: false,
-            metadata: None,
-        });
     }
 
     pub(crate) fn set_tool_output(
@@ -644,25 +506,8 @@ impl OxiApp {
         full_output_path: Option<String>,
         diff: Option<String>,
     ) {
-        let Some(m) = self.last_assistant_mut(key) else {
-            return;
-        };
-        let tid = tool_call_id.unwrap_or("");
-        for b in m.blocks.iter_mut().rev() {
-            if let AssistantBlock::Tool {
-                tool_call_id: id,
-                diff: d,
-                is_error: ie,
-                full_output_path: fp,
-                ..
-            } = b
-                && (tid.is_empty() || id == tid)
-            {
-                *d = diff;
-                *ie = is_error;
-                *fp = full_output_path;
-                return;
-            }
+        if let Some(m) = self.last_assistant_mut(key) {
+            m.finish_tool(tool_call_id, is_error, full_output_path, diff);
         }
     }
 
@@ -796,18 +641,9 @@ impl OxiApp {
             .rev()
             .find_map(|m| m.route.clone())
             .filter(|r| r.provider.is_acp());
-        session.messages.push(ChatMessage {
-            role: MsgRole::Assistant,
-            text: String::new(),
-            is_summary: false,
-            attachments: vec![],
-            blocks: vec![],
-            streaming: true,
-            started_at: Some(std::time::Instant::now()),
-            worked_duration: None,
-            route,
-            changes: None,
-        });
+        session
+            .messages
+            .push(ChatMessage::streaming_assistant(route));
         if key == self.active_session_key() {
             self.conv.transcript.scroll_to_bottom_once = true;
         }

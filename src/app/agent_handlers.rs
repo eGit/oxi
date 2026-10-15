@@ -1,30 +1,10 @@
 //! Consume local [`AgentEvent`](crate::agent::AgentEvent) stream.
 
-use eframe::egui;
-use serde_json::Value;
-
 use crate::agent::{AgentEvent, AgentOutcome};
 use crate::oauth::OAuthUiMsg;
+use eframe::egui;
 
 use super::{OxiApp, PendingApproval, SessionKey};
-
-/// Build a short human-readable summary of a pending tool call for the approval prompt.
-fn approval_summary(name: &str, args: &Option<Value>) -> String {
-    let Some(args) = args else {
-        return name.to_string();
-    };
-    let field = match name {
-        "bash" => "command",
-        "write" | "edit" | "delete" | "mkdir" => "path",
-        "move" => "from",
-        "scratchpad" => "mode",
-        _ => "",
-    };
-    args.get(field)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default()
-}
 
 impl OxiApp {
     pub(crate) fn drain_agent(&mut self, ctx: &egui::Context) {
@@ -269,7 +249,7 @@ impl OxiApp {
                 self.start_tool_block(key, &name, id, args.as_ref());
             }
             AgentEvent::ApprovalRequest { name, args } => {
-                let summary = approval_summary(&name, &args);
+                let summary = crate::agent::approval_summary(&name, &args);
                 let allow_prefix = (name == "bash")
                     .then(|| crate::agent::suggest_bash_allow_prefix(&summary))
                     .flatten();
