@@ -619,8 +619,7 @@ pub(crate) fn clipboard_image_png() -> Result<Option<Vec<u8>>, String> {
     if image.bytes.len() != expected_len {
         return Err("Clipboard returned invalid image data".to_string());
     }
-    let (Ok(width), Ok(height)) = (u32::try_from(image.width), u32::try_from(image.height))
-    else {
+    let (Ok(width), Ok(height)) = (u32::try_from(image.width), u32::try_from(image.height)) else {
         return Err("Clipboard image dimensions are too large".to_string());
     };
     let Some(rgba) = image::RgbaImage::from_raw(width, height, image.bytes.into_owned()) else {
