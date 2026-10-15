@@ -8,6 +8,8 @@
 # Environment overrides:
 #   OXI_VERSION      release tag to install (e.g. v1.8.0); defaults to the latest
 #   OXI_INSTALL_DIR  install directory; defaults to %LOCALAPPDATA%\Programs\oxi
+#   OXI_SUBLIME      1 always installs the Sublime Text package, 0 never does;
+#                    by default it is installed when Sublime Text is
 
 # Everything runs inside a function so a truncated download cannot execute half a script.
 function Install-Oxi {
@@ -43,14 +45,17 @@ function Install-Oxi {
         $sums = Join-Path $tmp 'SHA256SUMS'
         Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $sums
 
-        $expected = $null
-        foreach ($line in Get-Content $sums) {
-            $parts = $line -split '\s+', 2
-            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $asset) { $expected = $parts[0] }
+        function Test-Checksum($file, $name) {
+            $expected = $null
+            foreach ($line in Get-Content $sums) {
+                $parts = $line -split '\s+', 2
+                if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $name) { $expected = $parts[0] }
+            }
+            if (-not $expected) { throw "$name is missing from SHA256SUMS" }
+            $actual = (Get-FileHash -Algorithm SHA256 $file).Hash
+            if ($actual -ne $expected) { throw "checksum mismatch for $name (expected $expected, got $actual)" }
         }
-        if (-not $expected) { throw "$asset is missing from SHA256SUMS" }
-        $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash
-        if ($actual -ne $expected) { throw "checksum mismatch for $asset (expected $expected, got $actual)" }
+        Test-Checksum $zip $asset
         Write-Host 'oxi: checksum verified'
 
         $extract = Join-Path $tmp 'extract'
@@ -82,6 +87,33 @@ function Install-Oxi {
         $shortcut.WorkingDirectory = $env:USERPROFILE
         $shortcut.Save()
         Write-Host 'oxi: added oxi to the Start menu'
+
+        # The Sublime Text package (oxi's chat inside Sublime), next to the app.
+        $sublime = Join-Path $env:APPDATA 'Sublime Text'
+        $want = "$env:OXI_SUBLIME"
+        $install = if ($want -in '0', 'no', 'false') { $false } elseif ($want -in '1', 'yes', 'true') { $true } else { Test-Path $sublime }
+        if ($install -and (Test-Path (Join-Path $sublime 'Packages\Oxi'))) {
+            Write-Host "oxi: kept the Sublime Text package already in $sublime\Packages\Oxi"
+            $install = $false
+        }
+        if ($install) {
+            $package = 'oxi-sublime.sublime-package'
+            $file = Join-Path $tmp $package
+            $found = $true
+            try {
+                Invoke-WebRequest -UseBasicParsing -Uri "$base/$package" -OutFile $file
+            } catch {
+                Write-Host 'oxi: this release has no Sublime Text package; skipped it'
+                $found = $false
+            }
+            if ($found) {
+                Test-Checksum $file $package
+                $installed = Join-Path $sublime 'Installed Packages'
+                New-Item -ItemType Directory -Path $installed -Force | Out-Null
+                Copy-Item $file (Join-Path $installed 'Oxi.sublime-package') -Force
+                Write-Host 'oxi: installed the Sublime Text package; in Sublime run `Oxi: Toggle Chat Panel`'
+            }
+        }
 
         Write-Host 'oxi: done. Launch it from the Start menu, or run `oxi` in a project directory.'
     } finally {

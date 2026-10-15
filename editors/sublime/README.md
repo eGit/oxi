@@ -9,23 +9,40 @@ round.
 
 ## Install
 
-1. Install oxi (a build that has the `oxi headless` command).
-2. Link or copy the `Oxi` folder into Sublime's `Packages` folder
-   (*Preferences → Browse Packages…*):
+The oxi installer adds the package when it finds Sublime Text:
 
-   ```sh
-   # macOS
-   ln -s "$PWD/editors/sublime/Oxi" ~/Library/Application\ Support/Sublime\ Text/Packages/Oxi
-   # Linux
-   ln -s "$PWD/editors/sublime/Oxi" ~/.config/sublime-text/Packages/Oxi
-   ```
+```sh
+# macOS, Linux
+curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+```
 
-3. If oxi is not on `PATH`, in `~/.local/bin` or in the usual app folder, set its path in
-   *Preferences → Package Settings → Oxi*:
+```powershell
+# Windows
+irm https://maziluiosif.github.io/oxi/install.ps1 | iex
+```
 
-   ```json
-   { "oxi_path": "/path/to/oxi" }
-   ```
+It puts `Oxi.sublime-package` in Sublime's `Installed Packages` folder; running it again
+updates oxi and the package. Each release also has the package as
+`oxi-sublime.sublime-package`; to install it by hand, save it there as `Oxi.sublime-package`.
+
+The package finds oxi on `PATH`, in `~/.local/bin` or in the usual app folder. Elsewhere, set
+its path in *Preferences → Package Settings → Oxi*:
+
+```json
+{ "oxi_path": "/path/to/oxi" }
+```
+
+### From a checkout
+
+To work on the package, link the folder into Sublime's `Packages` folder (*Preferences →
+Browse Packages…*) instead; the installer leaves a linked copy alone:
+
+```sh
+# macOS
+ln -s "$PWD/editors/sublime/Oxi" ~/Library/Application\ Support/Sublime\ Text/Packages/Oxi
+# Linux
+ln -s "$PWD/editors/sublime/Oxi" ~/.config/sublime-text/Packages/Oxi
+```
 
 ## Use
 
