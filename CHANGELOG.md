@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-10-16
+
+### Added
+- **Headless:** Shared daemon that relays between all editor instances, keeping chats running in the background and syncing across windows.
+- **Chat:** Live synchronization between the app and headless daemon so neither overwrites the other's newer files.
+- **Sublime:** Delete chats from the chat list using Delete/Backspace or context menu.
+- **Sublime:** Paste screenshots with Cmd/Ctrl+V or attach image files; images in messages open as links in the transcript.
+- **Installer:** ACP installer now installs platform packages that npm skipped (missing agent SDK native binary).
+
+
 ### Added
 - **Sublime Text:** Paste a screenshot with Cmd/Ctrl+V or attach image files from the composer; images in sent messages open from the transcript.
 - **Sublime Text:** Delete chats from the chat list with Delete/Backspace or its context menu.
@@ -1106,7 +1116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.19.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.20.0...HEAD
+[1.20.0]: https://github.com/maziluiosif/oxi/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/maziluiosif/oxi/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/maziluiosif/oxi/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/maziluiosif/oxi/compare/v1.17.0...v1.17.1
