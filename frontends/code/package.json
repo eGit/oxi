@@ -1,0 +1,33 @@
+{
+  "name": "oxi-code",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code-style terminal interface for oxi, over `oxi headless`",
+  "type": "module",
+  "bin": {
+    "oxi-code": "bin/oxi-code.js"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && node dist/oxi-code.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "chalk": "5.6.2",
+    "cli-truncate": "5.2.0",
+    "highlight.js": "11.11.1",
+    "ink": "6.8.0",
+    "marked": "16.4.1",
+    "react": "19.2.0",
+    "string-width": "8.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.0",
+    "@types/react": "19.2.2",
+    "esbuild": "0.25.10",
+    "typescript": "5.9.3"
+  }
+}
