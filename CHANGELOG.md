@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-10-19
+
+### Added
+- **Terminal UI:** Run oxi as a Claude Code-style terminal interface with built-in editor, Git panel, and terminal.
+
+### Changed
+- **Context management:** Agent now trims older tool outputs and arguments when context windows are small, keeping recent work intact instead of failing.
+- **Error recovery:** Context overflow errors automatically retry with a tighter budget rather than stopping the turn.
+- **Regenerate:** Shows how many files will be undone when editing the last prompt.
+
+### Fixed
+- **Daemon:** No longer claims the controlling terminal, allowing it to run cleanly in the background.
+
+
 ## [1.20.0] - 2026-10-16
 
 ### Added
@@ -1116,7 +1130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.20.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.0...HEAD
+[1.21.0]: https://github.com/maziluiosif/oxi/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/maziluiosif/oxi/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/maziluiosif/oxi/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/maziluiosif/oxi/compare/v1.17.1...v1.18.0
