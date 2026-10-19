@@ -260,7 +260,7 @@ pub async fn run_anthropic_loop(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let effort_override = ctx.effort_override;
-    let context_char_budget = ctx.context_char_budget;
+    let mut context_char_budget = ctx.context_char_budget;
     let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
@@ -270,6 +270,7 @@ pub async fn run_anthropic_loop(
     let mut thinking_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
     let mut stream_retries = 0u32;
+    let mut overflow_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -280,15 +281,14 @@ pub async fn run_anthropic_loop(
         }
         // Trim the canonical history under the context ceiling before translating it, so a long
         // multi-round run can't overflow the window mid-flight. A no-op until it's needed.
-        let len_before = openai_messages.len();
-        crate::agent::history::trim_wire_history_to_budget(
+        let trimmed = crate::agent::history::trim_wire_history_to_budget(
             openai_messages,
             tools_chars,
             context_char_budget,
         );
         // A thinking block's signature covers the conversation before it, so once older turns
-        // are dropped the saved blocks no longer verify; send the history without them.
-        if openai_messages.len() != len_before {
+        // are dropped or shrunk the saved blocks no longer verify; send the history without them.
+        if trimmed {
             thinking_by_call.clear();
         }
         let (system, anth_msgs) =
@@ -333,7 +333,27 @@ pub async fn run_anthropic_loop(
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
         }
-        let res = send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await?;
+        let res =
+            match send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await {
+                Ok(res) => res,
+                Err(err) => {
+                    if crate::agent::history::is_context_overflow_error(&err)
+                        && let Some(smaller) = crate::agent::history::shrink_budget_after_overflow(
+                            context_char_budget,
+                            &mut overflow_retries,
+                        )
+                    {
+                        context_char_budget = smaller;
+                        let _ = tx.send(AgentEvent::StreamRetry {
+                            attempt: overflow_retries,
+                            reason: format!("context window full, trimming history ({err})"),
+                        });
+                        round -= 1;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            };
         let mut capture = StreamCapture::new();
         let capture_title = format!("HTTP {} · {} · round {round}", res.status(), url);
         let mut stream = res.bytes_stream();

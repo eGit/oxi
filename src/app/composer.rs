@@ -374,9 +374,27 @@ impl OxiApp {
                         self.render_composer_notice(ui);
                         self.render_next_agent_hint(ui);
                         if self.conv.composer.editing_last_prompt.is_some() {
-                            ui.horizontal(|ui| {
+                            let undo_note = self
+                                .run_state(self.active_session_key())
+                                .and_then(|run| run.undo_journal.as_ref())
+                                .map(|journal| {
+                                    journal
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .changed_files()
+                                });
+                            let label = match undo_note {
+                                Some(Some(0)) => "Editing previous prompt".to_string(),
+                                Some(Some(1)) => "Editing previous prompt · sending undoes the 1 file it changed".to_string(),
+                                Some(Some(n)) => format!(
+                                    "Editing previous prompt · sending undoes the {n} files it changed"
+                                ),
+                                _ => "Editing previous prompt · sending undoes its file changes"
+                                    .to_string(),
+                            };
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
-                                    RichText::new("Editing previous prompt")
+                                    RichText::new(label)
                                         .size(FS_SMALL)
                                         .color(c_warning_fg()),
                                 );

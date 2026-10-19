@@ -589,7 +589,10 @@ mod tests {
         // A bridge from before the version field never wins; a daemon from before it loses.
         assert!(!newer_build(&build(None, 999), &daemon));
         assert!(newer_build(&daemon, &build(None, 999)));
-        assert!(newer_build(&build(Some("1.20.10"), 1), &build(Some("1.20.9"), 2)));
+        assert!(newer_build(
+            &build(Some("1.20.10"), 1),
+            &build(Some("1.20.9"), 2)
+        ));
     }
     use crate::model::{ChatMessage, SessionConfig};
 

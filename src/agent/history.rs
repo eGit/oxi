@@ -271,11 +271,16 @@ fn is_summary_turn(messages: &[Value], range: &Range<usize>) -> bool {
         .is_some_and(|c| c.starts_with(SUMMARY_WIRE_PREFIX))
 }
 
-fn trim_message_groups_to_budget(messages: &mut Vec<Value>, fixed_overhead: usize, budget: usize) {
+/// Returns whether the history was over budget (and so may have been changed).
+fn trim_message_groups_to_budget(
+    messages: &mut Vec<Value>,
+    fixed_overhead: usize,
+    budget: usize,
+) -> bool {
     let lens: Vec<usize> = messages.iter().map(value_char_len).collect();
     let total: usize = fixed_overhead + lens.iter().sum::<usize>();
     if total <= budget {
-        return;
+        return false;
     }
 
     let target = trim_target(budget);
@@ -305,31 +310,132 @@ fn trim_message_groups_to_budget(messages: &mut Vec<Value>, fixed_overhead: usiz
 
     if let Some(start) = drop_start {
         messages.drain(start..drop_end);
+        running = fixed_overhead + messages.iter().map(value_char_len).sum::<usize>();
     }
+
+    // Whole turns are gone and it still doesn't fit: one long agent turn (many tool rounds, files
+    // written in full) is outgrowing a small window. Shrink its older rounds in place instead.
+    if running > budget {
+        shrink_old_tool_rounds(messages, running, target);
+    }
+    true
+}
+
+/// Keep this many trailing messages of the history untouched when shrinking tool rounds, so
+/// the model always sees its latest calls and their results in full.
+const SHRINK_KEEP_RECENT_MESSAGES: usize = 4;
+/// Tool results and tool-call string arguments longer than this are elided by the shrinker.
+const SHRINK_MIN_CHARS: usize = 400;
+const ELIDED_OUTPUT: &str =
+    "[output elided to fit the context window; run the tool again if it is still needed]";
+
+/// Oldest first, replace long tool results with a placeholder and long string arguments of
+/// tool calls (e.g. the full content of a written file) with a length note, until the prompt
+/// is back under `target`. Arguments stay valid JSON because some servers parse them.
+fn shrink_old_tool_rounds(messages: &mut [Value], mut running: usize, target: usize) {
+    let end = messages.len().saturating_sub(SHRINK_KEEP_RECENT_MESSAGES);
+    for m in &mut messages[..end] {
+        if running <= target {
+            return;
+        }
+        let before = value_char_len(m);
+        match m.get("role").and_then(Value::as_str) {
+            Some("tool") => {
+                if m.get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| c.len() > SHRINK_MIN_CHARS)
+                {
+                    m["content"] = Value::String(ELIDED_OUTPUT.to_string());
+                }
+            }
+            Some("assistant") => {
+                let Some(calls) = m.get_mut("tool_calls").and_then(Value::as_array_mut) else {
+                    continue;
+                };
+                for call in calls {
+                    let Some(args) = call.pointer_mut("/function/arguments") else {
+                        continue;
+                    };
+                    let Some(raw) = args.as_str().filter(|a| a.len() > SHRINK_MIN_CHARS) else {
+                        continue;
+                    };
+                    let shrunk = match serde_json::from_str::<Value>(raw) {
+                        Ok(Value::Object(mut obj)) => {
+                            for v in obj.values_mut() {
+                                if let Some(s) = v.as_str().filter(|s| s.len() > SHRINK_MIN_CHARS) {
+                                    *v = Value::String(format!(
+                                        "[{} chars elided to fit the context window]",
+                                        s.len()
+                                    ));
+                                }
+                            }
+                            Value::Object(obj).to_string()
+                        }
+                        _ => "{}".to_string(),
+                    };
+                    *args = Value::String(shrunk);
+                }
+            }
+            _ => continue,
+        }
+        running = running.saturating_sub(before.saturating_sub(value_char_len(m)));
+    }
+}
+
+/// The provider rejected the prompt as too large for its context window: our chars-per-token
+/// estimate was off (code tokenizes densely) or the configured window is bigger than the
+/// server's. Returns a tighter trim budget for another attempt, or `None` once out of retries.
+pub(crate) fn shrink_budget_after_overflow(budget: usize, retries: &mut u32) -> Option<usize> {
+    const MAX_OVERFLOW_RETRIES: u32 = 3;
+    if *retries >= MAX_OVERFLOW_RETRIES || budget <= 8_192 {
+        return None;
+    }
+    *retries += 1;
+    // `usize::MAX` means trimming was off (single-round helpers); nothing to tighten.
+    (budget != usize::MAX).then(|| (budget / 5 * 3).max(8_192))
+}
+
+/// True when a provider error says the prompt did not fit the model's context window
+/// (OpenAI `context_length_exceeded`, llama.cpp, vLLM, Anthropic, Ollama phrasings).
+pub(crate) fn is_context_overflow_error(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    [
+        "context_length_exceeded",
+        "exceeds the available context",
+        "maximum context length",
+        "context length",
+        "context window",
+        "prompt is too long",
+        "exceed_context_size",
+    ]
+    .iter()
+    .any(|needle| e.contains(needle))
 }
 
 /// Drop oldest complete turns until total character count fits the hysteresis
 /// target, while always keeping at least `MIN_KEEP_TURNS` recent turns.
 fn trim_to_budget(turns: &mut Vec<Value>, fixed_overhead: usize, budget: usize) {
-    trim_message_groups_to_budget(turns, fixed_overhead, budget);
+    let _ = trim_message_groups_to_budget(turns, fixed_overhead, budget);
 }
 
 /// Trim a full wire-format OpenAI message list in-place. The leading system message is
 /// preserved; remaining messages are dropped only on whole-turn boundaries so tool messages
 /// are never orphaned. `tools_chars` is the size of the tool definitions sent alongside — part
-/// of the fixed overhead counted against the budget.
+/// of the fixed overhead counted against the budget. Returns whether the history was over
+/// budget, i.e. whether turns may have been dropped or older tool rounds shrunk.
 pub(crate) fn trim_wire_history_to_budget(
     messages: &mut Vec<Value>,
     tools_chars: usize,
     budget: usize,
-) {
+) -> bool {
     if messages.is_empty() {
-        return;
+        return false;
     }
     let system_len = messages.first().map(value_char_len).unwrap_or_default();
     let mut rest: Vec<Value> = messages.drain(1..).collect();
-    trim_message_groups_to_budget(&mut rest, system_len + tools_chars, budget);
+    let trimmed = trim_message_groups_to_budget(&mut rest, system_len + tools_chars, budget);
     messages.extend(rest);
+    trimmed
 }
 
 #[cfg(test)]
@@ -579,5 +685,68 @@ mod tests {
                 assert_eq!(wire[i - 1]["role"], "assistant");
             }
         }
+    }
+
+    #[test]
+    fn one_long_turn_shrinks_older_tool_rounds_to_fit() {
+        // A single user prompt followed by many write rounds: no whole turn can be dropped, so
+        // the trimmer must elide the older file contents and tool outputs instead.
+        let big = "x".repeat(5_000);
+        let mut wire = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "build it" }),
+        ];
+        for i in 0..10 {
+            let args = json!({ "path": format!("f{i}.rs"), "content": big }).to_string();
+            wire.push(json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": format!("c{i}"),
+                    "type": "function",
+                    "function": { "name": "write", "arguments": args }
+                }]
+            }));
+            wire.push(json!({ "role": "tool", "tool_call_id": format!("c{i}"), "content": big }));
+        }
+        let budget = 30_000;
+        assert!(trim_wire_history_to_budget(&mut wire, 0, budget));
+        let total: usize = wire.iter().map(value_char_len).sum();
+        assert!(total <= budget, "still {total} chars");
+        assert_eq!(wire.len(), 22, "no message may be dropped mid-turn");
+        // Elided arguments stay valid JSON and keep the short fields.
+        let args: Value = serde_json::from_str(
+            wire[2]["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(args["path"], "f0.rs");
+        assert!(args["content"].as_str().unwrap().contains("elided"));
+        // The latest round is untouched.
+        assert_eq!(wire[21]["content"].as_str().unwrap().len(), 5_000);
+    }
+
+    #[test]
+    fn context_overflow_errors_are_recognized() {
+        assert!(is_context_overflow_error(
+            "HTTP 400: context_length_exceeded: the request exceeds the available context size; context shift is disabled"
+        ));
+        assert!(is_context_overflow_error(
+            "This model's maximum context length is 32768 tokens"
+        ));
+        assert!(!is_context_overflow_error("HTTP 429: rate limited"));
+    }
+
+    #[test]
+    fn overflow_budget_shrinks_a_few_times_then_gives_up() {
+        let mut retries = 0;
+        let a = shrink_budget_after_overflow(100_000, &mut retries).unwrap();
+        assert!(a < 100_000);
+        let b = shrink_budget_after_overflow(a, &mut retries).unwrap();
+        let c = shrink_budget_after_overflow(b, &mut retries).unwrap();
+        assert!(c < b && b < a);
+        assert!(shrink_budget_after_overflow(c, &mut retries).is_none());
+        assert!(shrink_budget_after_overflow(usize::MAX, &mut 0).is_none());
     }
 }
