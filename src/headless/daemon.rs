@@ -90,7 +90,28 @@ pub(super) fn exe_identity() -> Value {
     json!({
         "path": exe.ok().map(|p| p.to_string_lossy().to_string()),
         "modified": modified,
+        "version": env!("CARGO_PKG_VERSION"),
     })
+}
+
+/// `candidate` is a newer build than `current` (both from [`exe_identity`]): a higher
+/// version, or the same one rebuilt later. Bridges older than the version field count as
+/// older, so they never replace a daemon.
+pub(super) fn newer_build(candidate: &Value, current: &Value) -> bool {
+    fn version(identity: &Value) -> Option<Vec<u64>> {
+        identity["version"]
+            .as_str()
+            .map(|v| v.split('.').map(|part| part.parse().unwrap_or(0)).collect())
+    }
+    let Some(theirs) = version(candidate) else {
+        return false;
+    };
+    let ours = version(current).unwrap_or_default();
+    match theirs.cmp(&ours) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => candidate["modified"].as_u64() > current["modified"].as_u64(),
+    }
 }
 
 // ---- daemon side ------------------------------------------------------------------------
@@ -377,8 +398,17 @@ fn spawn_daemon() -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // Its own process group: signals meant for the editor's children don't reach it.
-        command.process_group(0);
+        // Its own session, without the editor's terminal: signals meant for the editor's
+        // children don't reach it, and a shell it runs (`$SHELL -ilc` for an agent's PATH)
+        // can't take the terminal from a terminal client such as oxi-code.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         command.spawn()?;
     }
     #[cfg(windows)]
@@ -544,6 +574,26 @@ pub(super) fn stop() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_newer_build_replaces_the_daemon() {
+        let build = |version: Option<&str>, modified: u64| match version {
+            Some(v) => json!({"path": "/x/oxi", "modified": modified, "version": v}),
+            None => json!({"path": "/x/oxi", "modified": modified}),
+        };
+        let daemon = build(Some("1.20.0"), 100);
+        assert!(newer_build(&build(Some("1.21.0"), 1), &daemon));
+        assert!(newer_build(&build(Some("1.20.0"), 200), &daemon));
+        assert!(!newer_build(&build(Some("1.20.0"), 100), &daemon));
+        assert!(!newer_build(&build(Some("1.18.0"), 999), &daemon));
+        // A bridge from before the version field never wins; a daemon from before it loses.
+        assert!(!newer_build(&build(None, 999), &daemon));
+        assert!(newer_build(&daemon, &build(None, 999)));
+        assert!(newer_build(
+            &build(Some("1.20.10"), 1),
+            &build(Some("1.20.9"), 2)
+        ));
+    }
     use crate::model::{ChatMessage, SessionConfig};
 
     struct TestClient {

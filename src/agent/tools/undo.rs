@@ -175,6 +175,23 @@ impl TurnUndoJournal {
         }
     }
 
+    /// How many files the turn changed, when oxi tracked them one by one (`None` for a work
+    /// tree checkpoint, whose paths are only known by diffing).
+    pub fn changed_files(&self) -> Option<usize> {
+        if self.checkpoint.is_some() {
+            return None;
+        }
+        Some(
+            self.entries
+                .values()
+                .filter(|e| {
+                    !matches!(e.after, FileState::Directory { .. })
+                        && !e.before.same_content(&e.after)
+                })
+                .count(),
+        )
+    }
+
     /// Restore only when every tracked path still equals the state left by the agent. This avoids
     /// silently overwriting edits made by the user after the response completed.
     pub fn restore(&self, workspace: &Path) -> Result<(), String> {

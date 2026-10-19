@@ -466,7 +466,11 @@ impl Server {
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
             "daemon": self.daemon,
-            "stale": self.daemon && params.get("exe").is_some_and(|exe| *exe != self.exe),
+            // Only a newer build replaces the daemon, and only while no other editor uses it:
+            // editors running different oxi builds would otherwise take turns restarting it.
+            "stale": self.daemon
+                && self.clients.len() <= 1
+                && params.get("exe").is_some_and(|exe| daemon::newer_build(exe, &self.exe)),
             "busy": self.busy(),
             "clients": self.clients.len(),
             "chats_running": self.chats.values().filter(|c| c.run.is_some()).count(),

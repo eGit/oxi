@@ -36,6 +36,7 @@ impl OxiApp {
         if let Some(e) = self.conn.connect_error.clone() {
             let actions = ErrorActions {
                 retry: false,
+                continue_here: false,
                 settings: true,
                 switch_to: None,
             };
@@ -52,12 +53,17 @@ impl OxiApp {
                 && self.last_user_prompt_index().is_some();
             let actions = ErrorActions {
                 retry: idle,
+                continue_here: idle,
                 settings: error_suggests_settings(&e),
                 switch_to: idle.then(|| self.other_agent_in_chat(key)).flatten(),
             };
             match dismissible_error(ui, "Something went wrong", &e, actions) {
                 Some(ErrorAction::Dismiss) => self.run_state_mut(key).stream_error = None,
                 Some(ErrorAction::Retry) => self.retry_last_prompt(),
+                Some(ErrorAction::Continue) => {
+                    let current = self.ensure_session_config(key).provider;
+                    self.continue_with_agent(current, &e);
+                }
                 Some(ErrorAction::OpenSettings) => self.open_provider_settings_for_active(),
                 Some(ErrorAction::SwitchAgent(kind)) => self.continue_with_agent(kind, &e),
                 None => {}
@@ -608,7 +614,7 @@ impl OxiApp {
                                         false,
                                     )
                                     .on_hover_text(
-                                        "Edit the last prompt, restore its file changes, and retry",
+                                        "Edit the last prompt and run it again. Sending undoes the file changes that response made",
                                     )
                                     .clicked()
                                     {
@@ -774,6 +780,8 @@ fn approval_question(tool: &str) -> String {
 #[derive(Clone, Copy)]
 struct ErrorActions {
     retry: bool,
+    /// Ask the same agent to finish the request, keeping the failed turn and its file changes.
+    continue_here: bool,
     settings: bool,
     /// Another agent this chat used, offered to carry on from where the failed one stopped.
     switch_to: Option<crate::settings::LlmProviderKind>,
@@ -783,6 +791,7 @@ struct ErrorActions {
 enum ErrorAction {
     Dismiss,
     Retry,
+    Continue,
     OpenSettings,
     SwitchAgent(crate::settings::LlmProviderKind),
 }
@@ -860,6 +869,20 @@ fn dismissible_error(
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
+                            if actions.continue_here
+                                && crate::ui::chrome::mini_button_icon_enabled(
+                                    ui,
+                                    ICON_PLAY,
+                                    "Continue",
+                                    true,
+                                )
+                                .on_hover_text(
+                                    "Keep what was done so far and let the agent finish the request",
+                                )
+                                .clicked()
+                            {
+                                action = Some(ErrorAction::Continue);
+                            }
                             if actions.retry
                                 && crate::ui::chrome::mini_button_icon_enabled(
                                     ui,
@@ -867,7 +890,9 @@ fn dismissible_error(
                                     "Retry",
                                     true,
                                 )
-                                .on_hover_text("Send the last prompt again")
+                                .on_hover_text(
+                                    "Send the last prompt again from scratch (files already changed stay on disk)",
+                                )
                                 .clicked()
                             {
                                 action = Some(ErrorAction::Retry);

@@ -82,7 +82,7 @@ async fn run_chat_loop_at(
     let tx = ctx.tx;
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
-    let context_char_budget = ctx.context_char_budget;
+    let mut context_char_budget = ctx.context_char_budget;
     let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     // Reasoning the model streamed before each tool round, keyed by the round's first tool call
@@ -91,6 +91,7 @@ async fn run_chat_loop_at(
     let mut reasoning_by_call: HashMap<String, (&'static str, String)> = HashMap::new();
     let mut round = 0u32;
     let mut stream_retries = 0u32;
+    let mut overflow_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -141,7 +142,27 @@ async fn run_chat_loop_at(
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
         }
-        let res = send_with_retry(client.post(url).headers(headers).json(&body), cancel).await?;
+        let res = match send_with_retry(client.post(url).headers(headers).json(&body), cancel).await
+        {
+            Ok(res) => res,
+            Err(err) => {
+                if crate::agent::history::is_context_overflow_error(&err)
+                    && let Some(smaller) = crate::agent::history::shrink_budget_after_overflow(
+                        context_char_budget,
+                        &mut overflow_retries,
+                    )
+                {
+                    context_char_budget = smaller;
+                    let _ = tx.send(AgentEvent::StreamRetry {
+                        attempt: overflow_retries,
+                        reason: format!("context window full, trimming history ({err})"),
+                    });
+                    round -= 1;
+                    continue;
+                }
+                return Err(err);
+            }
+        };
         let mut capture = StreamCapture::new();
         let capture_title = format!("HTTP {} · {} · round {round}", res.status(), url);
         let mut stream = res.bytes_stream();
@@ -211,6 +232,20 @@ async fn run_chat_loop_at(
         if let Some(err) = stream_error {
             if cancel.load(Ordering::SeqCst) {
                 break;
+            }
+            if crate::agent::history::is_context_overflow_error(&err)
+                && let Some(smaller) = crate::agent::history::shrink_budget_after_overflow(
+                    context_char_budget,
+                    &mut overflow_retries,
+                )
+            {
+                context_char_budget = smaller;
+                let _ = tx.send(AgentEvent::StreamRetry {
+                    attempt: overflow_retries,
+                    reason: format!("context window full, trimming history ({err})"),
+                });
+                round -= 1;
+                continue;
             }
             stream_retries += 1;
             if stream_retries > MAX_STREAM_RETRIES {
