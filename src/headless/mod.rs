@@ -1046,7 +1046,7 @@ impl Server {
                 if let Some(m) = chat.last_assistant_mut() {
                     m.reset_streaming_tail();
                 }
-                let text = format!("Connection lost (attempt {attempt}): {reason}");
+                let text = format!("Retrying (attempt {attempt}): {reason}");
                 chat.status = Some(text.clone());
                 chat.dirty = true;
                 self.notify("status", json!({"chat": id, "text": text}));
