@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.1] - 2026-10-20
+
+### Fixed
+- **Agent:** Retry and recover when a model writes tool calls as plain text instead of structured format, with up to two automatic correction attempts.
+- **Agent:** Show accurate retry status messages ('Retrying') instead of misleading 'Connection lost' errors for tool-call and context-overflow retries.
+
+
 ## [1.21.0] - 2026-10-19
 
 ### Added
@@ -1130,7 +1137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.1...HEAD
+[1.21.1]: https://github.com/maziluiosif/oxi/compare/v1.21.0...v1.21.1
 [1.21.0]: https://github.com/maziluiosif/oxi/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/maziluiosif/oxi/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/maziluiosif/oxi/compare/v1.18.0...v1.19.0
