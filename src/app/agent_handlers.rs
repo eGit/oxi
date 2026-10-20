@@ -291,7 +291,7 @@ impl OxiApp {
             AgentEvent::StreamRetry { attempt, reason } => {
                 log::info!("stream retry (attempt {attempt}): {reason}");
                 self.run_state_mut(key).stream_retrying =
-                    Some(format!("Connection lost (attempt {attempt}): {reason}"));
+                    Some(format!("Retrying (attempt {attempt}): {reason}"));
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}

@@ -92,6 +92,11 @@ async fn run_chat_loop_at(
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     let mut overflow_retries = 0u32;
+    // A round whose "final answer" was really a tool call written out as text (the server's
+    // tool-call parser didn't recognise the model's syntax). It is sent back once with a
+    // correction instead of ending the turn as if the model were done.
+    let mut leaked_tool_call: Option<String> = None;
+    let mut leak_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
@@ -108,9 +113,14 @@ async fn run_chat_loop_at(
             context_char_budget,
         );
         let _ = tx.send(AgentEvent::AgentStart);
+        let mut wire_messages = with_replayed_reasoning(messages, &reasoning_by_call);
+        if let Some(leaked) = &leaked_tool_call {
+            wire_messages.push(json!({ "role": "assistant", "content": leaked }));
+            wire_messages.push(json!({ "role": "user", "content": LEAKED_TOOL_CALL_NUDGE }));
+        }
         let mut body = json!({
             "model": model,
-            "messages": with_replayed_reasoning(messages, &reasoning_by_call),
+            "messages": wire_messages,
             "tools": tools,
             "tool_choice": "auto",
             "stream": true,
@@ -280,6 +290,8 @@ async fn run_chat_loop_at(
             return Err("Model requested tool_calls but no tool calls were parsed".into());
         }
         if fr == "tool_calls" || !tool_calls.is_empty() {
+            leaked_tool_call = None;
+            leak_retries = 0;
             // Parse before recording the turn, so the replayed history only holds valid arguments.
             let parsed_args: Vec<Result<Value, String>> = tool_calls
                 .iter_mut()
@@ -420,6 +432,23 @@ async fn run_chat_loop_at(
             }
             continue;
         }
+        if !tools.is_empty() && looks_like_leaked_tool_call(&assistant_text) {
+            if leak_retries >= MAX_LEAKED_TOOL_CALL_RETRIES {
+                return Err(LEAKED_TOOL_CALL_ERROR.into());
+            }
+            leak_retries += 1;
+            activity_log::log(
+                ActivityKind::Error,
+                "Tool call arrived as plain text",
+                &assistant_text,
+            );
+            let _ = tx.send(AgentEvent::StreamRetry {
+                attempt: leak_retries,
+                reason: "the model wrote its tool call as plain text, asking it to resend".into(),
+            });
+            leaked_tool_call = Some(assistant_text);
+            continue;
+        }
         messages.push(json!({
             "role": "assistant",
             "content": assistant_text,
@@ -427,6 +456,57 @@ async fn run_chat_loop_at(
         break;
     }
     Ok(())
+}
+
+const MAX_LEAKED_TOOL_CALL_RETRIES: u32 = 2;
+
+const LEAKED_TOOL_CALL_NUDGE: &str = "Your last message contains a tool call written as plain \
+text, so it was not executed. Call the tool again using the native function-calling interface \
+(not text markup), or answer without tools if you are done.";
+
+const LEAKED_TOOL_CALL_ERROR: &str = "The model kept writing its tool calls as plain text \
+instead of calling the tools, so nothing was run. Its tool-call format isn't understood by the \
+server; try a model trained for tool calling, or the base model if this is a fine-tune.";
+
+/// Tool-call markup from common chat templates (Gemma 4, Hermes/Qwen, Llama 3, Mistral,
+/// DeepSeek, Kimi). When one of these shows up in a plain answer, the server failed to parse
+/// the model's tool call and passed it through as text.
+const TOOL_CALL_MARKERS: &[&str] = &[
+    "<|tool_call>",
+    "<tool_call|>",
+    "<tool_call>",
+    "</tool_call>",
+    "<|python_tag|>",
+    "[TOOL_CALLS]",
+    "<｜tool▁calls▁begin｜>",
+    "<｜tool▁call▁begin｜>",
+    "<|tool_calls_section_begin|>",
+    "<|tool_call_begin|>",
+];
+
+/// Whether a final answer is really a tool call the server didn't recognise. Markup inside
+/// code fences or inline code is ignored, so explaining these formats doesn't trip it.
+fn looks_like_leaked_tool_call(text: &str) -> bool {
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let outside_code: String = line
+            .split('`')
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(_, part)| part)
+            .collect();
+        if TOOL_CALL_MARKERS.iter().any(|m| outside_code.contains(m)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// `messages` with in-run reasoning re-attached to the assistant tool-call turns that produced
@@ -660,6 +740,24 @@ mod early_tool_start_tests {
         );
         assert_eq!(tool_map[&0].arguments, "{\"query\":\"rust\"}");
         assert!(tool_map[&0].started);
+    }
+
+    #[test]
+    fn leaked_tool_call_markup_is_detected_outside_code_only() {
+        // Issue #249: a Gemma 4 fine-tune's call the server didn't parse.
+        assert!(looks_like_leaked_tool_call(
+            r#"<call:bash{command: "ls -F"}><tool_call|>"#
+        ));
+        assert!(looks_like_leaked_tool_call(
+            "Let me look.\n<tool_call>\n{\"name\": \"ls\", \"arguments\": {}}\n</tool_call>"
+        ));
+        assert!(!looks_like_leaked_tool_call("All done, the app builds."));
+        assert!(!looks_like_leaked_tool_call(
+            "Hermes wraps calls in `<tool_call>` tags."
+        ));
+        assert!(!looks_like_leaked_tool_call(
+            "Example:\n```\n<tool_call>{}</tool_call>\n```\nThat's it."
+        ));
     }
 
     #[test]
@@ -1121,5 +1219,153 @@ mod integration_tests {
                 .iter()
                 .any(|e| matches!(e, AgentEvent::ApprovalRequest { .. }))
         );
+    }
+
+    /// Every request answers with a tool call leaked as text, until `fixed_after` requests have
+    /// been served; from then on it returns a real `ls` tool call, then a final answer.
+    struct LeakResponder {
+        call_count: AtomicUsize,
+        fixed_after: usize,
+    }
+
+    impl Respond for LeakResponder {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let n = self.call_count.fetch_add(1, AtomicOrdering::SeqCst);
+            let body = if n < self.fixed_after {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"content":
+                        "<call:bash{command: \"ls -F\"}><tool_call|>"}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                ])
+            } else if n == self.fixed_after {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function",
+                         "function": {"name": "ls", "arguments": "{\"path\":\".\"}"}}
+                    ]}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+                ])
+            } else {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"content": "Listed."}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                ])
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+
+    async fn run_leak_scenario(
+        name: &str,
+        fixed_after: usize,
+    ) -> (Result<(), String>, Vec<Value>, Vec<Value>, Vec<AgentEvent>) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(LeakResponder {
+                call_count: AtomicUsize::new(0),
+                fixed_after,
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace(name);
+        let client = reqwest::Client::new();
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            approval_rx,
+        );
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+        };
+        let mut messages = vec![json!({"role": "user", "content": "make an app"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "ls",
+                "description": "list a directory",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        })];
+        let base_url = server.uri();
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        let bodies = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        (result, messages, bodies, rx.try_iter().collect())
+    }
+
+    #[tokio::test]
+    async fn full_loop_asks_again_when_a_tool_call_comes_back_as_text() {
+        let (result, messages, bodies, events) = run_leak_scenario("leak-recovers", 1).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+        assert_eq!(bodies.len(), 3);
+
+        // The retry shows the model its leaked call and asks for a real one.
+        let retry = bodies[1]["messages"].as_array().unwrap();
+        let n = retry.len();
+        assert_eq!(retry[n - 2]["role"], "assistant");
+        assert!(
+            retry[n - 2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("<tool_call|>")
+        );
+        assert_eq!(retry[n - 1]["content"], LEAKED_TOOL_CALL_NUDGE);
+
+        // The correction is transient: neither later requests nor the history keep it.
+        assert!(!bodies[2].to_string().contains("<tool_call|>"));
+        assert!(
+            !serde_json::to_string(&messages)
+                .unwrap()
+                .contains("<tool_call|>")
+        );
+        assert!(messages.iter().any(|m| m["role"] == "tool"));
+        assert_eq!(messages.last().unwrap()["content"], "Listed.");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::StreamRetry { attempt: 1, .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn full_loop_fails_clearly_when_tool_calls_keep_coming_back_as_text() {
+        let (result, messages, bodies, _) = run_leak_scenario("leak-gives-up", usize::MAX).await;
+        assert_eq!(result, Err(LEAKED_TOOL_CALL_ERROR.to_string()));
+        assert_eq!(bodies.len(), 1 + MAX_LEAKED_TOOL_CALL_RETRIES as usize);
+        assert_eq!(messages.len(), 1);
     }
 }
