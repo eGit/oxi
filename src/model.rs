@@ -109,6 +109,26 @@ pub enum UserAttachment {
     Text { name: String, text: String },
 }
 
+/// The last non-empty answer text of an assistant run, trimmed.
+pub fn last_answer(run: &[ChatMessage]) -> Option<&str> {
+    run.iter()
+        .rev()
+        .flat_map(|m| m.blocks.iter().rev())
+        .find_map(|b| match b {
+            AssistantBlock::Answer(text) if !text.trim().is_empty() => Some(text.trim()),
+            _ => None,
+        })
+}
+
+/// Whether an assistant run ended on the error note oxi appends when a turn fails.
+pub fn reply_failed(run: &[ChatMessage]) -> bool {
+    last_answer(run).is_some_and(|text| {
+        text.starts_with("[Error]")
+            || text.starts_with("[Send error]")
+            || text.contains("\n[Error] ")
+    })
+}
+
 impl ChatMessage {
     /// Complete text sent to text-only providers and compaction, including pasted files.
     pub fn user_prompt_text(&self) -> String {

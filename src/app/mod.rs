@@ -26,6 +26,7 @@ mod file_explorer;
 mod fork;
 mod frame_stats;
 mod git_panel;
+mod import_sessions;
 mod input_history;
 mod links;
 mod main_area;
@@ -34,6 +35,7 @@ pub(crate) mod mentions;
 mod menu_bar;
 mod notify;
 mod queue;
+mod review;
 mod selection_to_chat;
 pub(crate) mod sessions;
 mod settings_ui;
@@ -247,6 +249,7 @@ impl OxiApp {
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
                 acp_prewarmed_at: std::collections::HashMap::new(),
+                import_sessions: None,
                 model_rxs: Vec::new(),
                 local_models: crate::app::state::LocalModelsUiState {
                     downloaded: crate::local_models::load_manifest().models,

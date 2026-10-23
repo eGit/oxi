@@ -81,6 +81,40 @@ pub fn changed_files(repo: &Path, before: &str, after: &str) -> Result<Vec<Compa
     Ok(files)
 }
 
+/// What the turn changed as a unified diff (3 lines of context), for another agent to review.
+/// Files whose patch would push the text past `max_bytes` are listed by name only.
+pub fn patch(repo: &Path, before: &str, after: &str, max_bytes: usize) -> Result<String, String> {
+    let repo = open_repo(&repo.to_string_lossy())?;
+    let old = find_tree(&repo, before)?;
+    let new = find_tree(&repo, after)?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&old), Some(&new), None)
+        .map_err(err)?;
+    let mut out = String::new();
+    let mut skipped = Vec::new();
+    for i in 0..diff.deltas().len() {
+        let Ok(Some(mut patch)) = git2::Patch::from_diff(&diff, i) else {
+            continue;
+        };
+        let text = match patch.to_buf() {
+            Ok(buf) => String::from_utf8_lossy(&buf).into_owned(),
+            Err(_) => continue,
+        };
+        if out.len() + text.len() > max_bytes {
+            skipped.push(delta_path(&patch.delta()));
+            continue;
+        }
+        out.push_str(&text);
+    }
+    if !skipped.is_empty() {
+        out.push_str("\n# Left out to keep this short (diff the snapshot trees to see them):\n");
+        for path in skipped {
+            out.push_str(&format!("#   {path}\n"));
+        }
+    }
+    Ok(out)
+}
+
 /// Put back the `before` state of every path the turn changed (`before` → `after`), or only
 /// `only` when given. Refused when one of those paths no longer matches `after`, so later edits
 /// (yours or a later turn's) are never overwritten.
@@ -343,5 +377,19 @@ mod tests {
             "one\n"
         );
         assert!(root.join("c.txt").exists());
+    }
+
+    #[test]
+    fn patch_is_a_unified_diff_and_lists_files_over_budget() {
+        let (_dir, root) = repo_with_file();
+        let before = snapshot(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        std::fs::write(root.join("big.txt"), "x\n".repeat(500)).unwrap();
+        let after = snapshot(&root).unwrap();
+        let text = patch(&root, &before.tree, &after.tree, 200).unwrap();
+        assert!(text.contains("--- a/a.txt"), "{text}");
+        assert!(text.contains("-one\n+two"), "{text}");
+        assert!(!text.contains("+x"), "{text}");
+        assert!(text.contains("#   big.txt"), "{text}");
     }
 }

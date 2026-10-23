@@ -549,6 +549,7 @@ fn notifications_are_scoped_to_the_active_session() {
         perm_tx,
         cycle_end: None,
         last_update: std::time::Instant::now(),
+        replay: None,
     };
     let update = json!({"sessionUpdate":"tool_call","toolCallId":"one","title":"Read"});
     ctx.emit_notification(&json!({"sessionId":"stale","update":update}));
@@ -575,6 +576,7 @@ fn client_fs_writes_respect_plan_mode_and_session_identity() {
         perm_tx,
         cycle_end: None,
         last_update: std::time::Instant::now(),
+        replay: None,
     };
     let mut args = json!({"sessionId":"active", "path":path, "content":"changed"});
     assert_eq!(ctx.write_text_file(&args), Err(PLAN_MODE_REFUSAL.into()));
@@ -923,14 +925,25 @@ def send(v):
     print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
 def update(v):
     send(dict(method='session/update', params=dict(sessionId='fake-session', update=v)))
+answered = threading.Event()
+answer = {}
 def own_turn():
     time.sleep(0.3)
-    update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='The build finished.')))
+    # Asks before saying anything: the request must wait for the turn the client attaches.
+    tool = dict(toolCallId='t1', title='Run tests', kind='execute', rawInput=dict(command='make test'))
+    send(dict(id=900, method='session/request_permission', params=dict(sessionId='fake-session', toolCall=tool,
+        options=[dict(optionId='yes', kind='allow_once', name='Allow'), dict(optionId='no', kind='reject_once', name='Reject')])))
+    answered.wait(10)
+    outcome = answer.get('outcome', {}).get('optionId', 'cancelled')
+    update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='The build finished: ' + outcome)))
     update(dict(sessionUpdate='usage_update', used=1, size=2, _meta={'_claude/origin': dict(kind='task-notification')}))
 for line in sys.stdin:
     m = json.loads(line)
     method = m.get('method')
-    if method == 'initialize':
+    if method is None:
+        answer.update(m.get('result', {}))
+        answered.set()
+    elif method == 'initialize':
         send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities={})))
     elif method == 'session/new':
         send(dict(id=m['id'], result=dict(sessionId='fake-session')))
@@ -950,6 +963,16 @@ fn texts(rx: &StdReceiver<AgentEvent>) -> String {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn stop_reasons_other_than_finishing_are_explained() {
+    assert!(stop_notice("max_tokens").unwrap().contains("token limit"));
+    assert!(stop_notice("max_turn_requests").is_some());
+    assert!(stop_notice("refusal").is_some());
+    assert_eq!(stop_notice("end_turn"), None);
+    assert_eq!(stop_notice("cancelled"), None);
+    assert_eq!(stop_notice(""), None);
 }
 
 #[test]
@@ -1021,7 +1044,8 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
             .expect("the attached turn did not end with the agent's cycle")
     })
     .unwrap();
-    assert_eq!(texts(&ev_rx), "The build finished.");
+    // The permission request sent between turns waited for the attached turn and was answered.
+    assert_eq!(texts(&ev_rx), "The build finished: yes");
     assert!(!pending_autonomous().contains(&session_key));
     mgr.close(&session_key);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1110,4 +1134,143 @@ for line in sys.stdin:
         // Windows keeps the dir locked while the agent process is still exiting.
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// A fake agent that lists, replays and forks its sessions.
+const SESSION_STORE_AGENT: &str = r#"
+import json, sys
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def update(sid, v):
+    send(dict(method='session/update', params=dict(sessionId=sid, update=v)))
+def text(kind, t):
+    return dict(sessionUpdate=kind, content=dict(type='text', text=t))
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    with open('calls', 'a') as f:
+        f.write(method + ' ' + json.dumps(m.get('params', {}).get('sessionId')) + '\n')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities=dict(
+            loadSession=True, sessionCapabilities=dict(list={}, fork={})))))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='blank')))
+    elif method == 'session/list':
+        if m['params'].get('cursor') is None:
+            send(dict(id=m['id'], result=dict(nextCursor='p2', sessions=[
+                dict(sessionId='terminal-1', cwd=m['params']['cwd'], title='Fix login', updatedAt='2026-10-20T10:00:00Z')])))
+        else:
+            send(dict(id=m['id'], result=dict(sessions=[dict(sessionId='terminal-2', cwd=m['params']['cwd'])])))
+    elif method == 'session/load':
+        sid = m['params']['sessionId']
+        update(sid, text('user_message_chunk', 'Fix the login bug'))
+        update(sid, text('agent_message_chunk', 'Fixed it.'))
+        send(dict(id=m['id'], result={}))
+    elif method == 'session/fork':
+        send(dict(id=m['id'], result=dict(sessionId=m['params']['sessionId'] + '-fork')))
+    elif method == 'session/prompt':
+        update(m['params']['sessionId'], text('agent_message_chunk', m['params']['prompt'][0]['text']))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+
+#[tokio::test]
+async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-import-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, SESSION_STORE_AGENT).unwrap();
+    let command = format!(
+        "{} {}",
+        install::shell_quote(&crate::agent::test_python_executable()),
+        install::shell_quote(&script)
+    );
+    let req = AcpImport {
+        command_line: command.clone(),
+        cwd: dir.clone(),
+        env: Vec::new(),
+    };
+    let listed = list_sessions(&req).await.unwrap();
+    let ids: Vec<&str> = listed.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(ids, ["terminal-1", "terminal-2"], "both pages");
+    assert_eq!(listed[0].title, "Fix login");
+
+    let messages = load_session(&req, "terminal-1").await.unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].text, "Fix the login bug");
+    assert!(matches!(
+        &messages[1].blocks[0],
+        crate::model::AssistantBlock::Answer(t) if t == "Fixed it."
+    ));
+
+    // The imported chat resumes the agent's session; its fork starts with the frozen transcript.
+    let chat = dir.join("chat.json").to_string_lossy().into_owned();
+    let fork = dir.join("fork.json").to_string_lossy().into_owned();
+    bind_session(&chat, &command, &dir, "terminal-1");
+    assert!(
+        list_sessions(&req)
+            .await
+            .unwrap()
+            .iter()
+            .all(|s| s.session_id != "terminal-1"),
+        "a session an oxi chat uses is not offered again"
+    );
+    let spec = LaunchSpec {
+        session_key: &fork,
+        command_line: &command,
+        cwd: &dir,
+        env: &[],
+        model: "",
+        effort: "",
+        mcp_servers: &[],
+    };
+    let conn = spawn_conn(&spec, Vec::new()).await.unwrap();
+    assert_eq!(conn.handles.session_id, "blank");
+    assert!(conn.handles.needs_history.load(Ordering::SeqCst));
+    let (event_tx, event_rx) = channel();
+    let (_approval_tx, approval_rx) = channel();
+    let (reply_tx, reply_rx) = oneshot::channel();
+    let prompt = AcpPrompt {
+        session_key: fork.clone(),
+        cwd: dir.clone(),
+        command_line: command.clone(),
+        env: Vec::new(),
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "Take another direction".into(),
+        history: "User: Fix the login bug\nAssistant: Fixed it.".into(),
+        missed: String::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx,
+        approval_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+    };
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_prompt(conn.handles.clone(), prompt, reply_tx),
+    )
+    .await
+    .unwrap();
+    reply_rx.await.unwrap().unwrap();
+    let sent = texts(&event_rx);
+    assert!(sent.contains("<conversation_history>"));
+    assert!(sent.contains("User: Fix the login bug\nAssistant: Fixed it."));
+    assert!(sent.ends_with("Take another direction"));
+    let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+    assert!(!calls.contains("session/fork"));
+    drop(conn);
+    assert_eq!(
+        sessions::lookup(&fork, &command, &dir).as_deref(),
+        Some("blank")
+    );
+    sessions::forget(&chat);
+    sessions::forget(&fork);
+    let _ = std::fs::remove_dir_all(&dir);
 }

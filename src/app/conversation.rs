@@ -519,12 +519,21 @@ impl OxiApp {
                                 // count, so every label's id shifted whenever culling changed —
                                 // which dropped a text selection the moment a drag began.
                                 let unit_id = ui.id().with(key);
-                                let turn_changes: Vec<crate::model::TurnChanges> = messages
-                                    [start..end]
+                                let turn_changes: Vec<(
+                                    crate::model::TurnChanges,
+                                    Option<crate::settings::LlmProviderKind>,
+                                )> = messages[start..end]
                                     .iter()
                                     .filter(|m| !m.streaming)
-                                    .filter_map(|m| m.changes.as_deref().cloned())
+                                    .filter_map(|m| {
+                                        let changes = m.changes.as_deref()?.clone();
+                                        Some((changes, m.route.as_deref().map(|r| r.provider)))
+                                    })
                                     .collect();
+                                let review_followup = (end == message_count
+                                    && messages[start].role == MsgRole::Assistant)
+                                    .then(|| super::review::review_followup(messages, start))
+                                    .flatten();
                                 ui.scope_builder(egui::UiBuilder::new().id(unit_id), |ui| {
                                     if messages[start].role == MsgRole::Assistant {
                                         let previous_agent = messages[..start]
@@ -552,10 +561,18 @@ impl OxiApp {
                                     ui.scope_builder(
                                         egui::UiBuilder::new().id(unit_id.with("changes")),
                                         |ui| {
-                                            for changes in &turn_changes {
-                                                self.render_turn_changes(ui, changes);
+                                            for (changes, author) in &turn_changes {
+                                                self.render_turn_changes(ui, changes, *author);
                                             }
                                         },
+                                    );
+                                }
+                                if let Some(followup) = review_followup
+                                    && !self.active_waiting_response()
+                                {
+                                    ui.scope_builder(
+                                        egui::UiBuilder::new().id(unit_id.with("review")),
+                                        |ui| self.render_review_followup(ui, followup),
                                     );
                                 }
                                 let height = ui.cursor().min.y - top;

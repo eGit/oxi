@@ -22,6 +22,7 @@ mod logging;
 mod markdown;
 mod model;
 mod oauth;
+mod open_buffers;
 mod os_open;
 mod router;
 mod runtime;

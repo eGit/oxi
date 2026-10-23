@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use eframe::egui;
+
 use super::super::{EditorDocument, OxiApp};
 use super::{EditorLayoutCache, MediaKind};
 
@@ -241,7 +243,11 @@ impl OxiApp {
         }
     }
 
-    pub(crate) fn check_external_file_changes(&mut self) {
+    pub(crate) fn check_external_file_changes(&mut self, ctx: &egui::Context) {
+        let waker = ctx.clone();
+        crate::open_buffers::set_waker(move || waker.request_repaint());
+        self.apply_agent_writes(ctx);
+        self.publish_open_buffers();
         if self
             .conv
             .editor
@@ -251,9 +257,84 @@ impl OxiApp {
             return;
         }
         self.conv.editor.last_external_check = Some(std::time::Instant::now());
-        for document in &mut self.conv.editor.documents {
-            document.sync_from_disk();
+        for index in 0..self.conv.editor.documents.len() {
+            let document = &mut self.conv.editor.documents[index];
+            // Its new text arrives through `apply_agent_writes`, as an undoable edit.
+            if crate::open_buffers::has_agent_write(&document.path) {
+                continue;
+            }
+            // A tab without unsaved changes follows the disk; the old text stays one undo away,
+            // so an agent's edit to an open file can be taken back from the editor.
+            if let Some(old) = document.sync_from_disk_keeping_old() {
+                let new = document.content.clone();
+                self.record_replacement_undo(ctx, index, old, new);
+            }
         }
+    }
+
+    /// Tell ACP agents what the editor shows (see [`crate::open_buffers`]).
+    fn publish_open_buffers(&self) {
+        crate::open_buffers::publish(
+            self.conv
+                .editor
+                .documents
+                .iter()
+                .filter(|d| d.media.is_none() && !d.is_scratchpad)
+                .map(|d| crate::open_buffers::OpenTab {
+                    path: &d.path,
+                    revision: d.content_revision,
+                    unsaved: d.is_dirty().then_some(d.content.as_str()),
+                }),
+        );
+    }
+
+    /// Put what agents wrote to open files into their tabs as one undoable edit each. The
+    /// agent wrote the tab's text plus its change, so the tab matches the disk afterwards.
+    fn apply_agent_writes(&mut self, ctx: &egui::Context) {
+        for (path, content) in crate::open_buffers::take_agent_writes() {
+            let Some(index) = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|d| d.path == path && d.media.is_none())
+            else {
+                continue;
+            };
+            let document = &mut self.conv.editor.documents[index];
+            document.saved_content.clone_from(&content);
+            document.disk_modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            document.externally_modified = false;
+            if document.content == content {
+                document.dirty = false;
+                continue;
+            }
+            let old = std::mem::replace(&mut document.content, content.clone());
+            document.syntax_state = None;
+            let _ = super::editor_body::mark_document_edited(document);
+            self.record_replacement_undo(ctx, index, old, content);
+            ctx.request_repaint();
+        }
+    }
+
+    /// Make a whole-text replacement of tab `index` one undo step in its editor.
+    fn record_replacement_undo(&self, ctx: &egui::Context, index: usize, old: String, new: String) {
+        let path = &self.conv.editor.documents[index].path;
+        let Some(id) = self.conv.editor.text_edit_ids.get(path).copied() else {
+            return;
+        };
+        let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else {
+            return;
+        };
+        let mut undoer = state.undoer();
+        let before = state.cursor.char_range().unwrap_or_default();
+        undoer.add_undo(&(before, old));
+        let caret = before.primary.index.0.min(new.chars().count());
+        let after = egui::text::CCursorRange::one(egui::text::CCursor::new(caret));
+        undoer.add_undo(&(after, new));
+        state.set_undoer(undoer);
+        state.cursor.set_char_range(Some(after));
+        state.store(ctx, id);
     }
 
     pub(super) fn reload_active_editor_file(&mut self) {
@@ -269,6 +350,11 @@ impl OxiApp {
 
 impl EditorDocument {
     pub(super) fn sync_from_disk(&mut self) {
+        let _ = self.sync_from_disk_keeping_old();
+    }
+
+    /// Like [`Self::sync_from_disk`]; returns the text a reload replaced, if any.
+    pub(super) fn sync_from_disk_keeping_old(&mut self) -> Option<String> {
         if self.is_scratchpad {
             let _guard = crate::scratchpad::lock();
             match crate::scratchpad::read(&self.path) {
@@ -277,7 +363,7 @@ impl EditorDocument {
                 Ok(_) => self.externally_modified = self.reload_from_disk().is_err(),
                 Err(_) => self.externally_modified = true,
             }
-            return;
+            return None;
         }
         let metadata = match std::fs::metadata(&self.path) {
             Ok(metadata) => metadata,
@@ -286,21 +372,25 @@ impl EditorDocument {
                 if !self.is_scratchpad || self.disk_modified.is_some() {
                     self.externally_modified = true;
                 }
-                return;
+                return None;
             }
         };
         let changed = metadata.modified().ok() != self.disk_modified
             || (self.media.is_none() && metadata.len() != self.saved_content.len() as u64);
         if !changed && !self.externally_modified {
-            return;
+            return None;
         }
         if self.media.is_some() {
             // The preview renderer also invalidates egui's image cache.
             self.externally_modified = true;
+            None
         } else if self.is_dirty() {
             self.externally_modified = true;
+            None
         } else {
+            let old = self.content.clone();
             self.externally_modified = self.reload_from_disk().is_err();
+            (self.content != old).then_some(old)
         }
     }
 

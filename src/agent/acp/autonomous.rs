@@ -47,6 +47,11 @@ fn announce(session_key: &str) {
         }
         pending.push(session_key.to_owned());
     }
+    wake();
+}
+
+/// Wake the UI to look at what agents reported between turns.
+pub(super) fn wake() {
     if let Some(wake) = WAKER.get() {
         wake();
     }
@@ -58,6 +63,9 @@ pub(super) struct Held {
     /// Off while the session is set up: `session/load` replays the whole history as updates.
     armed: AtomicBool,
     updates: Mutex<VecDeque<Value>>,
+    /// `session/request_permission` requests (id, params) of such a turn, unanswered until a
+    /// turn shows them: the agent waits on them.
+    permissions: Mutex<Vec<(Value, Value)>>,
 }
 
 impl Held {
@@ -66,7 +74,12 @@ impl Held {
             session_key: session_key.to_owned(),
             armed: AtomicBool::new(false),
             updates: Mutex::new(VecDeque::new()),
+            permissions: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(super) fn session_key(&self) -> &str {
+        &self.session_key
     }
 
     /// Start holding updates; the session is set up.
@@ -105,12 +118,36 @@ impl Held {
         }
     }
 
+    /// Keep a permission request that arrived between turns for the turn that shows them.
+    /// Returns false (the caller declines it) while the session is still being set up.
+    pub(super) fn hold_permission(&self, id: Value, params: Value) -> bool {
+        if !self.armed.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.permissions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((id, params));
+        announce(&self.session_key);
+        true
+    }
+
     /// Nothing is waiting for a turn to show it.
     pub(super) fn is_empty(&self) -> bool {
         self.updates
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_empty()
+            && self
+                .permissions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+    }
+
+    /// Take the held permission requests, oldest first. Taken after [`Self::drain`].
+    pub(super) fn drain_permissions(&self) -> Vec<(Value, Value)> {
+        std::mem::take(&mut *self.permissions.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Take the held updates for a turn that shows them, which also settles the announcement.

@@ -90,6 +90,14 @@ use rpc::{CommandsKey, drain_stderr, read_loop, request, write_line};
 #[path = "acp/sessions.rs"]
 mod sessions;
 
+#[path = "acp/import.rs"]
+mod import;
+pub use import::{AcpImport, ExternalSession, bind_session, list_sessions, load_session};
+
+#[path = "acp/session_info.rs"]
+mod session_info;
+pub use session_info::{defer_title, reported_cost, take_titles as take_agent_titles};
+
 #[path = "acp/update_events.rs"]
 mod update_events;
 use update_events::UpdateState;
@@ -401,6 +409,7 @@ impl AcpManager {
                             agents.stop(&session_key).await;
                             sessions::forget(&session_key);
                             config_options::forget(&session_key);
+                            session_info::forget(&session_key);
                         }
                         AcpCommand::Stop { session_key } => {
                             agents.stop(&session_key).await;
@@ -523,6 +532,10 @@ struct ConnHandles {
     modes: SharedModes,
     /// The agent accepts embedded `resource` blocks (`promptCapabilities.embeddedContext`).
     embedded_context: bool,
+    /// The agent accepts `image` blocks (`promptCapabilities.image`).
+    images: bool,
+    /// What the agent advertised in `initialize`.
+    caps: Arc<Value>,
     /// Held for a whole prompt turn. A prompt sent right after Stop waits here until the
     /// cancelled turn has wound down, instead of having its context cleared by it.
     turn_lock: Arc<AsyncMutex<()>>,
@@ -545,6 +558,8 @@ struct PromptCtx {
     /// For a turn attached to a cycle the agent started itself: fired when that cycle ends.
     cycle_end: Option<oneshot::Sender<()>>,
     last_update: std::time::Instant,
+    /// While a session is loaded for import: where its replayed updates go, untranslated.
+    replay: Option<StdSender<Value>>,
 }
 
 impl PromptCtx {
@@ -558,9 +573,25 @@ impl PromptCtx {
         fs_write_text(params)
     }
 
+    /// Hand the permission requests held between turns to this turn's approval loop. Returns
+    /// whether there were any.
+    fn forward_held_permissions(&mut self, held: &autonomous::Held) -> bool {
+        let requests = held.drain_permissions();
+        let any = !requests.is_empty();
+        for (id, params) in requests {
+            self.updates.emit_tool(&params["toolCall"], &self.event_tx);
+            let _ = self.perm_tx.send(PermReq { id, params });
+        }
+        any
+    }
+
     fn emit_notification(&mut self, params: &Value) {
         if params["sessionId"].as_str() == Some(self.session_id.as_str()) {
             self.last_update = std::time::Instant::now();
+            if let Some(replay) = &self.replay {
+                let _ = replay.send(params["update"].clone());
+                return;
+            }
             self.updates.emit_update(&params["update"], &self.event_tx);
             if autonomous::ends_cycle(&params["update"])
                 && let Some(end) = self.cycle_end.take()
@@ -875,6 +906,8 @@ async fn spawn_conn(
         needs_history: Arc::new(AtomicBool::new(needs_history)),
         modes,
         embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
+        images: caps["promptCapabilities"]["image"].as_bool() == Some(true),
+        caps: Arc::new(caps.clone()),
         turn_lock: Arc::new(AsyncMutex::new(())),
         held,
         alive: alive.clone(),
@@ -1186,6 +1219,14 @@ async fn run_prompt(
         let _ = reply.send(Ok(()));
         return;
     }
+    // Sent anyway, the agent would fail the turn with an opaque error or drop the images.
+    if !images.is_empty() && !handles.images {
+        let _ = reply.send(Err(format!(
+            "This agent does not accept images, so the message was not sent. Remove the {} or continue with an agent that reads images.",
+            if images.len() == 1 { "image" } else { "images" }
+        )));
+        return;
+    }
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermReq>();
     {
         let mut slot = handles.prompt_ctx.lock().await;
@@ -1198,12 +1239,14 @@ async fn run_prompt(
             perm_tx,
             cycle_end: None,
             last_update: std::time::Instant::now(),
+            replay: None,
         });
         let _ = event_tx.send(AgentEvent::AgentStart);
         // A turn the agent started on its own that no attached turn showed yet opens this one.
         for params in handles.held.drain() {
             ctx.emit_notification(&params);
         }
+        ctx.forward_held_permissions(&handles.held);
     }
 
     // Agents only run a slash command when the prompt starts with it, so a command goes out
@@ -1298,12 +1341,30 @@ async fn run_prompt(
             .unwrap_or_else(|e| e.into_inner())
             .note_user_command();
     }
-    if let Ok(res) = &result
-        && let Some(usage) = prompt_usage(&res["usage"])
-    {
-        let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
+    if let Ok(res) = &result {
+        if let Some(notice) = stop_notice(res["stopReason"].as_str().unwrap_or_default()) {
+            let _ = event_tx.send(AgentEvent::TextDelta(notice.to_string()));
+        }
+        if let Some(usage) = prompt_usage(&res["usage"]) {
+            let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
+        }
     }
     let _ = reply.send(result.map(|_| ()));
+}
+
+/// Shown at the end of the reply when the agent stopped for a reason other than finishing
+/// (`end_turn`) or being stopped (`cancelled`); otherwise the reply just looks cut off.
+fn stop_notice(stop_reason: &str) -> Option<&'static str> {
+    match stop_reason {
+        "max_tokens" => Some(
+            "\n\n*The agent stopped: the reply reached its output token limit. Say \"continue\" to pick up where it left off.*\n\n",
+        ),
+        "max_turn_requests" => Some(
+            "\n\n*The agent stopped: it reached its limit of model requests for one turn. Say \"continue\" to let it go on.*\n\n",
+        ),
+        "refusal" => Some("\n\n*The agent declined to continue with this request.*\n\n"),
+        _ => None,
+    }
 }
 
 /// An attached turn that hears nothing for this long is taken as over, in case the agent never
@@ -1342,14 +1403,17 @@ async fn run_attach(
             perm_tx,
             cycle_end: Some(end_tx),
             last_update: std::time::Instant::now(),
+            replay: None,
         });
         let _ = event_tx.send(AgentEvent::AgentStart);
         let held = handles.held.drain();
         for params in &held {
             ctx.emit_notification(params);
         }
-        // Nothing held: a prompt sent meanwhile already showed the cycle.
-        held.is_empty() || ctx.cycle_end.is_none()
+        let asking = ctx.forward_held_permissions(&handles.held);
+        // Nothing held: a prompt sent meanwhile already showed the cycle. A held permission
+        // request keeps the turn open, the agent is waiting on it.
+        !asking && (held.is_empty() || ctx.cycle_end.is_none())
     };
     let mut auto_approve = false;
     if !ended {

@@ -99,6 +99,46 @@ impl OxiApp {
         }
     }
 
+    /// Name chats with the titles their ACP agents generated, while a chat still carries the
+    /// automatic first-prompt title. A chat that is answering gets it once the turn is saved.
+    pub(crate) fn apply_agent_titles(&mut self, ctx: &egui::Context) {
+        for (acp_key, title) in crate::agent::acp::take_agent_titles() {
+            let Some(key) = self.session_key_for_acp(&acp_key) else {
+                continue;
+            };
+            if !self.conv.settings.auto_title_chats {
+                continue;
+            }
+            if self.run_state(key).is_some_and(|r| r.waiting_response) {
+                crate::agent::acp::defer_title(&acp_key, title);
+                continue;
+            }
+            let session = self.session_by_key(key);
+            let first = session
+                .messages
+                .iter()
+                .find(|m| m.role == MsgRole::User && !m.is_summary);
+            let Some(first) = first else {
+                continue;
+            };
+            let auto_title = make_session_title(&first.text);
+            let Some(title) = clean_title(&title) else {
+                continue;
+            };
+            if session.title != auto_title || session.title == title {
+                continue;
+            }
+            let (Some(file), root) = (
+                session.session_file.clone(),
+                self.conv.workspaces[key.workspace_idx].root_path.clone(),
+            ) else {
+                continue;
+            };
+            self.apply_generated_title(&root, &file, &auto_title, title);
+            ctx.request_repaint();
+        }
+    }
+
     fn apply_generated_title(&mut self, root: &str, file: &str, auto_title: &str, title: String) {
         let Some(wi) = self
             .conv

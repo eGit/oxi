@@ -321,3 +321,25 @@ fn preview_selection_survives_other_tab_closes_and_clears_with_its_source() {
     assert!(editor.active.is_none());
     assert!(!editor.markdown_preview_active);
 }
+
+#[test]
+fn reloading_a_clean_tab_hands_back_the_replaced_text_for_undo() {
+    let file = TestFile::new();
+    let mut doc = document(file.0.clone());
+    doc.reload_from_disk().unwrap();
+    assert_eq!(doc.sync_from_disk_keeping_old(), None);
+    std::fs::write(&file.0, "agent edit").unwrap();
+    doc.disk_modified = None;
+    assert_eq!(
+        doc.sync_from_disk_keeping_old().as_deref(),
+        Some("original")
+    );
+    assert_eq!(doc.content, "agent edit");
+    // Unsaved changes are never replaced: the tab is flagged instead.
+    doc.content = "mine".into();
+    doc.dirty = true;
+    std::fs::write(&file.0, "agent again").unwrap();
+    doc.disk_modified = None;
+    assert_eq!(doc.sync_from_disk_keeping_old(), None);
+    assert!(doc.externally_modified);
+}

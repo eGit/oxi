@@ -181,6 +181,16 @@ impl OxiApp {
                     }
                 }
             }
+            if ui
+                .button("Import agent session…")
+                .on_hover_text(
+                    "Continue a session an agent like Claude Code ran in this folder outside oxi",
+                )
+                .clicked()
+            {
+                self.open_session_import(ui.ctx(), wi);
+                ui.close();
+            }
             let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
             if ws_running {
                 resp.on_disabled_hover_text("A chat in this workspace is still running");

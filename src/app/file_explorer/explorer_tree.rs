@@ -172,7 +172,7 @@ impl OxiApp {
                     .on_hover_text("Refresh and check files on disk")
                     .clicked()
                 {
-                    self.check_external_file_changes();
+                    self.check_external_file_changes(ui.ctx());
                     self.conv.explorer.cache.invalidate();
                     let _ = self
                         .conv
