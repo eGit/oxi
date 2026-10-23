@@ -47,6 +47,7 @@ pub(super) fn resolve_executable(configured: &str) -> PathBuf {
 /// helpers (e.g. Git Credential Manager) still work.
 pub(super) fn command(git: &Path, workdir: &Path, args: &[impl AsRef<OsStr>]) -> Command {
     let mut cmd = Command::new(git);
+    crate::shell_env::apply(&mut cmd);
     cmd.args(args)
         .current_dir(workdir)
         .env("GIT_TERMINAL_PROMPT", "0")

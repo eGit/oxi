@@ -132,16 +132,10 @@ impl Server {
         let name = &self.cfg.name;
         self.tools_stale.store(false, Ordering::SeqCst);
         let conn: Arc<dyn Transport> = match self.cfg.transport {
-            McpTransport::Stdio => {
-                let path = run_io(crate::agent::acp::subprocess_path(), LIST_TIMEOUT)
-                    .ok()
-                    .flatten();
-                Arc::new(stdio::StdioTransport::spawn(
-                    &self.cfg,
-                    path,
-                    self.tools_stale.clone(),
-                )?)
-            }
+            McpTransport::Stdio => Arc::new(stdio::StdioTransport::spawn(
+                &self.cfg,
+                self.tools_stale.clone(),
+            )?),
             McpTransport::Http => Arc::new(http::HttpTransport::new(&self.cfg)?),
         };
         let init = conn

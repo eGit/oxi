@@ -40,17 +40,14 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl StdioTransport {
     pub(super) fn spawn(
         cfg: &McpServerConfig,
-        path: Option<String>,
         tools_stale: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         let name = cfg.name.clone();
         let mut cmd = build_command(&cfg.command, &cfg.args);
+        crate::shell_env::apply(&mut cmd);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Some(path) = path {
-            cmd.env("PATH", path);
-        }
         for (k, v) in cfg.env_pairs() {
             cmd.env(k, v);
         }

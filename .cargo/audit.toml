@@ -19,4 +19,16 @@ ignore = [
     # untrusted input. Revisit when wayland-scanner bumps quick-xml.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # bincode 1.x and yaml-rust are unmaintained (warnings, no known
+    # vulnerability). Both come in through syntect 5.3 (latest), which uses them
+    # only to load its own bundled syntax/theme dumps. Revisit when syntect
+    # moves to maintained replacements.
+    "RUSTSEC-2025-0141",
+    "RUSTSEC-2024-0320",
+    # zvariant, zvariant_derive, zbus_names are unmaintained (warnings). Linux
+    # accessibility (AT-SPI over D-Bus) via egui-winit -> accesskit_unix; no
+    # newer accesskit release has moved off them yet. Revisit on egui bumps.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]
