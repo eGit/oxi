@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-10-23
+
+### Added
+- **Agent sessions:** Import and resume external ACP sessions, with workspace dialog to list, replay, and bind them.
+- **Agent review:** Review a response's changes with another agent—send diffs to a peer model in the same chat and apply fixes back.
+- **Session tracking:** Agent-generated titles and reported costs are now preserved.
+
+### Changed
+- **Composer:** Task checklists now show only during a turn and after failures, clearing stale progress between turns.
+- **Editor:** Unsaved buffers are read and agent writes apply as undoable edits.
+- **Permissions:** Permission requests are preserved between autonomous turns.
+- **Forked chats:** Now stay independent of mutable parent sessions.
+
+### Fixed
+- Unsupported images are rejected with explanations and incomplete stop reasons are now handled.
+
+
 ## [1.21.2] - 2026-10-23
 
 ### Fixed
@@ -1147,7 +1164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.2...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.22.0...HEAD
+[1.22.0]: https://github.com/maziluiosif/oxi/compare/v1.21.2...v1.22.0
 [1.21.2]: https://github.com/maziluiosif/oxi/compare/v1.21.1...v1.21.2
 [1.21.1]: https://github.com/maziluiosif/oxi/compare/v1.21.0...v1.21.1
 [1.21.0]: https://github.com/maziluiosif/oxi/compare/v1.20.0...v1.21.0
