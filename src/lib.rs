@@ -11,6 +11,7 @@ mod app;
 mod app_dirs;
 mod code_nav;
 mod compute;
+mod desktop_entry;
 pub mod fsutil;
 mod git;
 mod headless;
@@ -28,6 +29,7 @@ mod scratchpad;
 mod secrets;
 mod session_store;
 pub mod settings;
+mod shell_env;
 mod terminal;
 mod text_diff;
 mod theme;
@@ -67,6 +69,8 @@ pub fn run() -> eframe::Result<()> {
     }
     logging::init();
     update::cleanup_previous_install();
+    shell_env::prefetch();
+    desktop_entry::ensure_in_background();
     // Warm slow first-use work on background threads while the window is created.
     secrets::prefetch_unified();
     theme::prewarm_editor_highlighting();

@@ -143,8 +143,10 @@ pub(crate) fn validate_bash_command(cmd: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove credentials and agent-hostile variables from a child shell environment.
+/// Give a child shell the user's login-shell environment, minus credentials and agent-hostile
+/// variables.
 fn sanitize_bash_env(cmd: &mut Command) {
+    crate::shell_env::apply(cmd);
     const STRIP: &[&str] = &[
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",

@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use tokio::process::Command;
-use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+use tokio::sync::Mutex as AsyncMutex;
 
 /// An ACP adapter published on npm that oxi knows how to install and launch directly.
 pub(super) struct Adapter {
@@ -451,9 +451,7 @@ async fn npm_output(args: &[&str], cwd: &Path, timeout: Duration) -> Result<Stri
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    if let Some(path) = shell_path().await {
-        cmd.env("PATH", path);
-    }
+    crate::shell_env::apply_async(&mut cmd).await;
     let out = tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| format!("npm {} timed out", args[0]))?
@@ -465,57 +463,10 @@ async fn npm_output(args: &[&str], cwd: &Path, timeout: Duration) -> Result<Stri
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `PATH` for agent subprocesses: the user's login-shell `PATH` followed by oxi's own. An app
-/// launched from Finder or a desktop launcher inherits only a minimal system `PATH`, which misses
-/// Homebrew, nvm, `~/.local/bin` and friends, so `npx`, `npm` and `agent` would not be found.
-/// `None` when nothing needs adding (or on Windows, where GUI apps get the full `PATH`).
+/// `PATH` for agent subprocesses: the user's login-shell `PATH` followed by oxi's own (see
+/// [`crate::shell_env`]). `None` when nothing needs adding.
 pub(super) async fn shell_path() -> Option<String> {
-    static PATH: OnceCell<Option<String>> = OnceCell::const_new();
-    PATH.get_or_init(|| async {
-        let login = login_shell_path().await?;
-        let current = std::env::var("PATH").unwrap_or_default();
-        let mut seen = std::collections::HashSet::new();
-        let merged: Vec<&str> = login
-            .split(':')
-            .chain(current.split(':'))
-            .filter(|p| !p.is_empty() && seen.insert(*p))
-            .collect();
-        let merged = merged.join(":");
-        (merged != current).then_some(merged)
-    })
-    .await
-    .clone()
-}
-
-#[cfg(windows)]
-async fn login_shell_path() -> Option<String> {
-    None
-}
-
-#[cfg(not(windows))]
-async fn login_shell_path() -> Option<String> {
-    const MARK: &str = "__OXI_PATH__";
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "/bin/sh".to_string());
-    // Interactive + login so PATH edits in both profile and rc files (nvm, fnm, …) are seen; the
-    // markers skip anything the rc files print.
-    let mut cmd = Command::new(shell);
-    cmd.args(["-ilc", &format!("printf '{MARK}%s{MARK}' \"$PATH\"")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(5), cmd.output())
-        .await
-        .ok()?
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let start = stdout.find(MARK)? + MARK.len();
-    let len = stdout[start..].find(MARK)?;
-    let path = stdout[start..start + len].trim();
-    (!path.is_empty()).then(|| path.to_string())
+    crate::shell_env::path().await
 }
 
 pub(super) fn shell_quote(path: &Path) -> String {

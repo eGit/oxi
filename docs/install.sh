@@ -68,6 +68,42 @@ install_sublime() {
     say "installed the Sublime Text package; in Sublime run \`Oxi: Toggle Chat Panel\`"
 }
 
+# Linux application menu entry (KDE, GNOME, …). oxi writes the same file on start
+# (src/desktop_entry.rs), so installs updated in-app get it too; keep the two in sync.
+install_desktop_entry() {
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    entry="$data_home/applications/oxi.desktop"
+    # A user who deleted the entry after oxi created it keeps it deleted.
+    if [ ! -e "$entry" ] && [ -e "$data_home/oxi/desktop-entry-installed" ]; then
+        return 0
+    fi
+    if [ -e "$entry" ] && ! grep -q '^X-Oxi-Managed=true$' "$entry"; then
+        return 0
+    fi
+    exec_path="$bin_dir/oxi"
+    case "$exec_path" in
+        *[!A-Za-z0-9/._+-]*) exec_path="\"$exec_path\"" ;;
+    esac
+    mkdir -p "$data_home/applications" "$data_home/icons/hicolor/256x256/apps"
+    cat >"$entry" <<ENTRY
+[Desktop Entry]
+Type=Application
+Name=oxi
+GenericName=AI Coding Agent
+Comment=Chat with coding agents, edit and review code
+Exec=$exec_path
+Icon=oxi
+Terminal=false
+Categories=Development;IDE;
+StartupWMClass=oxi
+X-Oxi-Managed=true
+ENTRY
+    # Best effort: oxi also writes the icon on its first start.
+    curl -fsSL --proto '=https' --tlsv1.2 -o "$data_home/icons/hicolor/256x256/apps/oxi.png" \
+        "https://raw.githubusercontent.com/$REPO/master/assets/windows/app-icon-256.png" 2>/dev/null || true
+    say "added oxi to the application menu"
+}
+
 main() {
     need curl
     need tar
@@ -124,6 +160,7 @@ main() {
         say "installed $app"
     else
         install -m 755 "$tmp/extract/oxi" "$bin_dir/oxi"
+        install_desktop_entry
     fi
     say "installed the oxi command at $bin_dir/oxi"
     install_sublime
@@ -139,7 +176,7 @@ main() {
     if [ "$os" = "Darwin" ]; then
         say "done. Open oxi from Launchpad, or run \`oxi\` in a project directory."
     else
-        say "done. Run \`oxi\` in a project directory to open it as the first workspace."
+        say "done. Open oxi from your application menu, or run \`oxi\` in a project directory."
     fi
 }
 

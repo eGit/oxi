@@ -636,12 +636,6 @@ async fn set_option(conns: &Conns, req: AcpSetOption) -> Result<(), String> {
     .await
 }
 
-/// `PATH` for tool subprocesses launched from a GUI session (login-shell `PATH` merged with
-/// oxi's own). Shared with MCP stdio servers, which need `npx`/`uvx` just like ACP agents.
-pub(crate) async fn subprocess_path() -> Option<String> {
-    install::shell_path().await
-}
-
 fn build_command(command_line: &str) -> Command {
     #[cfg(windows)]
     {
@@ -708,9 +702,7 @@ async fn spawn_conn(
     let launch_line = install::resolve_command(command_line).await?;
     let mut cmd = build_command(&launch_line);
     cmd.current_dir(cwd);
-    if let Some(path) = install::shell_path().await {
-        cmd.env("PATH", path);
-    }
+    crate::shell_env::apply_async(&mut cmd).await;
     // The adapter refuses to start when it detects it's nested inside another Claude Code
     // session (the `CLAUDECODE` guard). oxi is a separate app, so strip it to let ACP work
     // even when oxi itself was launched from a Claude Code terminal.
