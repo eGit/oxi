@@ -28,21 +28,35 @@ pub(super) fn latest_todos(messages: &[crate::model::ChatMessage]) -> Option<Vec
         })
 }
 
-/// The checklist worth showing: the latest list while items remain open, or a finished one
-/// only during the turn that wrote it (an earlier turn's done list is history).
+/// The checklist worth showing. While a turn runs: the list it wrote, or the previous turn's
+/// list if items were left open (the agent may carry on with it). Once the turn is over the
+/// list is history, except after a failed turn, where it shows how far the work got. Agents
+/// often end a turn without ticking the last item, so an open list alone is not a reason to
+/// keep it on screen.
 pub(super) fn visible_todos(
     messages: &[crate::model::ChatMessage],
     running: bool,
 ) -> Option<Vec<TodoItem>> {
-    let todos = latest_todos(messages).filter(|t| !t.is_empty())?;
-    if todos.iter().any(|t| t.status != TodoStatus::Completed) {
-        return Some(todos);
-    }
     let turn_start = messages
         .iter()
         .rposition(|m| m.role == MsgRole::User)
         .map_or(0, |i| i + 1);
-    (running && latest_todos(&messages[turn_start..]).is_some()).then_some(todos)
+    let open = |t: &Vec<TodoItem>| t.iter().any(|t| t.status != TodoStatus::Completed);
+    let this_turn = latest_todos(&messages[turn_start..]).filter(|t| !t.is_empty());
+    if !running {
+        let run = &messages[turn_start..];
+        return this_turn.filter(|t| open(t) && crate::model::reply_failed(run));
+    }
+    if this_turn.is_some() {
+        return this_turn;
+    }
+    let previous_start = messages[..turn_start.saturating_sub(1)]
+        .iter()
+        .rposition(|m| m.role == MsgRole::User)
+        .map_or(0, |i| i + 1);
+    latest_todos(&messages[previous_start..turn_start])
+        .filter(|t| !t.is_empty())
+        .filter(open)
 }
 
 /// Editing a previous prompt must keep the approved plan in the transcript.
@@ -355,26 +369,43 @@ mod tests {
     }
 
     #[test]
-    fn finished_checklist_stays_with_its_turn() {
-        let mut done = assistant();
-        done.blocks.push(todo_block(
-            r#"{"todos":[{"content":"a","status":"completed"}]}"#,
-        ));
-        let mut open = assistant();
-        open.blocks.push(todo_block(
-            r#"{"todos":[{"content":"a","status":"in_progress"}]}"#,
-        ));
+    fn checklist_shows_while_its_turn_runs_and_after_a_failure() {
+        let list = |status: &str| {
+            let mut m = assistant();
+            m.blocks.push(todo_block(&format!(
+                r#"{{"todos":[{{"content":"a","status":"completed"}},{{"content":"b","status":"{status}"}}]}}"#
+            )));
+            m
+        };
         let user = ChatMessage {
             role: MsgRole::User,
             ..assistant()
         };
-        // Finished in the running turn: shown until the turn ends.
-        assert!(visible_todos(&[user.clone(), done.clone()], true).is_some());
-        assert!(visible_todos(&[user.clone(), done.clone()], false).is_none());
-        // A new prompt does not bring back the previous turn's finished list.
-        let next = [user.clone(), done, user.clone(), assistant()];
-        assert!(visible_todos(&next, true).is_none());
-        // An unfinished list carries over until it is done.
-        assert!(visible_todos(&[user.clone(), open, user, assistant()], true).is_some());
+        // Written in the running turn, finished or not: shown.
+        assert!(visible_todos(&[user.clone(), list("completed")], true).is_some());
+        assert!(visible_todos(&[user.clone(), list("in_progress")], true).is_some());
+        // The turn ended without ticking the last item: hidden, not stuck at 1/2.
+        assert!(visible_todos(&[user.clone(), list("in_progress")], false).is_none());
+        assert!(visible_todos(&[user.clone(), list("completed")], false).is_none());
+        // The turn failed: the open list stays to show where it stopped.
+        let mut failed = list("in_progress");
+        failed.append_answer("\n[Error] quota\n");
+        assert!(visible_todos(&[user.clone(), failed], false).is_some());
+        // The next turn picks up an open list from the previous one while it runs...
+        let carried = [user.clone(), list("pending"), user.clone(), assistant()];
+        assert!(visible_todos(&carried, true).is_some());
+        assert!(visible_todos(&carried, false).is_none());
+        // ...but not a finished one, nor one from two turns back.
+        let finished = [user.clone(), list("completed"), user.clone(), assistant()];
+        assert!(visible_todos(&finished, true).is_none());
+        let old = [
+            user.clone(),
+            list("pending"),
+            user.clone(),
+            assistant(),
+            user,
+            assistant(),
+        ];
+        assert!(visible_todos(&old, true).is_none());
     }
 }
