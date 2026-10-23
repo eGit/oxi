@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.2] - 2026-10-23
+
+### Fixed
+- **Linux:** Tools, agents, and system Git now access environment variables from your login shell (like those set in ~/.bashrc), matching the integrated terminal's behavior.
+- **Linux:** oxi now creates a menu entry in your applications launcher on startup and install.
+
+### Security
+- Updated dependencies to address security advisories.
+
+
 ## [1.21.1] - 2026-10-20
 
 ### Fixed
@@ -1137,7 +1147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.21.2...HEAD
+[1.21.2]: https://github.com/maziluiosif/oxi/compare/v1.21.1...v1.21.2
 [1.21.1]: https://github.com/maziluiosif/oxi/compare/v1.21.0...v1.21.1
 [1.21.0]: https://github.com/maziluiosif/oxi/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/maziluiosif/oxi/compare/v1.19.0...v1.20.0
