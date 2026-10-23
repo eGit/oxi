@@ -21,6 +21,10 @@ struct Stored {
     command_line: String,
     cwd: String,
     session_id: String,
+    /// Legacy deferred fork: never resume or copy this mutable parent session. The new
+    /// session receives the fork's saved transcript instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    fork: bool,
 }
 
 /// A chat's agent sessions. Older builds stored a single one.
@@ -73,7 +77,7 @@ fn write(path: &Path, map: &HashMap<String, Vec<Stored>>) {
     let _ = crate::fsutil::write_atomic(path, json.as_bytes());
 }
 
-fn lookup_in(path: &Path, key: &str, command_line: &str, cwd: &Path) -> Option<String> {
+fn find_in(path: &Path, key: &str, command_line: &str, cwd: &Path) -> Option<Stored> {
     if !persistable(key) {
         return None;
     }
@@ -82,6 +86,11 @@ fn lookup_in(path: &Path, key: &str, command_line: &str, cwd: &Path) -> Option<S
         .remove(key)?
         .into_iter()
         .find(|s| s.command_line == command_line && s.cwd == cwd.to_string_lossy())
+}
+
+fn lookup_in(path: &Path, key: &str, command_line: &str, cwd: &Path) -> Option<String> {
+    find_in(path, key, command_line, cwd)
+        .filter(|s| !s.fork)
         .map(|s| s.session_id)
 }
 
@@ -93,6 +102,7 @@ fn remember_in(path: &Path, key: &str, command_line: &str, cwd: &Path, session_i
         command_line: command_line.to_string(),
         cwd: cwd.to_string_lossy().into_owned(),
         session_id: session_id.to_string(),
+        fork: false,
     };
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut map = read(path);
@@ -114,6 +124,16 @@ fn forget_in(path: &Path, key: &str) {
     if map.remove(key).is_some() {
         write(path, &map);
     }
+}
+
+/// Every agent session an oxi chat is bound to.
+pub(super) fn known_ids() -> std::collections::HashSet<String> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    read(&store_path())
+        .into_values()
+        .flatten()
+        .map(|s| s.session_id)
+        .collect()
 }
 
 /// The agent session id previously bound to this oxi session, if it was created by the same
@@ -178,6 +198,23 @@ mod tests {
         forget_in(&path, "/s/a.json");
         assert_eq!(lookup_in(&path, "/s/a.json", "codex-acp", cwd), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn legacy_deferred_forks_start_from_the_saved_transcript() {
+        let dir =
+            std::env::temp_dir().join(format!("oxi-acp-sessions-fork-{}", std::process::id()));
+        let path = dir.join("sessions.json");
+        let cwd = Path::new("/work");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"/s/b.json":[{"command_line":"claude-acp","cwd":"/work","session_id":"mutable-parent","fork":true}]}"#).unwrap();
+        assert_eq!(lookup_in(&path, "/s/b.json", "claude-acp", cwd), None);
+        remember_in(&path, "/s/b.json", "claude-acp", cwd, "independent-session");
+        assert_eq!(
+            lookup_in(&path, "/s/b.json", "claude-acp", cwd).as_deref(),
+            Some("independent-session")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

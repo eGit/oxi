@@ -598,16 +598,9 @@ impl OxiApp {
     pub(crate) fn attach_autonomous_turns(&mut self, ctx: &egui::Context) {
         let waker = ctx.clone();
         crate::agent::acp::set_autonomous_waker(move || waker.request_repaint());
+        self.apply_agent_titles(ctx);
         for acp_key in crate::agent::acp::pending_autonomous() {
-            let key = self.conv.workspaces.iter().enumerate().find_map(|(w, ws)| {
-                (0..ws.sessions.len())
-                    .map(|s| SessionKey {
-                        workspace_idx: w,
-                        session_idx: s,
-                    })
-                    .find(|key| self.acp_session_key(*key) == acp_key)
-            });
-            let Some(key) = key else {
+            let Some(key) = self.session_key_for_acp(&acp_key) else {
                 crate::agent::acp::claim_autonomous(&acp_key);
                 continue;
             };
@@ -621,6 +614,18 @@ impl OxiApp {
             crate::agent::acp::claim_autonomous(&acp_key);
             self.start_autonomous_turn(key, acp_key);
         }
+    }
+
+    /// The chat an ACP session key belongs to.
+    pub(crate) fn session_key_for_acp(&self, acp_key: &str) -> Option<SessionKey> {
+        self.conv.workspaces.iter().enumerate().find_map(|(w, ws)| {
+            (0..ws.sessions.len())
+                .map(|s| SessionKey {
+                    workspace_idx: w,
+                    session_idx: s,
+                })
+                .find(|key| self.acp_session_key(*key) == acp_key)
+        })
     }
 
     fn start_autonomous_turn(&mut self, key: SessionKey, acp_session_key: String) {

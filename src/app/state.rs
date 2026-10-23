@@ -847,6 +847,8 @@ pub struct ConversationState {
     /// When each chat's ACP agent was last launched ahead of a message being typed, by ACP
     /// session key, so a failing launch is not retried every frame.
     pub acp_prewarmed_at: std::collections::HashMap<String, Instant>,
+    /// The open "Import agent session" dialog.
+    pub import_sessions: Option<super::import_sessions::ImportDialog>,
     pub local_models: LocalModelsUiState,
     /// Receivers for local/remote model operations. Several operations can overlap (for
     /// example, an automatic SSH listing and a HuggingFace search), so replacing a single

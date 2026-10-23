@@ -121,6 +121,7 @@ mod tests {
             perm_tx,
             cycle_end: None,
             last_update: std::time::Instant::now(),
+            replay: None,
         };
         let terminals = Terminals::default();
         let params = json!({"sessionId":"active", "command":"does-not-exist"});

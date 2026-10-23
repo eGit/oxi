@@ -177,6 +177,8 @@ impl OxiApp {
         let prefill = edit_user.then(|| source.messages[start].clone());
         let config = source.config.clone();
         let title = format!("{} (fork)", source.title.trim());
+        // The copied transcript fixes the context at this point. A native session copied
+        // later could already contain further turns from the original chat.
 
         self.new_chat();
         let key = self.active_session_key();
@@ -237,4 +239,61 @@ fn message_text(messages: &[crate::model::ChatMessage]) -> String {
         }
     }
     parts.join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ChatMessage;
+
+    #[test]
+    fn a_fork_keeps_its_transcript_without_binding_to_the_mutable_parent_session() {
+        crate::secrets::use_mock_store();
+        let dir = std::env::temp_dir().join(format!("oxi-fork-snapshot-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut app = OxiApp::new();
+        let mut session = OxiApp::blank_session("Original");
+        session
+            .messages
+            .push(ChatMessage::user("First request", &[]));
+        let mut reply = ChatMessage::streaming_assistant(None);
+        reply.append_answer("First answer");
+        reply.finish_streaming();
+        session.messages.push(reply);
+        crate::session_store::save_session_messages(&root, &mut session).unwrap();
+        app.conv.workspaces = vec![crate::app::Workspace {
+            root_path: root,
+            sessions: vec![session],
+            active: 0,
+            sidebar_folded: false,
+            pinned: vec![],
+            folded_groups: vec![],
+            worktree: None,
+        }];
+        app.conv.active_workspace = 0;
+        app.conv.no_workspace = false;
+        app.flow.sessions.clear();
+        let source = app.acp_session_key(app.active_session_key());
+        crate::agent::acp::bind_session(&source, "test-acp", &dir, "mutable-parent");
+
+        app.fork_active_chat(1, 2, false);
+        let fork = app.acp_session_key(app.active_session_key());
+        app.conv.workspaces[0].sessions[1]
+            .messages
+            .push(ChatMessage::user("Later request in the original", &[]));
+        assert_eq!(app.active_session().messages.len(), 2);
+        assert_eq!(app.active_session().messages[0].text, "First request");
+        let bindings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(crate::app_dirs::data_dir().join("acp/sessions.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(bindings.get(&source).is_some());
+        assert!(
+            bindings.get(&fork).is_none(),
+            "the fork must start from its saved transcript"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

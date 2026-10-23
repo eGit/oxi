@@ -197,12 +197,18 @@ pub(super) async fn dispatch(
         let id = v.get("id").cloned().filter(|x| !x.is_null());
         if let Some(id) = id {
             let params = v.get("params").cloned().unwrap_or(Value::Null);
-            handle_agent_request(method, id, params, stdin, prompt_ctx).await;
+            handle_agent_request(method, id, params, stdin, prompt_ctx, held).await;
         } else if method == "session/update" {
             let update = &v["params"]["update"];
+            let session_id = v["params"]["sessionId"].as_str().unwrap_or_default();
+            if super::session_info::note(held.session_key(), session_id, update) {
+                super::autonomous::wake();
+            }
             // Commands usually arrive right after session setup and modes can change between
-            // turns, so both are handled regardless of whether a turn is in flight.
+            // turns, so both are handled regardless of whether a turn is in flight. Titles come
+            // once a turn is over and were recorded above.
             match update["sessionUpdate"].as_str() {
+                Some("session_info_update") => {}
                 Some("available_commands_update") => {
                     if let Some(list) = commands::parse_update(update) {
                         commands::store(&commands_key.command_line, &commands_key.cwd, list);
@@ -245,6 +251,7 @@ pub(super) async fn handle_agent_request(
     params: Value,
     stdin: &Arc<AsyncMutex<ChildStdin>>,
     prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
+    held: &super::autonomous::Held,
 ) {
     match method {
         "fs/read_text_file" => match fs_read_text(&params) {
@@ -266,19 +273,24 @@ pub(super) async fn handle_agent_request(
         "session/request_permission" => {
             let forwarded = {
                 let mut ctx = prompt_ctx.lock().await;
-                ctx.as_mut()
-                    .filter(|c| params["sessionId"].as_str() == Some(c.session_id.as_str()))
-                    .map(|c| {
-                        c.updates.emit_tool(&params["toolCall"], &c.event_tx);
-                        c.perm_tx.send(PermReq {
-                            id: id.clone(),
-                            params,
+                match ctx.as_mut() {
+                    Some(c) => (params["sessionId"].as_str() == Some(c.session_id.as_str()))
+                        .then(|| {
+                            c.updates.emit_tool(&params["toolCall"], &c.event_tx);
+                            c.perm_tx.send(PermReq {
+                                id: id.clone(),
+                                params,
+                            })
                         })
-                    })
+                        .is_some_and(|sent| sent.is_ok()),
+                    // A turn the agent started itself asks: kept for the turn the UI attaches
+                    // to show it (under this lock, so it can't miss the request).
+                    None => held.hold_permission(id.clone(), params),
+                }
             };
-            // No active prompt (or the prompt task is gone): cancel the request so the agent
-            // doesn't block forever.
-            if !matches!(forwarded, Some(Ok(()))) {
+            // The prompt task is gone, or the session is still being set up: cancel the request
+            // so the agent doesn't block forever.
+            if !forwarded {
                 reply_ok(stdin, id, json!({ "outcome": { "outcome": "cancelled" } })).await;
             }
         }

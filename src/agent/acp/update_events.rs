@@ -246,7 +246,7 @@ impl UpdateState {
     }
 }
 
-fn content_block_text(block: &Value) -> Option<String> {
+pub(super) fn content_block_text(block: &Value) -> Option<String> {
     match block.get("type").and_then(|t| t.as_str()) {
         Some("text") => block
             .get("text")

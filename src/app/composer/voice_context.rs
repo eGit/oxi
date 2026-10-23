@@ -182,12 +182,28 @@ impl OxiApp {
         );
         ui.painter().circle_filled(center, 3.0, c_bg_elevated_2());
 
-        let hover = format!(
+        let mut hover = format!(
             "Context {} / {} ({:.0}%)",
             format_context_tokens(used_tokens as u64),
             format_context_tokens(max_tokens as u64),
             pct * 100.0
         );
+        // What the agent says this chat cost (on a subscription, what it would cost at API
+        // prices).
+        if cfg.is_acp()
+            && let Some((amount, currency)) =
+                crate::agent::acp::reported_cost(&self.acp_session_key(key))
+            && amount > 0.0
+        {
+            let amount = if currency == "USD" {
+                format!("${amount:.2}")
+            } else {
+                format!("{amount:.2} {currency}")
+            };
+            hover.push_str(&format!(
+                "\nAgent-reported cost since oxi started: {amount}"
+            ));
+        }
         // Show the context tooltip immediately; egui's default hover tooltip delay feels
         // sluggish for this tiny status indicator in the composer.
         if !resp.hovered() {

@@ -76,7 +76,7 @@ impl eframe::App for OxiApp {
         self.drain_commit_gen(ctx);
         self.drain_title_gen(ctx);
         self.drain_compaction(ctx);
-        self.check_external_file_changes();
+        self.check_external_file_changes(ctx);
         self.sync_chats_from_disk(ctx);
         self.poll_git_changes(ctx);
         self.attach_autonomous_turns(ctx);
@@ -166,6 +166,7 @@ impl eframe::App for OxiApp {
             &mut self.conv.composer.pending_texts,
         );
         self.render_activity_window(ui.ctx());
+        self.render_session_import(ui.ctx());
         self.route_opened_links(ui.ctx());
         // Last, so the check marks see every toggle made this frame (keys, menu, buttons).
         #[cfg(target_os = "macos")]

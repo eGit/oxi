@@ -892,8 +892,46 @@ impl Server {
         Ok(id)
     }
 
+    /// Name chats with the titles their ACP agents generated, while a chat still has the
+    /// automatic first-prompt title. A chat that is answering gets it after the turn.
+    fn apply_agent_titles(&mut self) {
+        for (key, title) in crate::agent::acp::take_agent_titles() {
+            let Some(chat) = self.chats.get_mut(&key) else {
+                continue;
+            };
+            if !self.settings.auto_title_chats {
+                continue;
+            }
+            if chat.run.is_some() {
+                crate::agent::acp::defer_title(&key, title);
+                continue;
+            }
+            let Some(first) = chat
+                .session
+                .messages
+                .iter()
+                .find(|m| m.role == MsgRole::User && !m.is_summary)
+            else {
+                continue;
+            };
+            if chat.session.title != make_session_title(&first.text) || chat.session.title == title
+            {
+                continue;
+            }
+            chat.session.title = title.clone();
+            if let Err(e) = chat.save() {
+                log::warn!("saving the agent's chat title: {e}");
+                continue;
+            }
+            let root = chat.root.clone();
+            self.notify("title", json!({"chat": key, "title": title}));
+            self.notify("chats_changed", json!({"root": root}));
+        }
+    }
+
     /// Show the turns ACP agents started on their own, as soon as each chat is free.
     fn attach_autonomous_turns(&mut self) {
+        self.apply_agent_titles();
         for key in crate::agent::acp::pending_autonomous() {
             // Agents of chats this process never ran belong to another oxi process.
             let Some(chat) = self.chats.get_mut(&key) else {
