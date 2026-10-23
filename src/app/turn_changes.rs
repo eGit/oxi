@@ -42,10 +42,17 @@ enum CardAction {
     OpenDiff(String),
     RevertFile(String),
     RevertAll,
+    Review(crate::settings::LlmProviderKind),
 }
 
 impl OxiApp {
-    pub(crate) fn render_turn_changes(&mut self, ui: &mut Ui, changes: &TurnChanges) {
+    /// `author`: the agent whose response made the changes, when known.
+    pub(crate) fn render_turn_changes(
+        &mut self,
+        ui: &mut Ui,
+        changes: &TurnChanges,
+        author: Option<crate::settings::LlmProviderKind>,
+    ) {
         let key = cache_key(changes);
         let entry = self
             .conv
@@ -70,6 +77,13 @@ impl OxiApp {
         let expanded = entry.expanded;
         let all_reverted = entry.reverted.contains("*");
         let reverted = entry.reverted.clone();
+        let reviewers = if all_reverted {
+            Vec::new()
+        } else {
+            let session = self.active_session_key();
+            self.review_candidates(session, author)
+        };
+        let busy = self.active_waiting_response();
         let (added, deleted) = files
             .iter()
             .fold((0, 0), |(a, d), f| (a + f.added, d + f.deleted));
@@ -152,6 +166,36 @@ impl OxiApp {
                         {
                             action = Some(CardAction::RevertAll);
                         }
+                        if let Some(&reviewer) = reviewers.first() {
+                            let label = crate::app::composer::composer_provider_label;
+                            let button = crate::ui::chrome::ghost_button_icon_enabled(
+                                ui,
+                                ICON_SEARCH,
+                                &format!("Review with {}", label(reviewer)),
+                                false,
+                                !busy,
+                            )
+                            .on_hover_text(
+                                "Ask another agent to review these changes in this chat \
+                                 (right-click to pick the agent)",
+                            );
+                            if button.clicked() {
+                                action = Some(CardAction::Review(reviewer));
+                            }
+                            if !busy {
+                                button.context_menu(|ui| {
+                                    for &other in &reviewers {
+                                        if ui
+                                            .button(format!("Review with {}", label(other)))
+                                            .clicked()
+                                        {
+                                            action = Some(CardAction::Review(other));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                        }
                     });
                 });
                 if expanded {
@@ -197,6 +241,9 @@ impl OxiApp {
                 self.revert_turn_changes(changes, &key, Some(path));
             }
             Some(CardAction::RevertAll) => self.revert_turn_changes(changes, &key, None),
+            Some(CardAction::Review(reviewer)) => {
+                self.review_turn_changes(changes, author, reviewer)
+            }
             None => {}
         }
     }

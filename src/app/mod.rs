@@ -35,6 +35,7 @@ pub(crate) mod mentions;
 mod menu_bar;
 mod notify;
 mod queue;
+mod review;
 mod selection_to_chat;
 pub(crate) mod sessions;
 mod settings_ui;
