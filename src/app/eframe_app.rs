@@ -56,6 +56,9 @@ impl eframe::App for OxiApp {
         self.poll_windows_clipboard_image_paste(ctx);
         self.handle_hold_space_dictation(ctx);
         self.run_pending_app_actions(ctx);
+        self.sync_editor_prefs(ctx);
+        self.handle_font_size_keys(ctx);
+        self.handle_editor_tab_keys(ctx);
         self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
@@ -372,7 +375,7 @@ impl OxiApp {
                     && i.key_pressed(Key::G),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
                 i.key_pressed(Key::Escape),
-                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::L),
+                i.modifiers.matches_exact(cmd.plus(Modifiers::ALT)) && i.key_pressed(Key::L),
             )
         });
 
@@ -450,7 +453,7 @@ impl OxiApp {
             && !self.conv.settings_page.open
             && self.conv.editor.active_document().is_some()
         {
-            self.save_editor_file();
+            self.save_editor_file(ctx);
         }
         if close_tab
             && !self.conv.settings_page.open
@@ -558,8 +561,20 @@ impl OxiApp {
             && self.conv.editor.active_document().is_some()
         {
             // Escape in the editor collapses any selection to its primary caret while keeping
-            // keyboard focus in the editing surface.
-            self.conv.editor.clear_editor_selection_next_frame = true;
+            // keyboard focus in the editing surface. With several selections it first goes back
+            // to the primary one, like Sublime (egui has already dropped focus on Escape, so
+            // the editor's own key handling never sees it).
+            if let Some(document) = self.conv.editor.active_document_mut()
+                && (!document.view.extra.is_empty() || document.view.completion.is_some())
+            {
+                // First the completion list, then the extra selections.
+                if document.view.completion.take().is_none() {
+                    document.view.extra.clear();
+                }
+                self.conv.editor.focus_editor_next_frame = true;
+            } else {
+                self.conv.editor.clear_editor_selection_next_frame = true;
+            }
         } else if escape && !self.conv.terminal_panel.open && !self.confirm_prompt_open() {
             self.focus_active_view_next_frame();
         }

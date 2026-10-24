@@ -150,3 +150,62 @@ mod tests {
         );
     }
 }
+
+/// Sublime's Next/Previous Modification: the first line of the next (or previous) block of
+/// changed lines after (before) `caret_line`, wrapping around the file. `changes` is sorted.
+pub(super) fn modification_target(
+    changes: &[crate::git::GitLineChange],
+    caret_line: usize,
+    forward: bool,
+) -> Option<usize> {
+    let starts: Vec<usize> = changes
+        .iter()
+        .enumerate()
+        .filter(|(index, change)| *index == 0 || changes[index - 1].line + 1 != change.line)
+        .map(|(_, change)| change.line)
+        .collect();
+    if forward {
+        starts
+            .iter()
+            .copied()
+            .find(|line| *line > caret_line)
+            .or_else(|| starts.first().copied())
+    } else {
+        starts
+            .iter()
+            .rev()
+            .copied()
+            .find(|line| *line < caret_line)
+            .or_else(|| starts.last().copied())
+    }
+}
+
+#[cfg(test)]
+mod modification_tests {
+    use super::modification_target;
+    use crate::git::{GitLineChange, GitLineKind};
+
+    fn changes(lines: &[usize]) -> Vec<GitLineChange> {
+        lines
+            .iter()
+            .map(|&line| GitLineChange {
+                line,
+                kind: GitLineKind::Modified,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn walks_blocks_and_wraps() {
+        let blocks = changes(&[3, 4, 5, 10, 20, 21]);
+        assert_eq!(modification_target(&blocks, 0, true), Some(3));
+        assert_eq!(modification_target(&blocks, 3, true), Some(10));
+        assert_eq!(modification_target(&blocks, 4, true), Some(10));
+        assert_eq!(modification_target(&blocks, 20, true), Some(3));
+        assert_eq!(modification_target(&blocks, 10, false), Some(3));
+        assert_eq!(modification_target(&blocks, 4, false), Some(3));
+        assert_eq!(modification_target(&blocks, 3, false), Some(20));
+        assert_eq!(modification_target(&blocks, 15, false), Some(10));
+        assert_eq!(modification_target(&[], 15, false), None);
+    }
+}

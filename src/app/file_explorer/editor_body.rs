@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
-use eframe::egui::{self, FontId, Margin, ScrollArea, TextEdit, Ui};
+use eframe::egui::{self, Margin, ScrollArea, TextEdit, Ui};
 
 use crate::theme::*;
 
@@ -15,7 +15,7 @@ use super::editor_paint::{
     paint_selection, paint_selection_matches, selected_logical_lines,
 };
 use super::editor_text::EditorText;
-use super::support::{apply_definition_underline, language_for_path};
+use super::support::apply_definition_underline;
 use super::{EditorLayoutCache, line_layout, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
@@ -36,7 +36,16 @@ impl OxiApp {
         let Some(index) = self.conv.editor.active else {
             return;
         };
-        let extension = language_for_path(&self.conv.editor.documents[index].path).to_owned();
+        let extension =
+            super::status_info::document_language(&self.conv.editor.documents[index]).to_owned();
+        super::editor_commands::set_indent_override(
+            self.conv.editor.documents[index]
+                .view
+                .indent_override
+                .clone(),
+        );
+        let prefs = self.conv.settings.editor.clone();
+        let word_wrap = prefs.word_wrap;
         let navigation_supported = crate::code_nav::supports(&extension);
         if navigation_supported {
             self.prewarm_code_navigation(&extension);
@@ -97,18 +106,26 @@ impl OxiApp {
         let gutter_digits = logical_line_count.to_string().len().max(2) as f32;
         let digit_width = ui.fonts_mut(|fonts| {
             fonts
-                .glyph_width(&FontId::monospace(FS_SMALL), '0')
-                .max(FS_SMALL * 0.5)
+                .glyph_width(&crate::theme::editor_font(), '0')
+                .max(crate::theme::editor_font_size() * 0.5)
         });
         const GIT_MARKER_WIDTH: f32 = 2.0;
         // Keep the line numbers at their original position while placing the slimmer Git
         // marker flush against the editor container's left boundary.
         const GUTTER_LEFT_PADDING: f32 = 10.0;
         const GUTTER_RIGHT_PADDING: f32 = 12.0;
+        // Sublime's fold arrows sit between the line numbers and the text.
+        // A diff pane has no folds: keep its numbers aligned with the base pane's.
+        let fold_w = if self.conv.editor.documents[index].diff.is_some() {
+            0.0
+        } else {
+            14.0
+        };
         let gutter_width = gutter_digits * digit_width
             + GUTTER_LEFT_PADDING
             + GUTTER_RIGHT_PADDING
-            + GIT_MARKER_WIDTH;
+            + GIT_MARKER_WIDTH
+            + fold_w;
         let root = PathBuf::from(&self.active_workspace().root_path);
         let relative_path = self.conv.editor.documents[index]
             .path
@@ -142,6 +159,39 @@ impl OxiApp {
                 })
         };
         let diff_key = diff_mode.as_ref().map_or(0, |(_, key, _, _)| *key);
+        // Folds follow edits made at the caret (see `folding::Folds::shift`); a diff never folds.
+        let (hidden_lines, fold_generation) = {
+            let document = &mut self.conv.editor.documents[index];
+            let view = &mut document.view;
+            if view.fold_revision != document.content_revision {
+                let delta = logical_line_count as isize - view.fold_line_count as isize;
+                if !view.folds.is_empty() {
+                    view.folds
+                        .shift(view.last_caret_line, delta, logical_line_count);
+                }
+                if !view.bookmarks.is_empty() {
+                    super::folding::shift_lines(
+                        &mut view.bookmarks,
+                        view.last_caret_line,
+                        delta,
+                        logical_line_count,
+                    );
+                }
+                view.fold_revision = document.content_revision;
+                view.fold_line_count = logical_line_count;
+            }
+            if diff_key == 0 {
+                (view.folds.hidden(), view.folds.generation)
+            } else {
+                (Vec::new(), 0)
+            }
+        };
+        let is_hidden = |line: usize| {
+            let at = hidden_lines.partition_point(|range| range.end <= line);
+            hidden_lines
+                .get(at)
+                .is_some_and(|range| range.contains(&line))
+        };
         let diff_inline = diff_mode.as_ref().is_some_and(|(inline, ..)| *inline);
         let diff_scroll_request = diff_mode.as_ref().and_then(|(_, _, request, _)| *request);
         let diff_decor = diff_mode.and_then(|(_, _, _, decor)| decor);
@@ -177,10 +227,11 @@ impl OxiApp {
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
         const MINIMAP_SCROLLBAR_WIDTH: f32 = 10.0;
+        let minimap_width = if prefs.minimap { MINIMAP_WIDTH } else { 0.0 };
         let side_strip_width = if diff_key != 0 {
             super::diff_editor::RULER_W
         } else {
-            MINIMAP_WIDTH + MINIMAP_SCROLLBAR_WIDTH
+            minimap_width + MINIMAP_SCROLLBAR_WIDTH
         };
         let prospective_editor_width =
             (editor_view_size.x - gutter_width - side_strip_width).max(80.0);
@@ -225,6 +276,27 @@ impl OxiApp {
                         let editor_size =
                             egui::vec2(editor_view_width.max(80.0), editor_view_size.y.max(24.0));
                         let document = &mut self.conv.editor.documents[index];
+                        // Sublime's `scroll_past_end`: the last line can scroll up to the top.
+                        // TextEdit takes its height from `desired_rows` (`min_size` only sets
+                        // the width), so ask for enough rows to cover the text plus a view
+                        // minus one line. The extra space still takes clicks and drags (mapped
+                        // to the end of the text below). It trails the text by a frame, which
+                        // only shows as one line of slack while typing.
+                        let past_end_rows = match &document.layout_cache.geometry {
+                            Some(galley) if prefs.scroll_past_end && diff_key == 0 => {
+                                let row_height = ui
+                                    .fonts_mut(|fonts| {
+                                        fonts.row_height(&crate::theme::editor_font())
+                                    })
+                                    .max(1.0);
+                                // Scrolled fully down, the last row sits at the view's top:
+                                // content (rows + 16 px margins) - view = text - row + 8.
+                                let height =
+                                    galley.rect.height() + editor_size.y - row_height - 8.0;
+                                Some((height / row_height).floor() as usize)
+                            }
+                            _ => None,
+                        };
                         let editor_id = ui.make_persistent_id(("workspace_text_editor", index));
                         if self.conv.editor.text_edit_ids.get(&document.path) != Some(&editor_id) {
                             self.conv
@@ -232,19 +304,122 @@ impl OxiApp {
                                 .text_edit_ids
                                 .insert(document.path.clone(), editor_id);
                         }
-                        // Sublime's editing commands (Cmd+/, Cmd+D, Cmd+L, ...) run before
-                        // TextEdit so it never sees their keys.
+                        // Sublime's typing model (multiple selections, auto-pairs, auto-indent)
+                        // and editing commands (Cmd+/, Cmd+L, ...) run before TextEdit so it
+                        // never sees their keys.
+                        let chord_k = super::editor_commands::chord_k(ui, editor_id);
+                        // The completion list takes Up/Down/Enter/Tab while it is open.
+                        let focused = ui.memory(|memory| memory.has_focus(editor_id));
+                        let mut completed = false;
+                        let list_pick = match document.view.completion.as_mut() {
+                            Some(open) if focused => match ui
+                                .input_mut(|input| super::completion::take_list_keys(input, open))
+                            {
+                                Some(super::completion::ListKey::Accept(word)) => Some(word),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(word) =
+                            list_pick.or_else(|| document.view.completion_pick.take())
+                            && let Some(open) = document.view.completion.take()
+                            && let Some(mut state) = TextEdit::load_state(ui.ctx(), editor_id)
+                            && let Some(range) = state.cursor.char_range()
+                        {
+                            let caret =
+                                char_index_to_byte(&document.content, range.primary.index.0);
+                            if open.start <= caret && caret <= document.content.len() {
+                                document.content.replace_range(open.start..caret, &word);
+                                let caret =
+                                    egui::text::CCursor::new(super::editor_text::char_index(
+                                        &document.content,
+                                        open.start + word.len(),
+                                    ));
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(caret)));
+                                state.store(ui.ctx(), editor_id);
+                                ui.memory_mut(|memory| memory.request_focus(editor_id));
+                                completed = true;
+                            }
+                        }
+                        let fold_command = (diff_key == 0
+                            && ui.memory(|memory| memory.has_focus(editor_id)))
+                        .then(|| {
+                            ui.input_mut(|input| super::folding::take_fold_command(input, chord_k))
+                        })
+                        .flatten();
+                        if let Some(command) = fold_command {
+                            let unit = super::editor_commands::indent_unit(&document.content).len();
+                            let view = &mut document.view;
+                            view.fold_map
+                                .refresh(&document.content, document.content_revision);
+                            let line = view.last_caret_line;
+                            match command {
+                                super::folding::FoldCommand::Fold => {
+                                    if let Some(region) = view.fold_map.region_at(line) {
+                                        view.folds.fold(region);
+                                    }
+                                }
+                                super::folding::FoldCommand::Unfold => {
+                                    if !view.folds.unfold_at(line) {
+                                        // On a line inside a fold's block: open the one around it.
+                                        if let Some(region) = view.fold_map.region_at(line) {
+                                            view.folds.unfold_at(region.start);
+                                        }
+                                    }
+                                }
+                                super::folding::FoldCommand::UnfoldAll => view.folds.clear(),
+                                super::folding::FoldCommand::Level(level) => {
+                                    for region in view.fold_map.regions_at_level(level, unit) {
+                                        view.folds.fold(region);
+                                    }
+                                }
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        let typed = super::multi_cursor::handle_typing(
+                            ui,
+                            editor_id,
+                            &mut document.content,
+                            &mut document.view,
+                            document.content_revision,
+                            &extension,
+                            chord_k,
+                        );
+                        let mut previous_minimap = None;
+                        let typed_text = typed.as_ref().is_some_and(|typed| typed.edited);
+                        if typed_text || completed {
+                            previous_minimap = mark_document_edited(document);
+                        }
+                        if typed.is_some() {
+                            document.view.extra_revision = document.content_revision;
+                        }
                         let command = super::editor_commands::handle_editor_commands(
                             ui,
                             editor_id,
                             &mut document.content,
                             &extension,
+                            chord_k,
                         );
                         let command_edited = command.is_some_and(|(_, edited)| edited);
-                        let mut previous_minimap = None;
                         if command_edited {
-                            previous_minimap = mark_document_edited(document);
+                            let replaced = mark_document_edited(document);
+                            previous_minimap = previous_minimap.or(replaced);
                         }
+                        let command = command.or(typed.map(|typed| (typed.caret, typed.edited)));
+                        // Cmd+click adds a caret: remember the selection the click replaces.
+                        let pre_click_selection = ui
+                            .input(|input| input.pointer.primary_pressed())
+                            .then(|| TextEdit::load_state(ui.ctx(), editor_id))
+                            .flatten()
+                            .and_then(|state| state.cursor.char_range())
+                            .map(|range| {
+                                super::multi_cursor::Sel::new(
+                                    char_index_to_byte(&document.content, range.secondary.index.0),
+                                    char_index_to_byte(&document.content, range.primary.index.0),
+                                )
+                            });
                         let revision = document.content_revision;
                         let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
                         let allow_layout_cache = !has_mutating_text_input(ui);
@@ -261,7 +436,7 @@ impl OxiApp {
                         let mut layouter =
                             |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                 // Diff rows must stay aligned with the base's: no wrapping.
-                                let wrap_width = if diff_key != 0 {
+                                let wrap_width = if diff_key != 0 || !word_wrap {
                                     f32::INFINITY
                                 } else {
                                     wrap_width
@@ -272,7 +447,7 @@ impl OxiApp {
                                 let geometry_job = |text: &str| {
                                     let mut job = egui::text::LayoutJob::simple(
                                         text.to_owned(),
-                                        FontId::monospace(FS_SMALL),
+                                        crate::theme::editor_font(),
                                         egui::Color32::TRANSPARENT,
                                         wrap_width,
                                     );
@@ -291,6 +466,7 @@ impl OxiApp {
                                     && layout_cache.fonts_generation
                                         == crate::theme::fonts_generation()
                                     && layout_cache.diff_key == diff_key
+                                    && layout_cache.folds == fold_generation
                                 {
                                     return Arc::clone(galley);
                                 }
@@ -301,6 +477,8 @@ impl OxiApp {
                                         &mut layout_cache.lines,
                                         geometry_job(text.as_str()),
                                         pixels_per_point,
+                                        crate::theme::editor_wrap_indent(),
+                                        (&hidden_lines, fold_generation),
                                         |job| fonts.layout_job(job),
                                     )
                                 });
@@ -324,6 +502,7 @@ impl OxiApp {
                                     layout_cache.fonts_generation =
                                         crate::theme::fonts_generation();
                                     layout_cache.diff_key = diff_key;
+                                    layout_cache.folds = fold_generation;
                                     layout_cache.geometry = Some(Arc::clone(&galley));
                                     // The cached syntax galley was laid out for the previous
                                     // wrap width / dpi. The keys now describe this new
@@ -350,12 +529,15 @@ impl OxiApp {
                                 ui.visuals_mut().text_cursor.blink = false;
                                 TextEdit::multiline(&mut EditorText(&mut document.content))
                                     .id(editor_id)
-                                    .font(FontId::monospace(FS_SMALL))
+                                    // After `code_editor()`, which would reset it to the
+                                    // style's monospace: `desired_rows` counts in this font.
                                     .code_editor()
+                                    .font(crate::theme::editor_font())
                                     .frame(egui::Frame::NONE)
                                     .background_color(egui::Color32::TRANSPARENT)
                                     .desired_width(f32::INFINITY)
                                     .min_size(editor_size)
+                                    .desired_rows(past_end_rows.unwrap_or(4))
                                     .margin(Margin::same(8))
                                     .layouter(&mut layouter)
                                     .show(ui)
@@ -370,6 +552,21 @@ impl OxiApp {
                         }
                         let scratchpad_changed =
                             (output.response.changed() || command_edited) && document.is_scratchpad;
+                        if output.response.hovered()
+                            && let Some(previous) = pre_click_selection
+                        {
+                            let add = ui.input(|input| {
+                                input.modifiers.command
+                                    && !input.modifiers.alt
+                                    && !input.modifiers.shift
+                            });
+                            if add {
+                                document.view.extra.push(previous);
+                                document.view.extra_revision = document.content_revision;
+                            } else {
+                                document.view.extra.clear();
+                            }
+                        }
                         if output.response.changed() {
                             previous_minimap = mark_document_edited(document);
                         }
@@ -440,7 +637,8 @@ impl OxiApp {
                                 )
                             };
                             output.state.cursor.set_char_range(Some(cursor_range));
-                            output.state.store(ui.ctx(), output.response.id);
+                            output.state.clone().store(ui.ctx(), output.response.id);
+                            output.cursor_range = Some(cursor_range);
                             if focus_editor_requested {
                                 output.response.request_focus();
                             }
@@ -480,11 +678,253 @@ impl OxiApp {
                         // char-by-char scans grew to the whole file whenever the caret sat near
                         // the end, e.g. right after Select All.
                         let caret_char = output.cursor_range.map(|range| range.primary.index.0);
-                        let active_line = output
+                        let mut active_line = output
                             .cursor_range
                             .map(|range| caret_logical_line(&output.galley, range.primary));
-                        let definition_modifier =
-                            ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                        // The caret never rests inside a fold: Up/Down step over it, anything
+                        // else (a click, Find, Go to) opens it, as in Sublime.
+                        if let Some(line) = active_line
+                            && let Some(fold) = document.view.folds.hiding(line).cloned()
+                            && let Some(range) = output.cursor_range
+                        {
+                            let (up, down) = ui.input(|input| {
+                                (
+                                    input.key_pressed(egui::Key::ArrowUp),
+                                    input.key_pressed(egui::Key::ArrowDown),
+                                )
+                            });
+                            let target = if down && fold.end < logical_line_count {
+                                Some((
+                                    fold.end,
+                                    super::folding::line_start_byte(&document.content, fold.end),
+                                ))
+                            } else if up {
+                                Some((
+                                    fold.start,
+                                    super::folding::line_end_byte(&document.content, fold.start),
+                                ))
+                            } else {
+                                None
+                            };
+                            match target {
+                                Some((target_line, byte)) => {
+                                    let caret = egui::text::CCursor::new(
+                                        super::editor_text::char_index(&document.content, byte),
+                                    );
+                                    let moved = if ui.input(|input| input.modifiers.shift) {
+                                        egui::text::CCursorRange::two(range.secondary, caret)
+                                    } else {
+                                        egui::text::CCursorRange::one(caret)
+                                    };
+                                    output.state.cursor.set_char_range(Some(moved));
+                                    output.state.clone().store(ui.ctx(), output.response.id);
+                                    output.cursor_range = Some(moved);
+                                    active_line = Some(target_line);
+                                }
+                                None => {
+                                    document.view.folds.unfold_at(fold.start);
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        }
+                        // Sublime's column selection: Alt+drag (or middle-drag) selects the same
+                        // horizontal span on every line it crosses, one selection per line.
+                        let (pressed, down, column_mod, middle) = ui.input(|input| {
+                            (
+                                input.pointer.primary_pressed()
+                                    || input.pointer.middle_down() && input.pointer.any_pressed(),
+                                input.pointer.primary_down() || input.pointer.middle_down(),
+                                // The press's own modifiers, falling back to the held keys.
+                                input
+                                    .events
+                                    .iter()
+                                    .find_map(|event| match event {
+                                        egui::Event::PointerButton {
+                                            pressed: true,
+                                            modifiers,
+                                            ..
+                                        } => Some(*modifiers),
+                                        _ => None,
+                                    })
+                                    .unwrap_or(input.modifiers)
+                                    .alt
+                                    && !input.modifiers.command,
+                                input.pointer.middle_down(),
+                            )
+                        });
+                        if pressed
+                            && (column_mod || middle)
+                            && output.response.hovered()
+                            && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+                        {
+                            document.view.column_drag = Some(pointer - output.galley_pos);
+                        }
+                        if !down {
+                            document.view.column_drag = None;
+                        }
+                        if let Some(start) = document.view.column_drag
+                            && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+                        {
+                            let current = pointer - output.galley_pos;
+                            let (top, bottom) = (start.y.min(current.y), start.y.max(current.y));
+                            // The first row of every logical line whose top lies in the span.
+                            let mut rows: Vec<f32> = Vec::new();
+                            for (row, placed) in output.galley.rows.iter().enumerate() {
+                                let starts_line =
+                                    row == 0 || output.galley.rows[row - 1].ends_with_newline;
+                                if !starts_line || placed.rect().height() <= 0.0 {
+                                    continue;
+                                }
+                                let rect = placed.rect();
+                                if rect.bottom() >= top && rect.top() <= bottom {
+                                    rows.push(rect.center().y);
+                                }
+                                if rect.top() > bottom {
+                                    break;
+                                }
+                            }
+                            let to_byte = |cursor: egui::text::CCursor| {
+                                char_index_to_byte(&document.content, cursor.index.0)
+                            };
+                            let mut sels: Vec<super::multi_cursor::Sel> = rows
+                                .iter()
+                                .map(|&y| {
+                                    let anchor =
+                                        output.galley.cursor_from_pos(egui::vec2(start.x, y));
+                                    let head =
+                                        output.galley.cursor_from_pos(egui::vec2(current.x, y));
+                                    super::multi_cursor::Sel::new(to_byte(anchor), to_byte(head))
+                                })
+                                .collect();
+                            if current.y < start.y {
+                                sels.reverse();
+                            }
+                            if let Some(primary) = sels.pop() {
+                                let caret = egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(super::editor_text::char_index(
+                                        &document.content,
+                                        primary.anchor,
+                                    )),
+                                    egui::text::CCursor::new(super::editor_text::char_index(
+                                        &document.content,
+                                        primary.head,
+                                    )),
+                                );
+                                output.state.cursor.set_char_range(Some(caret));
+                                output.state.clone().store(ui.ctx(), output.response.id);
+                                output.cursor_range = Some(caret);
+                                document.view.extra = sels;
+                                document.view.extra_revision = document.content_revision;
+                            }
+                        }
+
+                        // Bookmarks: toggle on the caret's line, or jump to the next one.
+                        let bookmark_command = output
+                            .response
+                            .has_focus()
+                            .then(|| ui.input_mut(super::folding::take_bookmark_command))
+                            .flatten();
+                        if let (Some(command), Some(line)) = (bookmark_command, active_line) {
+                            use super::folding::BookmarkCommand;
+                            let marks = &mut document.view.bookmarks;
+                            let target = match command {
+                                BookmarkCommand::Toggle => {
+                                    match marks.binary_search(&line) {
+                                        Ok(at) => {
+                                            marks.remove(at);
+                                        }
+                                        Err(at) => marks.insert(at, line),
+                                    }
+                                    None
+                                }
+                                BookmarkCommand::Clear => {
+                                    marks.clear();
+                                    None
+                                }
+                                BookmarkCommand::Next => marks
+                                    .iter()
+                                    .copied()
+                                    .find(|mark| *mark > line)
+                                    .or_else(|| marks.first().copied()),
+                                BookmarkCommand::Previous => marks
+                                    .iter()
+                                    .rev()
+                                    .copied()
+                                    .find(|mark| *mark < line)
+                                    .or_else(|| marks.last().copied()),
+                            };
+                            if let Some(target) = target {
+                                document.view.folds.unfold_at(target);
+                                let byte =
+                                    super::folding::line_start_byte(&document.content, target);
+                                let caret =
+                                    egui::text::CCursorRange::one(egui::text::CCursor::new(
+                                        super::editor_text::char_index(&document.content, byte),
+                                    ));
+                                output.state.cursor.set_char_range(Some(caret));
+                                output.state.clone().store(ui.ctx(), output.response.id);
+                                output.cursor_range = Some(caret);
+                                active_line = Some(target);
+                                let rect = output
+                                    .galley
+                                    .pos_from_cursor(caret.primary)
+                                    .translate(output.galley_pos.to_vec2());
+                                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                            }
+                        }
+                        if let Some(line) = active_line {
+                            document.view.last_caret_line = line;
+                        }
+                        document.view.galley_pos = output.galley_pos;
+                        // Word completion under a single caret.
+                        if prefs.auto_complete && diff_key == 0 {
+                            let single = output
+                                .cursor_range
+                                .filter(|range| range.is_empty() && document.view.extra.is_empty())
+                                .map(|range| {
+                                    char_index_to_byte(&document.content, range.primary.index.0)
+                                });
+                            let typed_now = typed_text || (output.response.changed() && !completed);
+                            let view = &mut document.view;
+                            super::completion::update(
+                                &mut view.completion,
+                                &mut view.words,
+                                &document.content,
+                                document.content_revision,
+                                // A press on the list itself takes focus from the editor; keep
+                                // the list until that click has landed.
+                                single.filter(|_| {
+                                    output.response.has_focus()
+                                        || ui.input(|input| {
+                                            input.pointer.any_down() || input.pointer.any_released()
+                                        })
+                                }),
+                                typed_now,
+                            );
+                            if let (Some(open), Some(range)) =
+                                (view.completion.as_mut(), output.cursor_range)
+                            {
+                                let caret = output
+                                    .galley
+                                    .pos_from_cursor(range.primary)
+                                    .translate(output.galley_pos.to_vec2());
+                                if let Some(word) = super::completion::show(
+                                    ui.ctx(),
+                                    editor_id.with("completion"),
+                                    caret,
+                                    open,
+                                ) {
+                                    view.completion_pick = Some(word);
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        } else {
+                            document.view.completion = None;
+                        }
+                        // Cmd+click adds a caret (Sublime); Cmd+Alt+click goes to the definition.
+                        let definition_modifier = ui.input(|input| {
+                            input.modifiers.alt && (input.modifiers.command || input.modifiers.ctrl)
+                        });
                         let hovered_definition = if navigation_supported
                             && definition_modifier
                             && output.response.hovered()
@@ -548,9 +988,9 @@ impl OxiApp {
                             if has_selection
                                 && ui
                                     .button(if cfg!(target_os = "macos") {
-                                        "Add Selection to Chat    ⌘⇧L"
+                                        "Add Selection to Chat    ⌘⌥L"
                                     } else {
-                                        "Add Selection to Chat    Ctrl+Shift+L"
+                                        "Add Selection to Chat    Ctrl+Alt+L"
                                     })
                                     .clicked()
                             {
@@ -613,7 +1053,7 @@ impl OxiApp {
                                     &mut document.syntax_state,
                                     &document.content,
                                     &extension,
-                                    FontId::monospace(FS_SMALL),
+                                    crate::theme::editor_font(),
                                     Some(document.content_revision),
                                     Some(window_bytes.clone()),
                                 ) {
@@ -635,7 +1075,7 @@ impl OxiApp {
                                     None => match crate::theme::highlight_code_async(
                                         &document.content,
                                         &extension,
-                                        FontId::monospace(FS_SMALL),
+                                        crate::theme::editor_font(),
                                         ui.ctx(),
                                     ) {
                                         Some(job) => {
@@ -651,7 +1091,7 @@ impl OxiApp {
                                                 egui::text::LayoutJob::simple(
                                                     document.content[window_bytes.clone()]
                                                         .to_owned(),
-                                                    FontId::monospace(FS_SMALL),
+                                                    crate::theme::editor_font(),
                                                     c_text(),
                                                     f32::INFINITY,
                                                 ),
@@ -679,7 +1119,21 @@ impl OxiApp {
                                 } else {
                                     job
                                 };
-                            let galley = ui.fonts_mut(|fonts| fonts.layout_job(visible_job));
+                            let pixels_per_point = ui.ctx().pixels_per_point();
+                            let galley = ui.fonts_mut(|fonts| {
+                                if crate::theme::editor_wrap_indent() || !hidden_lines.is_empty() {
+                                    let first = syntax_lines.start;
+                                    line_layout::layout_paragraphs(
+                                        visible_job,
+                                        pixels_per_point,
+                                        crate::theme::editor_wrap_indent(),
+                                        |line| is_hidden(first + line),
+                                        |job| fonts.layout_job(job),
+                                    )
+                                } else {
+                                    fonts.layout_job(visible_job)
+                                }
+                            });
                             // Store only when the cache keys already describe this exact
                             // layout (they are written by the geometry layouter). Overwriting
                             // the keys here could relabel a geometry galley from an older
@@ -757,7 +1211,7 @@ impl OxiApp {
                             .paint(
                                 ui.painter(),
                                 &rows,
-                                &FontId::monospace(FS_SMALL),
+                                &crate::theme::editor_font(),
                             );
                             diff.frame.new_spans = decor
                                 .changes
@@ -812,6 +1266,21 @@ impl OxiApp {
                             }
                         }
 
+                        if prefs.highlight_line
+                            && diff_decor.is_none()
+                            && let Some(cursor_range) = output.cursor_range
+                        {
+                            super::editor_paint::paint_current_line(
+                                ui,
+                                &output.galley,
+                                output.galley_pos,
+                                egui::Rect::from_x_y_ranges(
+                                    ui.clip_rect().x_range(),
+                                    viewport_clip.y_range(),
+                                ),
+                                cursor_range.primary,
+                            );
+                        }
                         // Paint selection behind the visible galley. The previous order put a
                         // translucent wash over the glyphs; depending on the backend it looked
                         // opaque and left only our whitespace markers visible.
@@ -825,6 +1294,36 @@ impl OxiApp {
                                 selection,
                             );
                             paint_selection(&selection_painter, &selection_rects, selection_color);
+                        }
+                        let extra_ranges: Vec<egui::text::CCursorRange> = document
+                            .view
+                            .extra
+                            .iter()
+                            .map(|sel| {
+                                egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(super::editor_text::char_index(
+                                        &document.content,
+                                        sel.anchor,
+                                    )),
+                                    egui::text::CCursor::new(super::editor_text::char_index(
+                                        &document.content,
+                                        sel.head,
+                                    )),
+                                )
+                            })
+                            .collect();
+                        for range in extra_ranges.iter().filter(|range| !range.is_empty()) {
+                            let rects = editor_selection_rects(
+                                &output.galley,
+                                output.galley_pos,
+                                viewport_clip,
+                                *range,
+                            );
+                            paint_selection(
+                                &ui.painter().with_clip_rect(viewport_clip),
+                                &rects,
+                                crate::theme::editor_selection_fill(),
+                            );
                         }
                         paint_find_matches(
                             ui,
@@ -858,6 +1357,57 @@ impl OxiApp {
                             visible_galley,
                             c_text(),
                         );
+                        // Sublime's "…" after a folded line; clicking it opens the fold.
+                        let mut unfold = None;
+                        for fold in &document.view.folds.ranges {
+                            let end = super::folding::line_end_byte(&document.content, fold.start);
+                            let caret = output
+                                .galley
+                                .pos_from_cursor(egui::text::CCursor::new(
+                                    super::editor_text::char_index(&document.content, end),
+                                ))
+                                .translate(output.galley_pos.to_vec2());
+                            if !caret.intersects(viewport_clip) {
+                                continue;
+                            }
+                            let height = (caret.height() * 0.62).round();
+                            let marker = egui::Rect::from_min_size(
+                                egui::pos2(caret.right() + 6.0, caret.center().y - height * 0.5),
+                                egui::vec2(height * 1.6, height),
+                            );
+                            let response = ui
+                                .interact(
+                                    marker,
+                                    editor_id.with(("fold_marker", fold.start)),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("Unfold");
+                            let painter = ui.painter().with_clip_rect(viewport_clip);
+                            let fill = if response.hovered() {
+                                c_warning_fg()
+                            } else {
+                                crate::theme::blend_color(c_warning_fg(), c_bg_main(), 0.15)
+                            };
+                            painter.rect_filled(marker, 2.0, fill);
+                            for dot in 0..3 {
+                                painter.circle_filled(
+                                    egui::pos2(
+                                        marker.center().x + (dot as f32 - 1.0) * height * 0.38,
+                                        marker.center().y + height * 0.12,
+                                    ),
+                                    (height * 0.08).max(1.0),
+                                    c_bg_main(),
+                                );
+                            }
+                            if response.clicked() {
+                                unfold = Some(fold.start);
+                            }
+                        }
+                        if let Some(line) = unfold {
+                            document.view.folds.unfold_at(line);
+                            ui.ctx().request_repaint();
+                        }
 
                         paint_selection_matches(
                             ui,
@@ -900,14 +1450,34 @@ impl OxiApp {
                                 );
                             }
                         }
-                        if let Some(selection) = selection {
-                            paint_selected_whitespace(
-                                ui,
-                                &output.galley,
-                                output.galley_pos,
-                                viewport_clip,
-                                selection,
-                            );
+                        match prefs.draw_white_space {
+                            crate::settings::DrawWhiteSpace::Selection => {
+                                if let Some(selection) = selection {
+                                    paint_selected_whitespace(
+                                        ui,
+                                        &output.galley,
+                                        output.galley_pos,
+                                        viewport_clip,
+                                        selection,
+                                        false,
+                                    );
+                                }
+                            }
+                            crate::settings::DrawWhiteSpace::All => {
+                                let everything = egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    output.galley.end(),
+                                );
+                                paint_selected_whitespace(
+                                    ui,
+                                    &output.galley,
+                                    output.galley_pos,
+                                    viewport_clip,
+                                    everything,
+                                    true,
+                                );
+                            }
+                            crate::settings::DrawWhiteSpace::None => {}
                         }
                         if output.response.has_focus()
                             && let Some(cursor_range) = output.cursor_range
@@ -919,6 +1489,15 @@ impl OxiApp {
                                 viewport_clip,
                                 cursor_range.primary,
                             );
+                            for range in &extra_ranges {
+                                paint_caret(
+                                    ui,
+                                    &output.galley,
+                                    output.galley_pos,
+                                    viewport_clip,
+                                    range.primary,
+                                );
+                            }
                         }
 
                         let selected_lines =
@@ -933,7 +1512,7 @@ impl OxiApp {
                         // number glyph per entry, so returning every logical line made a 3000-line
                         // file shape 3000 tiny galleys each frame; culling here keeps that O(visible).
                         let gutter_clip_range = viewport_clip.y_range();
-                        let gutter_line_height = FS_SMALL * 1.35;
+                        let gutter_line_height = crate::theme::editor_line_height();
                         let mut logical_line = 0usize;
                         let mut viewport_anchor_line = 0usize;
                         let mut resize_anchor_top = None;
@@ -942,6 +1521,11 @@ impl OxiApp {
                             let starts_line =
                                 row == 0 || output.galley.rows[row - 1].ends_with_newline;
                             if !starts_line {
+                                continue;
+                            }
+                            // A folded line: no number, no anchor.
+                            if placed_row.rect().height() <= 0.0 {
+                                logical_line += 1;
                                 continue;
                             }
                             let line_rect =
@@ -1008,16 +1592,19 @@ impl OxiApp {
                 diff.scroll_y = scroll_output.state.offset.y;
                 for &(number, y) in &diff.frame.zone_numbers {
                     ui.painter().with_clip_rect(gutter_clip).text(
-                        egui::pos2(gutter_rect.right() - GUTTER_RIGHT_PADDING, y),
+                        egui::pos2(
+                            gutter_rect.right() - GUTTER_RIGHT_PADDING - fold_w + fold_w.min(6.0),
+                            y,
+                        ),
                         egui::Align2::RIGHT_CENTER,
                         number,
-                        FontId::monospace(FS_SMALL),
+                        crate::theme::editor_font(),
                         c_diff_del_fg().gamma_multiply(0.75),
                     );
                 }
             }
             for (line, y) in scroll_output.inner.0.iter().copied() {
-                let line_height = FS_SMALL * 1.35;
+                let line_height = crate::theme::editor_line_height();
                 if scroll_output.inner.4 == Some(line) {
                     ui.painter().with_clip_rect(gutter_clip).rect_filled(
                         egui::Rect::from_center_size(
@@ -1060,16 +1647,125 @@ impl OxiApp {
                     );
                 }
                 ui.painter().with_clip_rect(gutter_clip).text(
-                    egui::pos2(gutter_rect.right() - GUTTER_RIGHT_PADDING, y),
+                    egui::pos2(
+                        gutter_rect.right() - GUTTER_RIGHT_PADDING - fold_w + fold_w.min(6.0),
+                        y,
+                    ),
                     egui::Align2::RIGHT_CENTER,
                     line + 1,
-                    FontId::monospace(FS_SMALL),
+                    crate::theme::editor_font(),
                     if scroll_output.inner.4 == Some(line) {
                         c_text_muted()
                     } else {
                         c_text_faint()
                     },
                 );
+            }
+
+            // Bookmarks: a small tag at the left of the line number.
+            {
+                let bookmarks = &self.conv.editor.documents[index].view.bookmarks;
+                if !bookmarks.is_empty() {
+                    let line_height = crate::theme::editor_line_height();
+                    let painter = ui.painter().with_clip_rect(gutter_clip);
+                    for &(line, y) in &scroll_output.inner.0 {
+                        if bookmarks.binary_search(&line).is_err() {
+                            continue;
+                        }
+                        let h = (line_height * 0.62).round();
+                        let w = (h * 0.62).round();
+                        let left = gutter_rect.left() + GIT_MARKER_WIDTH + 4.0;
+                        let top = y - h * 0.5;
+                        painter.add(egui::Shape::convex_polygon(
+                            vec![
+                                egui::pos2(left, top),
+                                egui::pos2(left + w, top),
+                                egui::pos2(left + w, top + h * 0.78),
+                                egui::pos2(left + w * 0.5, top + h),
+                                egui::pos2(left, top + h * 0.78),
+                            ],
+                            c_accent(),
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                }
+            }
+
+            // Fold arrows: on every folded line, and while the pointer is over the gutter on each
+            // line that can fold (Sublime's `fade_fold_buttons`).
+            if diff_decor.is_none() {
+                let line_height = crate::theme::editor_line_height();
+                let arrow_x = gutter_rect.right() - fold_w * 0.5 - 3.0;
+                let column = egui::Rect::from_x_y_ranges(
+                    gutter_rect.right() - fold_w - 6.0..=gutter_rect.right(),
+                    gutter_rect.y_range(),
+                );
+                let response = ui.interact(
+                    column.intersect(gutter_clip),
+                    ui.id().with(("fold_column", index)),
+                    egui::Sense::click(),
+                );
+                let hovered = ui.rect_contains_pointer(gutter_clip);
+                let document = &mut self.conv.editor.documents[index];
+                if hovered {
+                    document
+                        .view
+                        .fold_map
+                        .refresh(&document.content, document.content_revision);
+                }
+                let view = &mut document.view;
+                let painter = ui.painter().with_clip_rect(gutter_clip);
+                let mut toggle = None;
+                for &(line, y) in &scroll_output.inner.0 {
+                    let folded = view.folds.starting_at(line).is_some();
+                    let foldable = hovered
+                        && view.fold_map.revision == Some(document.content_revision)
+                        && view.fold_map.ends.get(line).copied().flatten().is_some();
+                    if !(folded || foldable) {
+                        continue;
+                    }
+                    let near = response
+                        .hover_pos()
+                        .is_some_and(|pointer| (pointer.y - y).abs() < line_height * 0.5);
+                    let color = if near || folded {
+                        c_text_muted()
+                    } else {
+                        c_text_faint()
+                    };
+                    let size = (line_height * 0.24).round();
+                    let points = if folded {
+                        vec![
+                            egui::pos2(arrow_x - size * 0.5, y - size),
+                            egui::pos2(arrow_x + size * 0.7, y),
+                            egui::pos2(arrow_x - size * 0.5, y + size),
+                        ]
+                    } else {
+                        vec![
+                            egui::pos2(arrow_x - size, y - size * 0.5),
+                            egui::pos2(arrow_x + size, y - size * 0.5),
+                            egui::pos2(arrow_x, y + size * 0.7),
+                        ]
+                    };
+                    painter.add(egui::Shape::convex_polygon(
+                        points,
+                        color,
+                        egui::Stroke::NONE,
+                    ));
+                    if near && response.clicked() {
+                        toggle = Some((line, folded));
+                    }
+                }
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if let Some((line, folded)) = toggle {
+                    if folded {
+                        view.folds.unfold_at(line);
+                    } else if let Some(Some(end)) = view.fold_map.ends.get(line) {
+                        view.folds.fold(line..end + 1);
+                    }
+                    ui.ctx().request_repaint();
+                }
             }
 
             // ScrollArea deliberately ignores the wheel while TextEdit owns a selection drag.
@@ -1186,7 +1882,7 @@ impl OxiApp {
                 }
             } else if let Some(fraction) = minimap::paint(
                 ui,
-                egui::vec2(MINIMAP_WIDTH, editor_view_size.y.max(24.0)),
+                egui::vec2(minimap_width, editor_view_size.y.max(24.0)),
                 &scroll_output,
                 scroll_output.inner.2,
                 self.conv.editor.documents[index]
@@ -1199,6 +1895,27 @@ impl OxiApp {
                     (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
                 state.offset.y = max_y * fraction;
                 state.store(ui.ctx(), scroll_output.id);
+                ui.ctx().request_repaint();
+            }
+
+            // Sublime's Next/Previous Modification walks the Git changes in place.
+            if diff_decor.is_none()
+                && let Some(forward) = ui.input_mut(take_modification_key)
+                && let Some(line) = super::editor_logic::modification_target(
+                    &git_line_changes,
+                    scroll_output.inner.4.unwrap_or(0),
+                    forward,
+                )
+            {
+                let document = &self.conv.editor.documents[index];
+                let byte: usize = document
+                    .content
+                    .split_inclusive('\n')
+                    .take(line)
+                    .map(str::len)
+                    .sum();
+                self.conv.editor.navigation_target = Some((document.path.clone(), byte..byte));
+                self.conv.editor.focus_editor_next_frame = true;
                 ui.ctx().request_repaint();
             }
 
@@ -1238,12 +1955,36 @@ pub(super) fn mark_document_edited(
     document.minimap_cache.take()
 }
 
+/// Next/Previous Modification: F7 / Shift+F7, and Sublime's Ctrl+. / Ctrl+, on macOS (elsewhere
+/// Ctrl+. is Stop Response). Consumes the key; `Some(true)` means forward.
+pub(super) fn take_modification_key(input: &mut egui::InputState) -> Option<bool> {
+    use egui::{Key, Modifiers};
+    // Shifted first: a pattern without Shift also matches with it held.
+    if input.consume_key(Modifiers::SHIFT, Key::F7) {
+        return Some(false);
+    }
+    if input.consume_key(Modifiers::NONE, Key::F7) {
+        return Some(true);
+    }
+    if cfg!(target_os = "macos") {
+        if input.consume_key(Modifiers::CTRL, Key::Period) {
+            return Some(true);
+        }
+        if input.consume_key(Modifiers::CTRL, Key::Comma) {
+            return Some(false);
+        }
+    }
+    None
+}
+
 /// Height of one row of a diff pane's galley (rows never wrap there).
 fn diff_row_height(galley: &egui::Galley) -> f32 {
     galley
         .rows
         .first()
-        .map_or(FS_SMALL * 1.35, |row| row.rect().height())
+        .map_or(crate::theme::editor_line_height(), |row| {
+            row.rect().height()
+        })
 }
 
 fn has_mutating_text_input(ui: &Ui) -> bool {

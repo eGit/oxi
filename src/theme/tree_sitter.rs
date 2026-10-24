@@ -236,6 +236,10 @@ pub fn highlight_editor_code_with_revision(
     if current.palette == palette
         && let Some((cached_range, job)) = &current.job
         && *cached_range == range
+        && job
+            .sections
+            .first()
+            .is_none_or(|section| section.format.font_id == font_id)
     {
         return Some(job.clone());
     }
@@ -343,7 +347,16 @@ fn layout_job(
         .iter()
         .map(|name| capture_color(name, palette))
         .collect();
+    // Sublime's own schemes (Mariana, Monokai) set storage keywords, types and `self` in italics.
+    let italic_storage =
+        palette == super::Palette::MARIANA.syntax || palette == super::Palette::SUBLIME.syntax;
+    let capture_italic: Vec<CaptureItalic> = query
+        .capture_names()
+        .iter()
+        .map(|name| capture_italic(name, italic_storage))
+        .collect();
     let mut colors = vec![palette.foreground; text.len()];
+    let mut italics = vec![false; text.len()];
     let mut priorities = vec![0u32; text.len()];
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(range.clone());
@@ -352,6 +365,13 @@ fn layout_job(
         let capture = matched.captures()[*capture_index];
         let color = capture_colors[capture.index as usize];
         let node = capture.node.byte_range();
+        let italic = match capture_italic[capture.index as usize] {
+            CaptureItalic::Never => false,
+            CaptureItalic::Always => true,
+            CaptureItalic::StorageWord => content
+                .get(node.clone())
+                .is_some_and(|word| STORAGE_WORDS.contains(&word)),
+        };
         // Prefer the more specific (shorter) capture when query patterns overlap. This keeps
         // nested strings/escapes, fields, and function names from being flattened by a later
         // broad parent capture.
@@ -362,6 +382,7 @@ fn layout_job(
             if priority >= priorities[index] {
                 priorities[index] = priority;
                 colors[index] = color;
+                italics[index] = italic;
             }
         }
     }
@@ -376,12 +397,17 @@ fn layout_job(
     let bytes = text.as_bytes();
     let mut start = 0;
     while start < text.len() {
-        let color = bytes[start..]
+        let first = bytes[start..]
             .iter()
             .position(|b| !b.is_ascii_whitespace())
-            .map_or(palette.foreground, |offset| colors[start + offset]);
+            .map(|offset| start + offset);
+        let color = first.map_or(palette.foreground, |at| colors[at]);
+        let italic = first.is_some_and(|at| italics[at]);
         let mut end = start + 1;
-        while end < text.len() && (colors[end] == color || bytes[end].is_ascii_whitespace()) {
+        while end < text.len()
+            && ((colors[end] == color && italics[end] == italic)
+                || bytes[end].is_ascii_whitespace())
+        {
             end += 1;
         }
         while end < text.len() && !text.is_char_boundary(end) {
@@ -393,13 +419,87 @@ fn layout_job(
             format: egui::text::TextFormat {
                 font_id: font_id.clone(),
                 color,
-                italics: name_is_comment_color(color, palette),
+                italics: italic || name_is_comment_color(color, palette),
                 ..Default::default()
             },
         });
         start = end;
     }
     job
+}
+
+#[derive(Clone, Copy)]
+enum CaptureItalic {
+    Never,
+    Always,
+    /// A keyword: italic only when it declares or modifies (Mariana's `storage`), not for
+    /// control flow.
+    StorageWord,
+}
+
+/// Keywords Sublime's schemes scope as `storage.type` / `storage.modifier`, across languages.
+const STORAGE_WORDS: &[&str] = &[
+    "fn",
+    "pub",
+    "use",
+    "let",
+    "const",
+    "static",
+    "mut",
+    "impl",
+    "enum",
+    "struct",
+    "trait",
+    "type",
+    "mod",
+    "crate",
+    "dyn",
+    "ref",
+    "extern",
+    "unsafe",
+    "async",
+    "where",
+    "def",
+    "class",
+    "lambda",
+    "global",
+    "nonlocal",
+    "function",
+    "var",
+    "import",
+    "export",
+    "from",
+    "interface",
+    "extends",
+    "implements",
+    "package",
+    "func",
+    "public",
+    "private",
+    "protected",
+    "final",
+    "abstract",
+    "readonly",
+    "declare",
+    "namespace",
+    "typedef",
+    "struct",
+    "union",
+    "auto",
+    "volatile",
+];
+
+fn capture_italic(name: &str, italic_storage: bool) -> CaptureItalic {
+    if !italic_storage {
+        CaptureItalic::Never
+    } else if name.starts_with("type") || name == "variable.builtin" || name == "variable.language"
+    {
+        CaptureItalic::Always
+    } else if name.starts_with("keyword") || name == "storage" || name.starts_with("storage.") {
+        CaptureItalic::StorageWord
+    } else {
+        CaptureItalic::Never
+    }
 }
 
 fn capture_color(name: &str, p: SyntaxPalette) -> egui::Color32 {

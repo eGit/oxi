@@ -37,12 +37,20 @@ pub(super) enum EditorCommand {
     JoinLines,
     JumpToBracket,
     ExpandSelection,
+    UpperCase,
+    LowerCase,
+    DeleteToLineEnd,
+    DeleteToLineStart,
+    SortLines,
+    Transpose,
+    ExpandToIndentation,
+    ExpandToBrackets,
 }
 
 /// Remove and return the editor command bound to a key event this frame, if any. Shifted
 /// shortcuts are checked as distinct bindings (egui's `consume_key` would let Cmd+Shift+D
 /// trigger Cmd+D).
-fn take_command(input: &mut egui::InputState) -> Option<EditorCommand> {
+fn take_command(input: &mut egui::InputState, chord_k: bool) -> Option<EditorCommand> {
     let mac = cfg!(target_os = "macos");
     let position = input.events.iter().position(|event| {
         let Event::Key {
@@ -54,16 +62,57 @@ fn take_command(input: &mut egui::InputState) -> Option<EditorCommand> {
         else {
             return false;
         };
-        command_for(*key, *modifiers, mac).is_some()
+        command_for(*key, *modifiers, mac, chord_k).is_some()
     })?;
     let Event::Key { key, modifiers, .. } = input.events.remove(position) else {
         return None;
     };
-    command_for(key, modifiers, mac)
+    command_for(key, modifiers, mac, chord_k)
 }
 
-fn command_for(key: Key, modifiers: Modifiers, mac: bool) -> Option<EditorCommand> {
+fn command_for(key: Key, modifiers: Modifiers, mac: bool, chord_k: bool) -> Option<EditorCommand> {
     use EditorCommand::*;
+    let plain_cmd =
+        modifiers.command && !modifiers.alt && !modifiers.shift && (!mac || !modifiers.ctrl);
+    // The second key of a Cmd+K chord.
+    if chord_k && plain_cmd {
+        return match key {
+            Key::U => Some(UpperCase),
+            Key::L => Some(LowerCase),
+            Key::K => Some(DeleteToLineEnd),
+            Key::Backspace => Some(DeleteToLineStart),
+            _ => None,
+        };
+    }
+    // Sublime: F5 sorts lines on macOS, F9 elsewhere.
+    if modifiers.is_none() && key == if mac { Key::F5 } else { Key::F9 } {
+        return Some(SortLines);
+    }
+    if mac
+        && modifiers.ctrl
+        && !modifiers.mac_cmd
+        && !modifiers.alt
+        && !modifiers.shift
+        && key == Key::T
+    {
+        return Some(Transpose);
+    }
+    if modifiers.ctrl
+        && modifiers.shift
+        && !modifiers.alt
+        && (!mac || !modifiers.mac_cmd)
+        && key == Key::M
+    {
+        return Some(ExpandToBrackets);
+    }
+    if modifiers.command
+        && modifiers.shift
+        && !modifiers.alt
+        && (!mac || !modifiers.ctrl)
+        && key == Key::J
+    {
+        return Some(ExpandToIndentation);
+    }
     // On macOS `command` is Cmd and Ctrl is separate; elsewhere `command` is Ctrl itself.
     let ctrl_only = modifiers.ctrl && !modifiers.alt && !modifiers.shift && !modifiers.mac_cmd;
     let cmd = modifiers.command && !modifiers.alt && (!mac || !modifiers.ctrl);
@@ -102,6 +151,64 @@ fn command_for(key: Key, modifiers: Modifiers, mac: bool) -> Option<EditorComman
     })
 }
 
+fn chord_flag() -> egui::Id {
+    egui::Id::new("editor_chord_k")
+}
+
+/// Cmd+K was pressed in the editor and waits for its second key; app-wide shortcuts (Cmd+0,
+/// Cmd+1…) stand aside so the chord gets it.
+pub(crate) fn chord_pending(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(chord_flag()))
+        .unwrap_or(false)
+}
+
+/// Sublime's Cmd+K chords: true on the frame of the key that follows Cmd+K in the focused
+/// editor. Cmd+K itself is taken out of the input.
+pub(super) fn chord_k(ui: &egui::Ui, editor_id: egui::Id) -> bool {
+    let flag = chord_flag();
+    if !ui.memory(|memory| memory.has_focus(editor_id)) {
+        ui.data_mut(|data| data.remove_temp::<bool>(flag));
+        return false;
+    }
+    let mac = cfg!(target_os = "macos");
+    let pressed_k = ui.input_mut(|input| {
+        let position = input.events.iter().position(|event| {
+            matches!(event, Event::Key { key: Key::K, pressed: true, modifiers, .. }
+                if modifiers.command && !modifiers.shift && !modifiers.alt && (!mac || !modifiers.ctrl))
+        });
+        position.map(|position| input.events.remove(position)).is_some()
+    });
+    let pending = ui.data(|data| data.get_temp::<bool>(flag)).unwrap_or(false);
+    if pressed_k && !pending {
+        ui.data_mut(|data| data.insert_temp(flag, true));
+        return false;
+    }
+    let next_key = pressed_k
+        || ui.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Key { pressed: true, .. } | Event::Text(_)))
+        });
+    if pending && next_key {
+        ui.data_mut(|data| data.remove_temp::<bool>(flag));
+        if pressed_k {
+            // Cmd+K Cmd+K: give the K back as the chord's second key.
+            ui.input_mut(|input| {
+                input.events.push(Event::Key {
+                    key: Key::K,
+                    physical_key: Some(Key::K),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: input.modifiers,
+                });
+            });
+        }
+        return true;
+    }
+    false
+}
+
 /// Run a bound command on the focused editor before `TextEdit` sees the key. Returns the
 /// caret's new char index when the text or selection changed, so the caller can reveal it;
 /// `true` in the pair means the text was edited.
@@ -110,11 +217,12 @@ pub(super) fn handle_editor_commands(
     editor_id: egui::Id,
     content: &mut String,
     language: &str,
+    chord_k: bool,
 ) -> Option<(usize, bool)> {
     if !ui.memory(|memory| memory.has_focus(editor_id)) {
         return None;
     }
-    let command = ui.input_mut(take_command)?;
+    let command = ui.input_mut(|input| take_command(input, chord_k))?;
     let mut state = egui::text_edit::TextEditState::load(ui.ctx(), editor_id)?;
     let range = state.cursor.char_range()?;
     let sorted = range.as_sorted_char_range();
@@ -186,7 +294,150 @@ pub(super) fn run_command(
                 })?;
             Some(CommandResult::Select(expanded))
         }
+        UpperCase | LowerCase => {
+            let range = if selection.is_empty() {
+                crate::code_nav::identifier_at(text, selection.start)?.1
+            } else {
+                selection
+            };
+            let original = &text[range.clone()];
+            let changed = if command == UpperCase {
+                original.to_uppercase()
+            } else {
+                original.to_lowercase()
+            };
+            let end = range.start + changed.len();
+            Some(CommandResult::Edit {
+                text: apply(text, &[(range.clone(), changed)]),
+                selection: range.start..end,
+            })
+        }
+        DeleteToLineEnd => {
+            let end = line_end(text, selection.end);
+            let end = if end == selection.end {
+                (end + 1).min(text.len())
+            } else {
+                end
+            };
+            (end > selection.start).then(|| CommandResult::Edit {
+                text: apply(text, &[(selection.start..end, String::new())]),
+                selection: selection.start..selection.start,
+            })
+        }
+        DeleteToLineStart => {
+            let start = line_start(text, selection.start);
+            let start = if start == selection.start {
+                start.saturating_sub(1)
+            } else {
+                start
+            };
+            (start < selection.start).then(|| CommandResult::Edit {
+                text: apply(text, &[(start..selection.start, String::new())]),
+                selection: start..start,
+            })
+        }
+        SortLines => sort_lines(text, selection),
+        Transpose => transpose(text, selection),
+        ExpandToIndentation => expand_to_indentation(text, selection).map(CommandResult::Select),
+        ExpandToBrackets => expand_to_brackets(text, selection).map(CommandResult::Select),
     }
+}
+
+/// Sublime's Sort Lines (case-insensitive): the selected lines, or the whole file.
+fn sort_lines(text: &str, selection: Range<usize>) -> Option<CommandResult> {
+    let block = if selection.is_empty() {
+        0..text.trim_end_matches('\n').len()
+    } else {
+        line_block(text, &selection)
+    };
+    let mut lines: Vec<&str> = text[block.clone()].split('\n').collect();
+    lines.sort_by_key(|line| line.to_lowercase());
+    let sorted = lines.join("\n");
+    (sorted != text[block.clone()]).then(|| CommandResult::Edit {
+        selection: block.start..block.start + sorted.len(),
+        text: apply(text, &[(block, sorted)]),
+    })
+}
+
+/// Sublime's Ctrl+T: swap the characters around the caret (at a line end, the two before it).
+fn transpose(text: &str, selection: Range<usize>) -> Option<CommandResult> {
+    if !selection.is_empty() {
+        return None;
+    }
+    let mut at = selection.start;
+    if at == line_end(text, at) && at > line_start(text, at) {
+        at = text.floor_char_boundary(at - 1);
+    }
+    let before = text[..at].chars().next_back().filter(|c| *c != '\n')?;
+    let after = text[at..].chars().next().filter(|c| *c != '\n')?;
+    let start = at - before.len_utf8();
+    let end = at + after.len_utf8();
+    Some(CommandResult::Edit {
+        text: apply(text, &[(start..end, format!("{after}{before}"))]),
+        selection: end..end,
+    })
+}
+
+/// Sublime's Cmd+Shift+J: the lines around the selection indented at least as deep as it.
+fn expand_to_indentation(text: &str, selection: Range<usize>) -> Option<Range<usize>> {
+    let indent = |start: usize| -> Option<usize> {
+        let line = &text[start..line_end(text, start)];
+        (!line.trim().is_empty()).then(|| line.len() - line.trim_start().len())
+    };
+    let first = line_start(text, selection.start);
+    let level = indent(first)?;
+    let mut start = first;
+    while start > 0 {
+        let previous = line_start(text, start - 1);
+        match indent(previous) {
+            Some(depth) if depth < level => break,
+            _ => start = previous,
+        }
+    }
+    let mut end = line_end(text, selection.end.max(first));
+    while end < text.len() {
+        let next = end + 1;
+        match indent(next) {
+            Some(depth) if depth < level => break,
+            _ => end = line_end(text, next),
+        }
+    }
+    // Leading and trailing blank lines are not part of the block.
+    let block = &text[start..end];
+    let lead = block.len() - block.trim_start_matches(['\n', ' ', '\t']).len();
+    let lead = block[..lead].rfind('\n').map_or(0, |index| index + 1);
+    let trail = block.trim_end().len();
+    let range = start + lead..start + trail;
+    (range != selection).then_some(range)
+}
+
+/// Sublime's Ctrl+Shift+M: the text inside the brackets around the selection; again, with them.
+fn expand_to_brackets(text: &str, selection: Range<usize>) -> Option<Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut at = selection.start;
+    let limit = selection.start.saturating_sub(BRACKET_SCAN_LIMIT);
+    while at > limit {
+        at -= 1;
+        match bytes[at] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+            b'(' | b'[' | b'{' => {
+                let (open, close) = bracket_pair_at(text, at)?;
+                if close < selection.end {
+                    continue;
+                }
+                let inside = open + 1..close;
+                return Some(if inside == selection {
+                    open..close + 1
+                } else {
+                    inside
+                });
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn line_start(text: &str, byte: usize) -> usize {
@@ -450,8 +701,23 @@ fn insert_line(text: &str, selection: Range<usize>, above: bool) -> CommandResul
     }
 }
 
-/// The file's indentation unit: a tab, or the smallest space indent seen (2 or 4).
-fn indent_unit(text: &str) -> String {
+thread_local! {
+    /// The active tab's indentation chosen in the status bar (see [`set_indent_override`]).
+    static INDENT_OVERRIDE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Set by the editor each frame from the shown tab, so commands indent the way the status bar
+/// says without threading it through every one of them.
+pub(super) fn set_indent_override(unit: Option<String>) {
+    INDENT_OVERRIDE.with(|current| *current.borrow_mut() = unit);
+}
+
+/// The file's indentation unit: a tab, or the smallest space indent seen (2 or 4), unless the
+/// status bar overrides it.
+pub(super) fn indent_unit(text: &str) -> String {
+    if let Some(unit) = INDENT_OVERRIDE.with(|current| current.borrow().clone()) {
+        return unit;
+    }
     let mut smallest = usize::MAX;
     for line in text.lines().take(2000) {
         if line.starts_with('\t') {
@@ -761,11 +1027,11 @@ mod tests {
     fn shortcuts_distinguish_shift() {
         let cmd = Modifiers::COMMAND;
         assert_eq!(
-            command_for(Key::D, cmd, true),
+            command_for(Key::D, cmd, true, false),
             Some(EditorCommand::SelectWord)
         );
         assert_eq!(
-            command_for(Key::D, cmd.plus(Modifiers::SHIFT), true),
+            command_for(Key::D, cmd.plus(Modifiers::SHIFT), true, false),
             Some(EditorCommand::Duplicate)
         );
         let swap = Modifiers {
@@ -775,9 +1041,58 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            command_for(Key::ArrowUp, swap, true),
+            command_for(Key::ArrowUp, swap, true, false),
             Some(EditorCommand::SwapUp)
         );
-        assert_eq!(command_for(Key::ArrowUp, cmd, true), None);
+        assert_eq!(command_for(Key::ArrowUp, cmd, true, false), None);
+    }
+
+    #[test]
+    fn sublime_text_commands() {
+        let edit = |command, text: &str, selection: Range<usize>| match run_command(
+            command, text, selection, "rs",
+        ) {
+            Some(CommandResult::Edit { text, selection }) => (text, selection),
+            other => panic!("{other:?}"),
+        };
+        let select = |command, text: &str, selection: Range<usize>| match run_command(
+            command, text, selection, "rs",
+        ) {
+            Some(CommandResult::Select(range)) => range,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            edit(EditorCommand::UpperCase, "let foo = 1", 5..5),
+            ("let FOO = 1".into(), 4..7)
+        );
+        assert_eq!(edit(EditorCommand::LowerCase, "A B", 0..3).0, "a b");
+        assert_eq!(
+            edit(EditorCommand::DeleteToLineEnd, "abc\nd", 1..1).0,
+            "a\nd"
+        );
+        assert_eq!(
+            edit(EditorCommand::DeleteToLineEnd, "abc\nd", 3..3).0,
+            "abcd"
+        );
+        assert_eq!(edit(EditorCommand::DeleteToLineStart, "abc", 2..2).0, "c");
+        assert_eq!(
+            edit(EditorCommand::SortLines, "b\nC\na\n", 0..0).0,
+            "a\nb\nC\n"
+        );
+        assert_eq!(edit(EditorCommand::Transpose, "ab", 1..1).0, "ba");
+        assert_eq!(edit(EditorCommand::Transpose, "ab", 2..2).0, "ba");
+        let text = "fn a() {\n    x;\n    y;\n}";
+        assert_eq!(
+            select(EditorCommand::ExpandToIndentation, text, 14..14),
+            9..22
+        );
+        assert_eq!(
+            select(EditorCommand::ExpandToBrackets, "f(a, b)", 3..3),
+            2..6
+        );
+        assert_eq!(
+            select(EditorCommand::ExpandToBrackets, "f(a, b)", 2..6),
+            1..7
+        );
     }
 }

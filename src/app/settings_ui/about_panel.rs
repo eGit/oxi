@@ -285,7 +285,17 @@ fn render_shortcuts(ui: &mut Ui) {
     } else {
         format!("{cmd}`")
     };
-    let shortcuts: [(String, &str); 24] = [
+    let (next_tab, nth_tab) = if mac {
+        (format!("{cmd}{shift}] / ["), format!("{cmd}1…9"))
+    } else {
+        ("Ctrl+PgDn / PgUp".to_owned(), format!("{alt}1…9"))
+    };
+    let modification = if mac {
+        "⌃. / ⌃,".to_owned()
+    } else {
+        format!("F7 / {shift}F7")
+    };
+    let shortcuts: [(String, &str); 35] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd},"), "Settings"),
         (format!("{cmd}."), "Stop the running reply"),
@@ -313,6 +323,51 @@ fn render_shortcuts(ui: &mut Ui) {
         (format!("{cmd}G / {cmd}{shift}G"), "Next / previous match"),
         (format!("{cmd}/"), "Toggle line comment"),
         (format!("{cmd}{shift}D"), "Duplicate line or selection"),
+        (next_tab, "Next / previous editor tab"),
+        (nth_tab, "Go to editor tab 1–8, or the last"),
+        (modification, "Next / previous Git change in the file"),
+        (
+            format!("{cmd}= / {cmd}- / {cmd}0"),
+            "Editor font size (window zoom elsewhere)",
+        ),
+        (
+            format!("{cmd}D"),
+            "Select the word, then add its next occurrence",
+        ),
+        (
+            if mac {
+                "⌃⌘G".to_owned()
+            } else {
+                format!("{alt}F3")
+            },
+            "Select every occurrence",
+        ),
+        (format!("{cmd}{shift}L"), "Split the selection into lines"),
+        (
+            if mac {
+                "⌃⇧↑ / ↓".to_owned()
+            } else {
+                "Ctrl+Alt+Up / Down".to_owned()
+            },
+            "Add a caret on the line above / below",
+        ),
+        (
+            if mac {
+                "⌥ drag".to_owned()
+            } else {
+                "Alt drag".to_owned()
+            },
+            "Column selection",
+        ),
+        (
+            if mac {
+                format!("{cmd}{alt}[ / ]")
+            } else {
+                "Ctrl+Shift+[ / ]".to_owned()
+            },
+            "Fold / unfold (⌘K ⌘0 unfolds all)",
+        ),
+        (format!("{cmd}F2 / F2"), "Toggle bookmark / next bookmark"),
     ];
     egui::Grid::new("about_shortcuts")
         .num_columns(2)

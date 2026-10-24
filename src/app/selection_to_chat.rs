@@ -1,4 +1,4 @@
-//! "Add Selection to Chat" (Cmd/Ctrl+Shift+L): the editor's selection becomes a text attachment
+//! "Add Selection to Chat" (Cmd/Ctrl+Alt+L; Cmd+Shift+L is Sublime's Split into Lines): the editor's selection becomes a text attachment
 //! named `path:start-end`, and the chat comes forward with the composer focused.
 
 use std::path::Path;

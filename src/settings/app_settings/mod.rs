@@ -217,6 +217,9 @@ pub struct AppSettings {
     /// Preferences for the Router pseudo-provider (see `crate::router`).
     #[serde(default)]
     pub router: super::router::RouterSettings,
+    /// Text editor preferences.
+    #[serde(default)]
+    pub editor: EditorSettings,
 }
 
 fn default_require_approval() -> bool {
@@ -366,6 +369,7 @@ impl Default for AppSettings {
             activity_log_enabled: false,
             auto_update: true,
             router: super::router::RouterSettings::default(),
+            editor: EditorSettings::default(),
         }
     }
 }
@@ -376,8 +380,9 @@ mod query;
 mod types;
 
 pub use types::{
-    DEFAULT_MCP_TIMEOUT_SECS, DictationSettings, LocalHfSettings, McpServerConfig, McpTransport,
-    WindowsTerminal, WorkspaceEntry,
+    DEFAULT_MCP_TIMEOUT_SECS, DictationSettings, DrawWhiteSpace, EDITOR_FONT_SIZE_DEFAULT,
+    EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, EditorSettings, LocalHfSettings, McpServerConfig,
+    McpTransport, WindowsTerminal, WorkspaceEntry,
 };
 
 #[cfg(test)]

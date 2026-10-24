@@ -199,6 +199,7 @@ fn run_gallery(rec: &mut Recorder<'_>) {
             (SettingsTab::GitHub, "settings-github"),
             (SettingsTab::Prompts, "settings-prompts"),
             (SettingsTab::Voice, "settings-voice"),
+            (SettingsTab::Editor, "settings-editor"),
             (SettingsTab::Terminal, "settings-terminal"),
             (SettingsTab::Appearance, "settings-appearance"),
             (SettingsTab::About, "settings-about"),
@@ -583,6 +584,24 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.still("editor-find-none");
         rec.app().conv.editor.find_open = false;
         rec.app().conv.editor.find_replace_open = false;
+        // Sublime-style editor preferences: bigger font, caret line, white space, no minimap.
+        {
+            let prefs = &mut rec.app().conv.settings.editor;
+            prefs.font_size = 15.0;
+            prefs.highlight_line = true;
+            prefs.draw_white_space = crate::settings::DrawWhiteSpace::All;
+            prefs.minimap = false;
+        }
+        rec.app().conv.editor.focus_editor_next_frame = true;
+        rec.harness.run_steps(4);
+        rec.still("editor-prefs");
+        rec.app().conv.settings.editor = crate::settings::EditorSettings::default();
+        rec.harness.run_steps(2);
+        rec.check_sublime_keys();
+        // Scroll past end: the last line can reach the top of the view.
+        rec.scroll_by(-4000.0);
+        rec.still("editor-scroll-past-end");
+        rec.scroll_by(4000.0);
         // Find in Files, then Find References on `median` from stats.py.
         rec.app().show_project_search();
         rec.app().conv.project_search.query = "median".into();
@@ -1978,6 +1997,367 @@ impl Recorder<'_> {
             app.conv.editor.active = Some(index);
         }
         self.harness.run_steps(2);
+    }
+
+    /// Font size, Next Modification and tab keys, driven by real key events on stats.py.
+    fn check_sublime_keys(&mut self) {
+        use crate::settings::EDITOR_FONT_SIZE_DEFAULT;
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        self.harness
+            .event(key(egui::Key::Equals, egui::Modifiers::COMMAND));
+        self.harness.run_steps(2);
+        let bigger = self.app().conv.settings.editor.font_size;
+        self.harness
+            .event(key(egui::Key::Num0, egui::Modifiers::COMMAND));
+        self.harness.run_steps(2);
+        let reset = self.app().conv.settings.editor.font_size;
+        let ok = bigger == EDITOR_FONT_SIZE_DEFAULT + 1.0 && reset == EDITOR_FONT_SIZE_DEFAULT;
+        println!("CHECK Cmd+= grows the editor font, Cmd+0 resets it: {ok} ({bigger} -> {reset})");
+        assert!(ok, "editor font keys");
+
+        // From the top, F7 lands on the first changed line (line 14, `mid = ...`).
+        {
+            let app = self.app();
+            let path = app.conv.editor.active_document().unwrap().path.clone();
+            app.conv.editor.navigation_target = Some((path, 0..0));
+            app.conv.editor.focus_editor_next_frame = true;
+        }
+        self.harness.run_steps(3);
+        self.harness
+            .event(key(egui::Key::F7, egui::Modifiers::NONE));
+        self.harness.run_steps(4);
+        let caret_line = {
+            let app = self.app();
+            let caret = app.conv.editor.navigation_cursor_char;
+            let content = &app.conv.editor.active_document().unwrap().content;
+            content.chars().take(caret).filter(|c| *c == '\n').count()
+        };
+        println!(
+            "CHECK F7 jumps to the next Git change: line {}",
+            caret_line + 1
+        );
+        assert_eq!(caret_line + 1, 14, "next modification");
+
+        // Multiple selections: Cmd+D thrice on `ordered`, type over all of them, undo.
+        let original = {
+            let app = self.app();
+            let document = app.conv.editor.active_document().unwrap();
+            let path = document.path.clone();
+            let at = document.content.find("ordered = sorted").unwrap() + 2;
+            let original = document.content.clone();
+            app.conv.editor.navigation_target = Some((path, at..at));
+            app.conv.editor.focus_editor_next_frame = true;
+            original
+        };
+        self.harness.run_steps(3);
+        for _ in 0..3 {
+            self.harness
+                .event(key(egui::Key::D, egui::Modifiers::COMMAND));
+            self.harness.run_steps(2);
+        }
+        let selections = 1 + self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .extra
+            .len();
+        self.still("editor-multi-cursor");
+        self.harness.event(Event::Text("xs".into()));
+        self.harness.run_steps(2);
+        let typed = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .content
+            .clone();
+        let replaced = typed.matches("xs").count();
+        println!("CHECK Cmd+D x3 then typing edits {selections} selections: {replaced} replaced");
+        assert_eq!((selections, replaced), (3, 3), "multiple selections");
+        self.harness.event(Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        self.harness.run_steps(2);
+        let single = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .extra
+            .is_empty();
+        // egui groups undo by time; wait past its stable interval so one Cmd+Z undoes the typing.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        self.harness.run_steps(2);
+        self.harness
+            .event(key(egui::Key::Z, egui::Modifiers::COMMAND));
+        self.harness.run_steps(3);
+        let restored = self.app().conv.editor.active_document().unwrap().content == original;
+        println!(
+            "CHECK Escape collapses to one caret: {single}; Cmd+Z restores the text: {restored}"
+        );
+        assert!(single && restored, "collapse/undo");
+
+        // Folding: Cmd+Alt+[ on `median`'s body hides it, Cmd+K Cmd+0 opens everything.
+        {
+            let app = self.app();
+            let document = app.conv.editor.active_document().unwrap();
+            let path = document.path.clone();
+            let at = document.content.find("def median").unwrap() + 4;
+            app.conv.editor.navigation_target = Some((path, at..at));
+            app.conv.editor.focus_editor_next_frame = true;
+        }
+        self.harness.run_steps(3);
+        let mac = cfg!(target_os = "macos");
+        let cmd = if mac {
+            egui::Modifiers::COMMAND.plus(egui::Modifiers::MAC_CMD)
+        } else {
+            egui::Modifiers::COMMAND
+        };
+        let (fold_mods, fold_key) = if mac {
+            (cmd.plus(egui::Modifiers::ALT), egui::Key::OpenBracket)
+        } else {
+            (
+                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
+                egui::Key::OpenBracket,
+            )
+        };
+        self.harness.event(key(fold_key, fold_mods));
+        self.harness.run_steps(4);
+        let folds = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .folds
+            .ranges
+            .clone();
+        self.still("editor-fold");
+        println!("CHECK Cmd+Alt+[ folds the caret's block: {folds:?}");
+        assert_eq!(folds, vec![9..17], "fold region");
+        self.harness.event(key(egui::Key::K, cmd));
+        self.harness.run_steps(1);
+        self.harness.event(key(egui::Key::Num0, cmd));
+        self.harness.run_steps(3);
+        let open = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .folds
+            .is_empty();
+        let font = self.app().conv.settings.editor.font_size;
+        println!("CHECK Cmd+K Cmd+0 unfolds all (font untouched {font}): {open}");
+        assert!(
+            open && font == crate::settings::EDITOR_FONT_SIZE_DEFAULT,
+            "unfold all"
+        );
+
+        // Word completion: typing `ord` on the last line offers `ordered`; Enter takes it.
+        let before = {
+            let app = self.app();
+            let document = app.conv.editor.active_document().unwrap();
+            let (path, end, content) = (
+                document.path.clone(),
+                document.content.len(),
+                document.content.clone(),
+            );
+            app.conv.editor.navigation_target = Some((path, end..end));
+            app.conv.editor.focus_editor_next_frame = true;
+            content
+        };
+        self.harness.run_steps(3);
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        self.harness.event(Event::Text("ord".into()));
+        self.harness.run_steps(2);
+        let offered = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .completion
+            .as_ref()
+            .map(|open| open.items.clone())
+            .unwrap_or_default();
+        self.still("editor-completion");
+        self.harness
+            .event(key(egui::Key::Enter, egui::Modifiers::NONE));
+        self.harness.run_steps(2);
+        let inserted = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .content
+            .ends_with("ordered");
+        println!("CHECK typing `ord` offers {offered:?}; Enter inserts it: {inserted}");
+        assert!(
+            offered.first().is_some_and(|word| word == "ordered") && inserted,
+            "completion"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        self.harness.run_steps(1);
+        self.harness
+            .event(key(egui::Key::Z, egui::Modifiers::COMMAND));
+        self.harness.run_steps(3);
+        assert!(
+            self.app().conv.editor.active_document().unwrap().content == before,
+            "undo completion"
+        );
+
+        // Column selection: Alt+drag from line 13 col 4 to line 17 col 8 selects that block.
+        let (from, to) = {
+            let document = self.app().conv.editor.active_document().unwrap();
+            (
+                crate::app::file_explorer::text_point(document, 12, 4).unwrap(),
+                crate::app::file_explorer::text_point(document, 16, 8).unwrap(),
+            )
+        };
+        let alt = egui::Modifiers::ALT;
+        self.harness.event(Event::PointerMoved(from));
+        self.harness.run_steps(1);
+        self.harness.event(Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: alt,
+        });
+        self.harness.run_steps(1);
+        for step in 1..=6 {
+            let t = step as f32 / 6.0;
+            self.harness
+                .event(Event::PointerMoved(from + (to - from) * t));
+            self.harness.run_steps(1);
+        }
+        self.harness.event(Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: alt,
+        });
+        self.harness.run_steps(2);
+        let (regions, texts) = {
+            let document = self.app().conv.editor.active_document().unwrap();
+            let texts: Vec<String> = document
+                .view
+                .extra
+                .iter()
+                .map(|sel| document.content[sel.range()].to_owned())
+                .collect();
+            (1 + document.view.extra.len(), texts)
+        };
+        self.still("editor-column-select");
+        println!("CHECK Alt+drag makes {regions} column selections: {texts:?}");
+        assert_eq!(regions, 5, "column selection");
+        self.app()
+            .conv
+            .editor
+            .active_document_mut()
+            .unwrap()
+            .view
+            .extra
+            .clear();
+        self.harness.run_steps(1);
+
+        // Bookmarks: Cmd+F2 marks the caret's line, F2 comes back to it from elsewhere.
+        {
+            let app = self.app();
+            let document = app.conv.editor.active_document().unwrap();
+            let path = document.path.clone();
+            let at = document.content.find("def median").unwrap();
+            app.conv.editor.navigation_target = Some((path, at..at));
+            app.conv.editor.focus_editor_next_frame = true;
+        }
+        self.harness.run_steps(3);
+        self.harness.event(key(egui::Key::F2, cmd));
+        self.harness.run_steps(2);
+        let marked = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .bookmarks
+            .clone();
+        {
+            let app = self.app();
+            let path = app.conv.editor.active_document().unwrap().path.clone();
+            app.conv.editor.navigation_target = Some((path, 0..0));
+        }
+        self.harness.run_steps(3);
+        self.harness
+            .event(key(egui::Key::F2, egui::Modifiers::NONE));
+        self.harness.run_steps(3);
+        let line = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .view
+            .last_caret_line;
+        self.still("editor-bookmark");
+        println!("CHECK Cmd+F2 bookmarks {marked:?}, F2 returns to line {line}");
+        assert!(marked == vec![9] && line == 9, "bookmarks");
+        self.app()
+            .conv
+            .editor
+            .active_document_mut()
+            .unwrap()
+            .view
+            .bookmarks
+            .clear();
+
+        // Cmd+Shift+] walks to the next tab when there is more than one.
+        let (before, count) = {
+            let app = self.app();
+            (app.conv.editor.active, app.conv.editor.documents.len())
+        };
+        let modifiers = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
+        self.harness.event(Event::Key {
+            key: egui::Key::CloseCurlyBracket,
+            physical_key: Some(egui::Key::CloseBracket),
+            pressed: true,
+            repeat: false,
+            modifiers: if cfg!(target_os = "macos") {
+                modifiers.plus(egui::Modifiers::MAC_CMD)
+            } else {
+                modifiers
+            },
+        });
+        self.harness.run_steps(2);
+        let after = self.app().conv.editor.active;
+        if cfg!(target_os = "macos") && count > 1 {
+            println!("CHECK Cmd+Shift+] selects the next tab: {before:?} -> {after:?}");
+            assert_ne!(before, after, "next tab");
+            if let Some(before) = before {
+                self.app().conv.editor.active = Some(before);
+            }
+            self.harness.run_steps(2);
+        }
     }
 
     /// Wait until the active document's diff has read its base and laid out its changes.

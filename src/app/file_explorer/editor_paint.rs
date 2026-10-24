@@ -180,6 +180,8 @@ pub(super) fn paint_selected_whitespace(
     galley_pos: egui::Pos2,
     clip_rect: egui::Rect,
     range: egui::text::CCursorRange,
+    // Sublime's `draw_white_space: all`: quieter markers, since they cover the whole file.
+    everywhere: bool,
 ) {
     let painter = ui.painter().with_clip_rect(clip_rect);
     let selected = range.as_sorted_char_range();
@@ -189,7 +191,7 @@ pub(super) fn paint_selected_whitespace(
         marker_base.r(),
         marker_base.g(),
         marker_base.b(),
-        105,
+        if everywhere { 60 } else { 105 },
     );
     let local_clip = clip_rect.translate(-galley_pos.to_vec2());
     let first_visible = galley
@@ -215,7 +217,8 @@ pub(super) fn paint_selected_whitespace(
             if char_index >= selected.end.0 {
                 break;
             }
-            if char_index < selected.start.0 || (char_index == selected.start.0 && glyph.chr == ' ')
+            if char_index < selected.start.0
+                || (!everywhere && char_index == selected.start.0 && glyph.chr == ' ')
             {
                 continue;
             }
@@ -234,7 +237,7 @@ pub(super) fn paint_selected_whitespace(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 marker,
-                FontId::monospace(FS_TINY),
+                FontId::monospace(crate::theme::editor_font_size() * (FS_TINY / FS_SMALL)),
                 marker_color,
             );
         }
@@ -243,6 +246,42 @@ pub(super) fn paint_selected_whitespace(
             break;
         }
     }
+}
+
+/// Sublime's `highlight_line`: tint every row of the caret's logical line across the view.
+pub(super) fn paint_current_line(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    cursor: egui::text::CCursor,
+) {
+    if galley.rows.is_empty() {
+        return;
+    }
+    let row = galley
+        .layout_from_cursor(cursor)
+        .row
+        .min(galley.rows.len() - 1);
+    let mut first = row;
+    while first > 0 && !galley.rows[first - 1].ends_with_newline {
+        first -= 1;
+    }
+    let mut last = row;
+    while last + 1 < galley.rows.len() && !galley.rows[last].ends_with_newline {
+        last += 1;
+    }
+    let top = galley.rows[first].min_y() + galley_pos.y;
+    let bottom = galley.rows[last].max_y() + galley_pos.y;
+    let rect = egui::Rect::from_x_y_ranges(clip_rect.x_range(), top..=bottom);
+    if !rect.intersects(clip_rect) {
+        return;
+    }
+    ui.painter().with_clip_rect(clip_rect).rect_filled(
+        rect,
+        0.0,
+        crate::theme::blend_color(c_row_hover(), c_bg_main(), 0.6),
+    );
 }
 
 pub(super) fn paint_caret(
@@ -299,8 +338,8 @@ pub(super) fn paint_indent_guides(
         .count();
     let glyph_width = ui.fonts_mut(|fonts| {
         fonts
-            .glyph_width(&FontId::monospace(FS_SMALL), ' ')
-            .max(FS_SMALL * 0.25)
+            .glyph_width(&crate::theme::editor_font(), ' ')
+            .max(crate::theme::editor_font_size() * 0.25)
     });
     let color = crate::theme::blend_color(c_text_faint(), c_bg_main(), 0.38);
     let painter = ui.painter().with_clip_rect(clip_rect);

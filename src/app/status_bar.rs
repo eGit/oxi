@@ -73,6 +73,14 @@ impl OxiApp {
                         );
                     }
 
+                    let file_shown = self.conv.editor.active.is_some()
+                        && !self.conv.settings_page.open
+                        && !self.conv.editor.diff_tab_active;
+                    if file_shown {
+                        ui.add_space(10.0);
+                        self.render_caret_status(ui);
+                    }
+
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let activity_on = super::activity_window::activity_window_open(ui.ctx());
                         let recording = self.conv.settings.activity_log_enabled;
@@ -114,6 +122,11 @@ impl OxiApp {
                             );
                         }
 
+                        if file_shown {
+                            ui.add_space(8.0);
+                            self.render_file_status(ui);
+                            ui.add_space(12.0);
+                        }
                         self.render_update_status(ui);
 
                         if self.conv.git.repo {
