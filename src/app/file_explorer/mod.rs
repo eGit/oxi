@@ -72,16 +72,30 @@ impl OxiApp {
             return;
         }
 
+        // Changes to other lines merge in on their own (see `take_in_disk_text`); this is the
+        // rest: a removed or unreadable file, or edits to the same lines on both sides.
         let external = self
             .conv
             .editor
             .active_document()
-            .is_some_and(|document| document.externally_modified);
-        if external {
+            .filter(|document| document.externally_modified)
+            .map(|document| (document.path.clone(), document.is_dirty()));
+        if let Some((path, dirty)) = external {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("File changed on disk.").color(c_warning_fg()));
+                let note = if dirty {
+                    "File changed on disk in lines you also edited."
+                } else {
+                    "File changed on disk."
+                };
+                ui.label(RichText::new(note).color(c_warning_fg()));
                 if ui.button("Reload from disk").clicked() {
                     self.request_reload_editor_file();
+                }
+                if dirty && ui.button("Keep mine").clicked() {
+                    self.conv.editor.prompt = Some(super::state::EditorPrompt::Overwrite {
+                        path,
+                        close_after: false,
+                    });
                 }
             });
         }

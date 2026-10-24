@@ -1,4 +1,5 @@
-//! Storage shared by the global scratchpad editor and agent tool.
+//! Storage shared by the global scratchpad editor and agent tools. The app and oxi's MCP
+//! server (a separate process per ACP agent) both write it, so writers also hold a lock file.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -15,8 +16,30 @@ pub(crate) fn path() -> PathBuf {
         )
 }
 
-pub(crate) fn lock() -> MutexGuard<'static, ()> {
-    STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+/// Held across a read-modify-write of the scratchpad at `path`.
+pub(crate) struct StorageGuard {
+    _thread: MutexGuard<'static, ()>,
+    // Unlocked when the file is closed. Best effort: without it only this process is serialized.
+    _process: Option<std::fs::File>,
+}
+
+pub(crate) fn lock(path: &Path) -> StorageGuard {
+    let thread = STORAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let process = path.parent().and_then(|dir| {
+        std::fs::create_dir_all(dir).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.with_extension("lock"))
+            .ok()?;
+        file.lock().ok()?;
+        Some(file)
+    });
+    StorageGuard {
+        _thread: thread,
+        _process: process,
+    }
 }
 
 /// Caller holds the storage lock across reads and writes.
@@ -26,6 +49,12 @@ pub(crate) fn read(path: &Path) -> Result<String, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// Read under the storage lock, for callers outside a read-modify-write.
+pub(crate) fn read_locked(path: &Path) -> Result<String, String> {
+    let _guard = lock(path);
+    read(path)
 }
 
 fn write(path: &Path, content: &str) -> Result<(), String> {
@@ -39,19 +68,30 @@ fn write(path: &Path, content: &str) -> Result<(), String> {
     crate::fsutil::write_atomic(path, content.as_bytes())
 }
 
-pub(crate) fn save(path: &Path, baseline: &str, content: &str) -> Result<(), String> {
-    let _guard = lock();
-    if read(path)? != baseline {
-        return Err("Scratchpad changed on disk. Your unsaved text was preserved; copy it before reloading the scratchpad.".into());
+/// Save the editor's `content`, edited from `baseline`. What an agent wrote meanwhile is merged
+/// in (both sides kept where they touch the same lines), so typing never loses to an agent nor
+/// the other way round. Returns the text now on disk, which the editor adopts.
+pub(crate) fn save(path: &Path, baseline: &str, content: &str) -> Result<String, String> {
+    let _guard = lock(path);
+    let disk = read(path)?;
+    let merged = if disk == baseline {
+        content.to_string()
+    } else {
+        crate::merge3::merge(baseline, content, &disk, true).ok_or(
+            "Scratchpad changed on disk and is too large to merge. Your unsaved text was preserved; copy it before reloading the scratchpad.",
+        )?
+    };
+    if merged != disk {
+        write(path, &merged)?;
     }
-    write(path, content)
+    Ok(merged)
 }
 
 pub(crate) fn update(path: &Path, mode: &str, content: &str) -> Result<(String, String), String> {
     if !matches!(mode, "append" | "rewrite") {
         return Err("Scratchpad mode must be `append` or `rewrite`.".into());
     }
-    let _guard = lock();
+    let _guard = lock(path);
     let before = read(path)?;
     let after = if mode == "append" {
         format!("{before}{content}")
@@ -88,6 +128,7 @@ mod tests {
         assert_eq!(update(&path, "rewrite", "nou").unwrap().1, "nou");
         update(&path, "rewrite", "").unwrap();
         assert_eq!(read(&path).unwrap(), "");
+        let _ = std::fs::remove_file(path.with_extension("lock"));
         std::fs::remove_file(path).unwrap();
     }
 
@@ -100,16 +141,23 @@ mod tests {
         assert!(update(&path.join("child"), "append", "bad").is_err());
         assert!(update(&path, "rewrite", &"x".repeat(MAX_BYTES + 1)).is_err());
         assert_eq!(read(&path).unwrap(), "original");
+        let _ = std::fs::remove_file(path.with_extension("lock"));
         std::fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn autosave_refuses_to_overwrite_agent_changes() {
+    fn autosave_merges_agent_changes() {
         let path = test_path();
-        save(&path, "", "original").unwrap();
-        update(&path, "append", "\nagent").unwrap();
-        assert!(save(&path, "original", "manual edits").is_err());
-        assert_eq!(read(&path).unwrap(), "original\nagent");
+        save(&path, "", "first\nsecond\n").unwrap();
+        update(&path, "append", "agent\n").unwrap();
+        let merged = save(&path, "first\nsecond\n", "first edited\nsecond\n").unwrap();
+        assert_eq!(merged, "first edited\nsecond\nagent\n");
+        assert_eq!(read(&path).unwrap(), merged);
+        // Both sides at the same spot: keep both, typing first.
+        update(&path, "append", "more agent\n").unwrap();
+        let merged = save(&path, &merged, &format!("{merged}typing")).unwrap();
+        assert!(merged.ends_with("agent\ntyping\nmore agent\n"), "{merged}");
+        let _ = std::fs::remove_file(path.with_extension("lock"));
         std::fs::remove_file(path).unwrap();
     }
 
@@ -124,6 +172,7 @@ mod tests {
             }
         });
         assert_eq!(read(&path).unwrap(), "x".repeat(12));
+        let _ = std::fs::remove_file(path.with_extension("lock"));
         std::fs::remove_file(path).unwrap();
     }
 }

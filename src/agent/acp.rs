@@ -71,8 +71,8 @@ mod modes;
 #[path = "acp/terminals.rs"]
 mod terminals;
 
-#[path = "acp/todo_mcp.rs"]
-pub mod todo_mcp;
+#[path = "acp/oxi_mcp.rs"]
+pub mod oxi_mcp;
 use modes::{ModeState, SharedModes, set_user_option, sync_plan_mode};
 
 #[path = "acp/permissions.rs"]
@@ -816,7 +816,7 @@ async fn spawn_conn(
 
     let caps = &init["agentCapabilities"];
     let mut mcp = mcp_servers::to_acp(&mcp_servers, caps);
-    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), todo_mcp::acp_entry()) {
+    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), oxi_mcp::acp_entry()) {
         list.push(todo);
     }
     let resumed = match sessions::lookup(session_key, command_line, cwd) {

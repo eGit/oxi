@@ -158,6 +158,7 @@ fn tool_action_label(name: &str) -> String {
         "web_fetch" => "Fetched",
         "todo_write" => "Updated tasks",
         "scratchpad" => "Updated scratchpad",
+        "scratchpad_read" => "Read scratchpad",
         "diagnostics" => "Checked",
         "task" => "Sub-agent",
         _ => return other_tool_label(name),
@@ -194,6 +195,7 @@ fn tool_running_label(name: &str) -> String {
         "web_fetch" => "Fetching",
         "todo_write" => "Updating tasks",
         "scratchpad" => "Updating scratchpad",
+        "scratchpad_read" => "Reading scratchpad",
         "diagnostics" => "Checking",
         "task" => "Sub-agent working",
         _ => return other_tool_label(name),
@@ -391,7 +393,7 @@ pub(super) fn tool_icon(name: &str) -> &'static str {
         "web_search" => crate::theme::ICON_WEB_SEARCH,
         "web_fetch" => crate::theme::ICON_GLOBE,
         "todo_write" => crate::theme::ICON_TASKS,
-        "scratchpad" => crate::theme::ICON_PROMPTS,
+        "scratchpad" | "scratchpad_read" => crate::theme::ICON_PROMPTS,
         "diagnostics" => "\u{f04d9}", // nf-md-stethoscope
         "task" => "\u{f167a}",        // nf-md-robot_outline
         _ => "\u{f0214}",             // nf-md-file

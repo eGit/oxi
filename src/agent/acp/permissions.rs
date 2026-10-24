@@ -64,9 +64,11 @@ pub(super) async fn handle_permission(
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
 
-    // oxi's own checklist tool only updates the UI.
-    let decision = if super::todo_mcp::is_todo_tool(&pr.params["toolCall"])
-        || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
+    // oxi's own checklist tool only updates the UI; reading the scratchpad changes nothing.
+    let decision = if matches!(
+        super::oxi_mcp::oxi_tool(&pr.params["toolCall"]),
+        Some("todo_write" | super::oxi_mcp::SCRATCHPAD_READ)
+    ) || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
     {
         Some(ApprovalDecision::Approve)
     } else if plan_mode && !acp_kind_is_read_only(kind) {
@@ -179,6 +181,9 @@ pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     let kind = tool.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     let title = tool.get("title").and_then(|t| t.as_str()).unwrap_or("");
     // Same names as oxi's own tools, so the approval settings mean the same thing for both.
+    if let Some(name) = super::oxi_mcp::oxi_tool(tool) {
+        return (name.to_string(), tool.get("rawInput").cloned());
+    }
     let name = match kind {
         "execute" => "bash".to_string(),
         "edit" | "delete" | "move" => "edit".to_string(),
