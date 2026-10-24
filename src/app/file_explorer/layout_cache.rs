@@ -14,6 +14,8 @@ pub(crate) struct EditorLayoutCache {
     /// [`super::diff_editor::DocumentDiff::layout_key`] `geometry` was laid out for; 0 outside
     /// diff mode.
     pub(super) diff_key: u64,
+    /// [`super::folding::Folds::generation`] `geometry` was laid out with.
+    pub(super) folds: u64,
     pub(super) geometry: Option<Arc<egui::Galley>>,
     /// Colored layout of `syntax_lines` only (see `syntax_window`).
     pub(super) syntax: Option<Arc<egui::Galley>>,

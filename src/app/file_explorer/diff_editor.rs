@@ -337,7 +337,15 @@ fn cached_job<'a>(
     extension: &str,
     ctx: &egui::Context,
 ) -> Option<&'a LayoutJob> {
-    if slot.as_ref().is_none_or(|(cached, _)| *cached != version) {
+    // The font is part of the job: an editor font size change must lay it out again.
+    let stale = |(cached, job): &(u64, LayoutJob)| {
+        *cached != version
+            || job
+                .sections
+                .first()
+                .is_some_and(|section| section.format.font_id != code_font())
+    };
+    if slot.as_ref().is_none_or(stale) {
         if extension.is_empty() {
             return None;
         }
@@ -369,7 +377,7 @@ fn text_hash(text: &str) -> u64 {
 }
 
 fn code_font() -> FontId {
-    FontId::monospace(FS_SMALL)
+    crate::theme::editor_font()
 }
 
 /// Gutter markers for the new side, like Git's (added, modified, removed-above).
@@ -612,8 +620,7 @@ impl OxiApp {
             Some(ToolbarAction::Jump(forward)) => self.jump_to_change(index, forward),
             None => {}
         }
-        if ui.input(|i| i.key_pressed(egui::Key::F7)) {
-            let forward = !ui.input(|i| i.modifiers.shift);
+        if let Some(forward) = ui.input_mut(super::editor_body::take_modification_key) {
             self.jump_to_change(index, forward);
         }
 
@@ -805,7 +812,7 @@ impl OxiApp {
             let byte = line_start_byte(&document.content, line);
             self.conv.editor.navigation_target = Some((document.path.clone(), byte..byte));
         } else {
-            let font_h = FS_SMALL * 1.35;
+            let font_h = crate::theme::editor_line_height();
             let top = decor.changes[target].new_start as f32 * font_h;
             diff.scroll_y = (top - viewport_h / 3.0).max(0.0);
         }
@@ -967,7 +974,7 @@ impl OxiApp {
         decor.changes.get(change)?;
         let &(top, bottom) = frame.new_spans.get(change)?;
         let clip = frame.new_clip;
-        let line_h = FS_SMALL * 1.35;
+        let line_h = crate::theme::editor_line_height();
         // Keep the buttons inside the viewport when the change starts above it.
         let top = top.max(clip.top()).min(bottom.max(top + line_h) - line_h);
         if top > clip.bottom() - line_h {
@@ -1099,7 +1106,7 @@ impl OxiApp {
         markers: &[GitLineChange],
     ) {
         const MARKER_HIT_W: f32 = 10.0;
-        let line_h = FS_SMALL * 1.35;
+        let line_h = crate::theme::editor_line_height();
         let strip = Rect::from_min_max(
             gutter_rect.left_top(),
             pos2(gutter_rect.left() + MARKER_HIT_W, gutter_rect.bottom()),

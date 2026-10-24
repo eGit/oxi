@@ -16,6 +16,7 @@ fn document(path: PathBuf) -> EditorDocument {
         dirty: true,
         layout_cache: EditorLayoutCache::default(),
         minimap_cache: None,
+        view: Default::default(),
         viewport_width_bits: None,
         viewport_anchor_line: 0,
         media: None,

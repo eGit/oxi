@@ -32,12 +32,16 @@ pub(crate) enum AppAction {
     Website,
     ReleaseNotes,
     ReportIssue,
+    ToggleWordWrap,
+    ToggleMinimap,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Action {
     /// Replay this shortcut as a key press.
     Keys(Modifiers, Key),
+    /// Replay Cmd/Ctrl+K, then this key on the next frame (Sublime's chords).
+    Chord(Modifiers, Key),
     Copy,
     Cut,
     Paste,
@@ -65,6 +69,8 @@ pub(crate) enum Panel {
     SourceControl,
     Terminal,
     ActivityLog,
+    WordWrap,
+    Minimap,
 }
 
 pub(crate) struct Command {
@@ -111,6 +117,18 @@ fn keys(label: &'static str, modifiers: Modifiers, key: Key) -> Command {
         action: Action::Keys(modifiers, key),
         shortcut: Some((modifiers, key)),
         scope: Scope::App,
+        panel: None,
+    }
+}
+
+/// A Cmd+K chord: listed in the palette, shown without a menu accelerator.
+fn chord(label: &'static str, key: Key) -> Command {
+    Command {
+        label,
+        palette: None,
+        action: Action::Chord(cmd(), key),
+        shortcut: None,
+        scope: Scope::Editor,
         panel: None,
     }
 }
@@ -192,6 +210,33 @@ fn build_menus() -> Vec<MenuSpec> {
     } else {
         (Modifiers::SHIFT, Key::F11)
     };
+    // Sublime's binding on macOS; Ctrl+. is Stop Response elsewhere, so F7 there.
+    let modification = if MAC {
+        (ctrl, Key::Period)
+    } else {
+        (Modifiers::NONE, Key::F7)
+    };
+    let modification_back = if MAC {
+        Modifiers::NONE
+    } else {
+        Modifiers::SHIFT
+    };
+    let fold = if MAC {
+        cmd().plus(Modifiers::ALT)
+    } else {
+        ctrl.plus(Modifiers::SHIFT)
+    };
+    let all_occurrences = if MAC {
+        (cmd().plus(ctrl), Key::G)
+    } else {
+        (Modifiers::ALT, Key::F3)
+    };
+    let caret_line = if MAC {
+        ctrl.plus(Modifiers::SHIFT)
+    } else {
+        ctrl.plus(Modifiers::ALT)
+    };
+    let jump = if MAC { ctrl } else { Modifiers::ALT };
     let move_line = if MAC { cmd().plus(ctrl) } else { cmd_shift() };
     let bracket = if MAC { ctrl } else { cmd() };
     // Ctrl+G is Find Next outside macOS; Go to Line is `:` in the picker there.
@@ -257,6 +302,79 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Indent", cmd(), Key::CloseBracket)),
                 editor(keys("Outdent", cmd(), Key::OpenBracket)),
                 editor(keys("Join Lines", cmd(), Key::J)),
+                editor(keys("Transpose", if MAC { ctrl } else { cmd() }, Key::T)),
+                editor(keys(
+                    "Sort Lines",
+                    Modifiers::NONE,
+                    if MAC { Key::F5 } else { Key::F9 },
+                )),
+                c(chord(
+                    if MAC {
+                        "Convert Case: Upper Case   ⌘K ⌘U"
+                    } else {
+                        "Convert Case: Upper Case   Ctrl+K Ctrl+U"
+                    },
+                    Key::U,
+                )
+                .palette("Convert Case: Upper Case")),
+                c(chord(
+                    if MAC {
+                        "Convert Case: Lower Case   ⌘K ⌘L"
+                    } else {
+                        "Convert Case: Lower Case   Ctrl+K Ctrl+L"
+                    },
+                    Key::L,
+                )
+                .palette("Convert Case: Lower Case")),
+                c(chord(
+                    if MAC {
+                        "Delete to End of Line   ⌘K ⌘K"
+                    } else {
+                        "Delete to End of Line   Ctrl+K Ctrl+K"
+                    },
+                    Key::K,
+                )
+                .palette("Edit: Delete to End of Line")),
+                Separator,
+                editor(keys("Fold", fold, Key::OpenBracket).palette("Code Folding: Fold")),
+                editor(keys("Unfold", fold, Key::CloseBracket).palette("Code Folding: Unfold")),
+                c(chord(
+                    if MAC {
+                        "Unfold All   ⌘K ⌘0"
+                    } else {
+                        "Unfold All   Ctrl+K Ctrl+0"
+                    },
+                    Key::Num0,
+                )
+                .palette("Code Folding: Unfold All")),
+                c(chord(
+                    if MAC {
+                        "Fold Level 1   ⌘K ⌘1"
+                    } else {
+                        "Fold Level 1   Ctrl+K Ctrl+1"
+                    },
+                    Key::Num1,
+                )
+                .palette("Code Folding: Fold Level 1")),
+                c(chord(
+                    if MAC {
+                        "Fold Level 2   ⌘K ⌘2"
+                    } else {
+                        "Fold Level 2   Ctrl+K Ctrl+2"
+                    },
+                    Key::Num2,
+                )
+                .palette("Code Folding: Fold Level 2")),
+                Separator,
+                editor(keys("Toggle Bookmark", cmd(), Key::F2).palette("Bookmarks: Toggle")),
+                editor(keys("Next Bookmark", Modifiers::NONE, Key::F2).palette("Bookmarks: Next")),
+                editor(
+                    keys("Previous Bookmark", Modifiers::SHIFT, Key::F2)
+                        .palette("Bookmarks: Previous"),
+                ),
+                editor(
+                    keys("Clear Bookmarks", cmd_shift(), Key::F2).palette("Bookmarks: Clear All"),
+                ),
             ],
         },
         MenuSpec {
@@ -268,15 +386,43 @@ fn build_menus() -> Vec<MenuSpec> {
                     Key::A,
                 )),
                 editor(keys("Expand Selection", cmd_shift(), Key::Space)),
-                editor(keys("Select Word", cmd(), Key::D)),
+                editor(keys("Quick Add Next", cmd(), Key::D)),
+                c(chord(
+                    if MAC {
+                        "Quick Skip Next   ⌘K ⌘D"
+                    } else {
+                        "Quick Skip Next   Ctrl+K Ctrl+D"
+                    },
+                    Key::D,
+                )
+                .palette("Selection: Quick Skip Next")),
+                editor(keys(
+                    "Select All Occurrences",
+                    all_occurrences.0,
+                    all_occurrences.1,
+                )),
+                editor(keys("Split into Lines", cmd_shift(), Key::L)),
+                editor(keys("Add Caret Above", caret_line, Key::ArrowUp)),
+                editor(keys("Add Caret Below", caret_line, Key::ArrowDown)),
+                Separator,
                 editor(keys("Select Line", cmd(), Key::L)),
+                editor(keys(
+                    "Expand Selection to Brackets",
+                    ctrl.plus(Modifiers::SHIFT),
+                    Key::M,
+                )),
+                editor(keys("Expand Selection to Indentation", cmd_shift(), Key::J)),
                 Separator,
                 editor(keys("Move Line Up", move_line, Key::ArrowUp)),
                 editor(keys("Move Line Down", move_line, Key::ArrowDown)),
                 editor(keys("Duplicate Line", cmd_shift(), Key::D)),
                 editor(keys("Delete Line", cmd_shift(), Key::K)),
                 Separator,
-                editor(keys("Add Selection to Chat", cmd_shift(), Key::L)),
+                editor(keys(
+                    "Add Selection to Chat",
+                    cmd().plus(Modifiers::ALT),
+                    Key::L,
+                )),
             ],
         },
         MenuSpec {
@@ -309,6 +455,16 @@ fn build_menus() -> Vec<MenuSpec> {
                     distraction_free.1,
                 )
                 .palette("View: Toggle Distraction Free Mode")),
+                Separator,
+                c(run("Word Wrap", ToggleWordWrap)
+                    .palette("View: Toggle Word Wrap")
+                    .panel(Panel::WordWrap)),
+                c(run("Minimap", ToggleMinimap)
+                    .palette("View: Toggle Minimap")
+                    .panel(Panel::Minimap)),
+                c(keys("Larger Font", cmd(), Key::Equals).palette("View: Increase Font Size")),
+                c(keys("Smaller Font", cmd(), Key::Minus).palette("View: Decrease Font Size")),
+                c(keys("Reset Font Size", cmd(), Key::Num0).palette("View: Reset Font Size")),
             ],
         },
         MenuSpec {
@@ -323,6 +479,19 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Go to Definition", Modifiers::NONE, Key::F12)),
                 editor(keys("Find References", Modifiers::SHIFT, Key::F12)),
                 editor(keys("Go to Matching Bracket", bracket, Key::M)),
+                editor(keys("Jump Back", jump, Key::Minus)),
+                editor(keys(
+                    "Jump Forward",
+                    jump.plus(Modifiers::SHIFT),
+                    Key::Minus,
+                )),
+                Separator,
+                editor(keys("Next Modification", modification.0, modification.1)),
+                editor(keys(
+                    "Previous Modification",
+                    modification.0.plus(modification_back),
+                    if MAC { Key::Comma } else { modification.1 },
+                )),
             ],
         },
         MenuSpec {
@@ -408,6 +577,9 @@ pub(crate) fn shortcut_label(modifiers: Modifiers, key: Key) -> String {
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
         Key::Space => "Space",
+        Key::Equals => "=",
+        Key::Minus => "-",
+        Key::Num0 => "0",
         Key::ArrowUp if MAC => "↑",
         Key::ArrowDown if MAC => "↓",
         Key::ArrowUp => "Up",
@@ -491,6 +663,22 @@ impl OxiApp {
                     }
                 }
                 Action::Run(action) => self.pending_app_actions.push(action),
+                Action::Chord(modifiers, key) => {
+                    input.modifiers = modifiers;
+                    for pressed in [true, false] {
+                        input.events.push(egui::Event::Key {
+                            key: Key::K,
+                            physical_key: Some(Key::K),
+                            pressed,
+                            repeat: false,
+                            modifiers,
+                        });
+                    }
+                    waiting.push(QueuedAction {
+                        action: Action::Keys(modifiers, key),
+                        wait: 0,
+                    });
+                }
             }
         }
         if !waiting.is_empty() {
@@ -536,6 +724,8 @@ impl OxiApp {
             AppAction::ReportIssue => {
                 let _ = webbrowser::open(REPORT_ISSUE);
             }
+            AppAction::ToggleWordWrap => self.toggle_word_wrap(),
+            AppAction::ToggleMinimap => self.toggle_minimap(),
         }
     }
 
@@ -551,6 +741,8 @@ impl OxiApp {
             Panel::SourceControl => self.conv.git_ui.open,
             Panel::Terminal => self.conv.terminal_panel.open,
             Panel::ActivityLog => super::activity_window::activity_window_open(ctx),
+            Panel::WordWrap => self.conv.settings.editor.word_wrap,
+            Panel::Minimap => self.conv.settings.editor.minimap,
         }
     }
 }

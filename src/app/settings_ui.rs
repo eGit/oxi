@@ -9,6 +9,7 @@ mod about_panel;
 mod agent_panel;
 mod appearance_panel;
 mod dictation_panel;
+mod editor_panel;
 mod github_panel;
 mod layout;
 mod local_hf_messages;

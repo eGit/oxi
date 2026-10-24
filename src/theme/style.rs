@@ -477,6 +477,47 @@ pub fn fonts_generation() -> u64 {
     FONTS_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static EDITOR_FONT_SIZE_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(FS_SMALL.to_bits());
+
+/// Set the editor's code font size (Sublime's `font_size`). A change bumps
+/// [`fonts_generation`], so cached editor layouts are rebuilt at the new size.
+pub fn set_editor_font_size(size: f32) {
+    let bits = size.to_bits();
+    if EDITOR_FONT_SIZE_BITS.swap(bits, std::sync::atomic::Ordering::Relaxed) != bits {
+        FONTS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+static EDITOR_WRAP_INDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether soft-wrapped editor rows continue at their line's indentation (Sublime's
+/// `indent_subsequent_lines`). Part of the editor's layout, so a change bumps
+/// [`fonts_generation`] like a font change does.
+pub fn set_editor_wrap_indent(on: bool) {
+    if EDITOR_WRAP_INDENT.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
+        FONTS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub fn editor_wrap_indent() -> bool {
+    EDITOR_WRAP_INDENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn editor_font_size() -> f32 {
+    f32::from_bits(EDITOR_FONT_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// The font source text is laid out in by the editor and the diff panes.
+pub fn editor_font() -> FontId {
+    FontId::monospace(editor_font_size())
+}
+
+/// Height of one editor row, before the galley says otherwise.
+pub fn editor_line_height() -> f32 {
+    editor_font_size() * 1.35
+}
+
 fn active_fonts() -> FontSelection {
     ACTIVE_FONTS
         .read()

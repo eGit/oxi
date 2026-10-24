@@ -326,7 +326,7 @@ impl OxiApp {
             self.close_editor_git_diff();
         }
         if save {
-            self.save_editor_file();
+            self.save_editor_file(ui.ctx());
         }
         if reveal {
             self.reveal_active_file();
@@ -341,8 +341,6 @@ impl OxiApp {
         }
     }
 
-    /// Cmd/Ctrl+W: close whatever tab is showing — the git diff tab, a Markdown preview, or the
-    /// active document (asking first when it has unsaved edits).
     /// Show document `index` as the active tab, as a click on it does.
     fn select_editor_tab(&mut self, index: usize) {
         self.conv.editor.git_full_highlight_path = None;
@@ -376,6 +374,62 @@ impl OxiApp {
         self.select_editor_tab(next);
     }
 
+    /// Sublime's tab keys while a document shows: Cmd+Shift+] / [ and Cmd+Alt+Right / Left for
+    /// the next / previous tab (Ctrl+PageDown / PageUp elsewhere), Cmd+1…9 (Alt+1…9 elsewhere)
+    /// for the nth tab, 9 being the last.
+    pub(crate) fn handle_editor_tab_keys(&mut self, ctx: &egui::Context) {
+        use egui::Event;
+        if self.conv.editor.active.is_none()
+            || super::chord_pending(ctx)
+            || self.conv.settings_page.open
+            || self.conv.editor.file_picker_open
+        {
+            return;
+        }
+        let mac = cfg!(target_os = "macos");
+        let step = ctx.input_mut(|input| {
+            let position = input.events.iter().position(|event| {
+                let Event::Key {
+                    key,
+                    physical_key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    return false;
+                };
+                tab_key(*key, *physical_key, *modifiers, mac).is_some()
+            })?;
+            let Event::Key {
+                key,
+                physical_key,
+                modifiers,
+                ..
+            } = input.events.remove(position)
+            else {
+                return None;
+            };
+            tab_key(key, physical_key, modifiers, mac)
+        });
+        let count = self.conv.editor.documents.len();
+        match step {
+            Some(TabKey::Next) => self.cycle_editor_tab(false),
+            Some(TabKey::Previous) => self.cycle_editor_tab(true),
+            Some(TabKey::Back) => self.navigate_editor_history(false),
+            Some(TabKey::Forward) => self.navigate_editor_history(true),
+            Some(TabKey::Nth(n)) if count > 0 => {
+                let index = if n == 9 { count - 1 } else { n - 1 };
+                if index < count {
+                    self.select_editor_tab(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Cmd/Ctrl+W: close whatever tab is showing — the git diff tab, a Markdown preview, or the
+    /// active document (asking first when it has unsaved edits).
     pub(crate) fn close_active_editor_tab(&mut self) {
         if self.conv.editor.diff_tab_active {
             self.close_editor_git_diff();
@@ -458,7 +512,10 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
     const TOP_INSET: f32 = 8.0;
     let font = FontId::proportional(FS_SMALL);
     let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font, c_text()));
-    let width = (galley.rect.width() + PADDING_LEFT + CLOSE_SLOT).max(72.0);
+    // Sublime keeps tabs at a roomy minimum width instead of hugging the name; the strip
+    // scrolls when they no longer fit.
+    const MIN_WIDTH: f32 = 140.0;
+    let width = (galley.rect.width() + PADDING_LEFT + CLOSE_SLOT).max(MIN_WIDTH);
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(width, ui.available_height()),
         egui::Sense::click(),
@@ -552,5 +609,133 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
     EditorTab {
         response,
         close_clicked: close.clicked(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabKey {
+    Next,
+    Previous,
+    /// Sublime's Jump Back / Jump Forward through the navigation history.
+    Back,
+    Forward,
+    /// 1-based; 9 means the last tab.
+    Nth(usize),
+}
+
+fn tab_key(
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    modifiers: egui::Modifiers,
+    mac: bool,
+) -> Option<TabKey> {
+    use egui::Key;
+    let physical = physical_key.unwrap_or(key);
+    // Jump Back / Forward: Ctrl+- on macOS, Alt+- elsewhere; with Shift, forward.
+    let jump = if mac {
+        modifiers.ctrl && !modifiers.mac_cmd && !modifiers.alt
+    } else {
+        modifiers.alt && !modifiers.ctrl
+    };
+    if jump && physical == Key::Minus {
+        return Some(if modifiers.shift {
+            TabKey::Forward
+        } else {
+            TabKey::Back
+        });
+    }
+    if mac {
+        let cmd = modifiers.mac_cmd && !modifiers.ctrl;
+        if cmd && modifiers.shift && !modifiers.alt {
+            return match physical {
+                Key::CloseBracket => Some(TabKey::Next),
+                Key::OpenBracket => Some(TabKey::Previous),
+                _ => None,
+            };
+        }
+        if cmd && modifiers.alt && !modifiers.shift {
+            return match key {
+                Key::ArrowRight => Some(TabKey::Next),
+                Key::ArrowLeft => Some(TabKey::Previous),
+                _ => None,
+            };
+        }
+        if cmd && !modifiers.alt && !modifiers.shift {
+            return digit(physical).map(TabKey::Nth);
+        }
+        return None;
+    }
+    if modifiers.ctrl && !modifiers.alt && !modifiers.shift {
+        return match key {
+            Key::PageDown => Some(TabKey::Next),
+            Key::PageUp => Some(TabKey::Previous),
+            _ => None,
+        };
+    }
+    if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
+        return digit(physical).map(TabKey::Nth);
+    }
+    None
+}
+
+fn digit(key: egui::Key) -> Option<usize> {
+    use egui::Key;
+    Some(match key {
+        Key::Num1 => 1,
+        Key::Num2 => 2,
+        Key::Num3 => 3,
+        Key::Num4 => 4,
+        Key::Num5 => 5,
+        Key::Num6 => 6,
+        Key::Num7 => 7,
+        Key::Num8 => 8,
+        Key::Num9 => 9,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tab_key_tests {
+    use super::{TabKey, tab_key};
+    use eframe::egui::{Key, Modifiers};
+
+    #[test]
+    fn sublime_tab_bindings() {
+        let cmd = Modifiers::MAC_CMD.plus(Modifiers::COMMAND);
+        let shifted = cmd.plus(Modifiers::SHIFT);
+        // Shift+] arrives as `}` on a US layout; the physical key is still `]`.
+        assert_eq!(
+            tab_key(
+                Key::CloseCurlyBracket,
+                Some(Key::CloseBracket),
+                shifted,
+                true
+            ),
+            Some(TabKey::Next)
+        );
+        assert_eq!(
+            tab_key(Key::OpenBracket, None, shifted, true),
+            Some(TabKey::Previous)
+        );
+        assert_eq!(tab_key(Key::Num3, None, cmd, true), Some(TabKey::Nth(3)));
+        // Cmd+] alone is Indent.
+        assert_eq!(tab_key(Key::CloseBracket, None, cmd, true), None);
+        assert_eq!(
+            tab_key(Key::ArrowLeft, None, cmd.plus(Modifiers::ALT), true),
+            Some(TabKey::Previous)
+        );
+        assert_eq!(
+            tab_key(
+                Key::PageDown,
+                None,
+                Modifiers::CTRL.plus(Modifiers::COMMAND),
+                false
+            ),
+            Some(TabKey::Next)
+        );
+        assert_eq!(
+            tab_key(Key::Num9, None, Modifiers::ALT, false),
+            Some(TabKey::Nth(9))
+        );
     }
 }

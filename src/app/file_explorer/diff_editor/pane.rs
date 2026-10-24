@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use eframe::egui::scroll_area::{ScrollBarVisibility, ScrollSource};
 use eframe::egui::text::LayoutJob;
-use eframe::egui::{self, FontId, Galley, Margin, Rect, TextEdit, Ui, UiBuilder, pos2, vec2};
+use eframe::egui::{self, Galley, Margin, Rect, TextEdit, Ui, UiBuilder, pos2, vec2};
 
 use crate::theme::*;
 
@@ -57,7 +57,7 @@ pub(super) fn readonly_pane(
     input: PaneInput<'_>,
     cache: &mut PaneCache,
 ) -> PaneOutput {
-    let font = FontId::monospace(FS_SMALL);
+    let font = crate::theme::editor_font();
     let row_h = ui.fonts_mut(|fonts| fonts.row_height(&font));
     let gaps = input.decor.gaps(input.side, input.inline);
     let key = {
@@ -87,7 +87,11 @@ pub(super) fn readonly_pane(
     let galley = cache.galley.clone().expect("laid out above");
     let geometry = cache.geometry.clone().expect("laid out above");
 
-    let digit_w = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0').max(FS_SMALL * 0.5));
+    let digit_w = ui.fonts_mut(|fonts| {
+        fonts
+            .glyph_width(&font, '0')
+            .max(crate::theme::editor_font_size() * 0.5)
+    });
     let digits = (input.text.bytes().filter(|byte| *byte == b'\n').count() + 1)
         .to_string()
         .len()
