@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-24
+
+### Added
+- **Editor:** Multiple selections with Cmd+D, Cmd+K Cmd+D, Ctrl+Cmd+G, Cmd+Shift+L, Ctrl+Shift+Up/Down, Cmd+click, and Alt/middle-drag column selection.
+- **Editor:** Code folding by indentation with gutter arrows, fold markers, and keyboard shortcuts (Cmd+Alt+[/], Cmd+K Cmd+0-9).
+- **Editor:** Sublime Text typing model with auto-paired brackets and quotes, auto-indent on Enter, tab stops, and whole-line copy/cut/paste.
+- **Editor:** Buffer-word auto-complete, bookmarks (Cmd+F2 / F2), case/sort/transpose operations, expand to brackets/indentation, and jump back/forward.
+- **Editor:** Hanging indent for wrapped lines, scroll past end, current-line highlight, and whitespace drawing.
+- **Settings:** Editor panel to customize font size (Cmd +/-/0), word wrap, minimap, highlights, trim/newline on save, and auto-complete with live preview.
+- **Status bar:** Shows line/column or selection regions, spaces menu, and syntax indicator that can be changed per tab.
+- **Editor:** Scroll position is remembered per tab; diffs now use the editor font.
+
+
 ## [1.23.0] - 2026-10-24
 
 ### Added
@@ -1185,7 +1198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.23.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/maziluiosif/oxi/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/maziluiosif/oxi/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/maziluiosif/oxi/compare/v1.21.2...v1.22.0
 [1.21.2]: https://github.com/maziluiosif/oxi/compare/v1.21.1...v1.21.2
