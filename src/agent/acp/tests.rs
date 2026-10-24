@@ -717,13 +717,23 @@ fn oxi_todo_tool_drives_the_checklist_and_tool_search_stays_hidden() {
 }
 
 #[test]
-fn oxi_todo_tool_is_recognized_in_permission_requests() {
-    assert!(todo_mcp::is_todo_tool(
-        &json!({"title":"mcp__oxi__todo_write","kind":"other"})
-    ));
-    assert!(!todo_mcp::is_todo_tool(
-        &json!({"title":"Bash","kind":"execute"})
-    ));
+fn oxi_tools_are_recognized_in_permission_requests() {
+    assert_eq!(
+        oxi_mcp::oxi_tool(&json!({"title":"mcp__oxi__todo_write","kind":"other"})),
+        Some("todo_write")
+    );
+    assert_eq!(
+        oxi_mcp::oxi_tool(&json!({"title":"Bash","kind":"execute"})),
+        None
+    );
+    // The scratchpad asks under the native tool's name, so its approval settings apply.
+    let (name, args) = permission_name_args(&json!({
+        "title": "mcp__oxi__scratchpad",
+        "kind": "other",
+        "rawInput": {"mode": "append", "content": "x"},
+    }));
+    assert_eq!(name, "scratchpad");
+    assert_eq!(args.unwrap()["mode"], "append");
 }
 
 #[test]

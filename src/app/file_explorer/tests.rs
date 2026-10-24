@@ -170,20 +170,71 @@ fn scratchpad_reloads_same_size_changes_even_with_preserved_mtime() {
 }
 
 #[test]
-fn scratchpad_sync_preserves_unsaved_manual_edits() {
+fn scratchpad_sync_merges_agent_writes_into_unsaved_edits() {
     let file = TestFile::new();
     let mut doc = document(file.0.clone());
     doc.is_scratchpad = true;
     crate::scratchpad::update(&file.0, "append", " agent notes").unwrap();
     doc.sync_from_disk();
-    assert_eq!(doc.content, "my edits");
-    assert_eq!(doc.saved_content, "original");
-    assert!(doc.is_dirty() && doc.externally_modified);
-    assert!(crate::scratchpad::save(&file.0, &doc.saved_content, &doc.content).is_err());
+    // Same line on both sides: the scratchpad keeps both, the typing first.
+    assert_eq!(doc.content, "my edits\noriginal agent notes");
+    assert_eq!(doc.saved_content, "original agent notes");
+    assert!(doc.is_dirty() && !doc.externally_modified);
+    let saved = crate::scratchpad::save(&file.0, &doc.saved_content, &doc.content).unwrap();
+    assert_eq!(saved, doc.content);
+    assert_eq!(std::fs::read_to_string(&file.0).unwrap(), doc.content);
+    let _ = std::fs::remove_file(file.0.with_extension("lock"));
+}
+
+#[test]
+fn external_changes_merge_into_dirty_documents_on_other_lines() {
+    let file = TestFile::new();
+    std::fs::write(&file.0, "one\ntwo\nthree\n").unwrap();
+    let mut doc = clean_document(file.0.clone());
+    doc.reload_from_disk().unwrap();
+    doc.content = "one mine\ntwo\nthree\n".into();
+    doc.dirty = true;
+    std::fs::write(&file.0, "one\ntwo\nthree agent\n").unwrap();
+    doc.disk_modified = None;
+    assert_eq!(
+        doc.sync_from_disk_keeping_old().as_deref(),
+        Some("one mine\ntwo\nthree\n")
+    );
+    assert_eq!(doc.content, "one mine\ntwo\nthree agent\n");
+    assert_eq!(doc.saved_content, "one\ntwo\nthree agent\n");
+    assert!(doc.is_dirty() && !doc.externally_modified);
+    doc.save_to_disk(false).unwrap();
     assert_eq!(
         std::fs::read_to_string(&file.0).unwrap(),
-        "original agent notes"
+        "one mine\ntwo\nthree agent\n"
     );
+}
+
+#[test]
+fn save_merges_a_change_made_since_the_last_check() {
+    let file = TestFile::new();
+    std::fs::write(&file.0, "a\nb\n").unwrap();
+    let mut doc = clean_document(file.0.clone());
+    doc.reload_from_disk().unwrap();
+    doc.content = "a mine\nb\n".into();
+    doc.dirty = true;
+    std::fs::write(&file.0, "a\nb\nc\n").unwrap();
+    doc.save_to_disk(false).unwrap();
+    assert_eq!(std::fs::read_to_string(&file.0).unwrap(), "a mine\nb\nc\n");
+    assert_eq!(doc.content, "a mine\nb\nc\n");
+    assert!(!doc.is_dirty());
+}
+
+#[test]
+fn caret_follows_text_merged_in_around_it() {
+    use super::documents::caret_after_replacement as caret;
+    // Inserted after the caret: it stays.
+    assert_eq!(caret("ab\ncd", "ab\ncd\nef", 2), 2);
+    // Inserted before: it moves with its text.
+    assert_eq!(caret("ab\ncd", "zz\nab\ncd", 4), 7);
+    // Inside a replaced region: end of the replacement.
+    assert_eq!(caret("abcd", "aXYd", 2), 3);
+    assert_eq!(caret("ă\nb", "ț\nă\nb", 2), 4);
 }
 
 #[test]

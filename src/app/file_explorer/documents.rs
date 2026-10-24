@@ -12,7 +12,7 @@ pub(super) const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 impl OxiApp {
     pub(crate) fn open_scratchpad(&mut self) {
         let path = crate::scratchpad::path();
-        let _guard = crate::scratchpad::lock();
+        let _guard = crate::scratchpad::lock(&path);
         if let Some(index) = self
             .conv
             .editor
@@ -69,8 +69,12 @@ impl OxiApp {
         let result =
             crate::scratchpad::save(&document.path, &document.saved_content, &document.content);
         match result {
-            Ok(()) => {
-                document.saved_content.clone_from(&document.content);
+            Ok(saved) => {
+                // An agent's concurrent write was merged into what got saved.
+                if saved != document.content {
+                    document.replace_content(saved.clone());
+                }
+                document.saved_content = saved;
                 document.dirty = false;
                 document.disk_modified = std::fs::metadata(&document.path)
                     .and_then(|metadata| metadata.modified())
@@ -339,8 +343,8 @@ impl OxiApp {
         };
         let mut undoer = state.undoer();
         let before = state.cursor.char_range().unwrap_or_default();
+        let caret = caret_after_replacement(&old, &new, before.primary.index.0);
         undoer.add_undo(&(before, old));
-        let caret = before.primary.index.0.min(new.chars().count());
         let after = egui::text::CCursorRange::one(egui::text::CCursor::new(caret));
         undoer.add_undo(&(after, new));
         state.set_undoer(undoer);
@@ -359,6 +363,39 @@ impl OxiApp {
     }
 }
 
+/// Where a caret at char `caret` of `old` belongs once the text became `new`: it stays before
+/// the changed region, keeps its distance from the end after it, and lands at the end of it
+/// when it was inside.
+pub(super) fn caret_after_replacement(old: &str, new: &str, caret: usize) -> usize {
+    let prefix = crate::text_diff::common_prefix_len(old.as_bytes(), new.as_bytes());
+    let prefix = floor_char_boundary(old, prefix.min(new.len()));
+    let suffix = crate::text_diff::common_suffix_len(
+        old.as_bytes(),
+        new.as_bytes(),
+        old.len().min(new.len()) - prefix,
+    );
+    let caret_byte = old
+        .char_indices()
+        .nth(caret)
+        .map_or(old.len(), |(byte, _)| byte);
+    if caret_byte <= prefix {
+        return caret.min(new.chars().count());
+    }
+    let new_chars = new.chars().count();
+    if caret_byte >= old.len() - suffix {
+        return new_chars.saturating_sub(old[caret_byte..].chars().count());
+    }
+    let changed_end = floor_char_boundary(new, new.len() - suffix);
+    new[..changed_end].chars().count()
+}
+
+fn floor_char_boundary(text: &str, mut byte: usize) -> usize {
+    while !text.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    byte
+}
+
 impl EditorDocument {
     pub(super) fn sync_from_disk(&mut self) {
         let _ = self.sync_from_disk_keeping_old();
@@ -367,22 +404,25 @@ impl EditorDocument {
     /// Like [`Self::sync_from_disk`]; returns the text a reload replaced, if any.
     pub(super) fn sync_from_disk_keeping_old(&mut self) -> Option<String> {
         if self.is_scratchpad {
-            let _guard = crate::scratchpad::lock();
-            match crate::scratchpad::read(&self.path) {
-                Ok(content) if content == self.saved_content => {}
-                Ok(_) if self.is_dirty() => self.externally_modified = true,
-                Ok(_) => self.externally_modified = self.reload_from_disk().is_err(),
-                Err(_) => self.externally_modified = true,
+            let disk = match crate::scratchpad::read_locked(&self.path) {
+                Ok(disk) => disk,
+                Err(_) => {
+                    self.externally_modified = true;
+                    return None;
+                }
+            };
+            if disk == self.saved_content {
+                return None;
             }
-            return None;
+            self.disk_modified = std::fs::metadata(&self.path)
+                .and_then(|m| m.modified())
+                .ok();
+            return self.take_in_disk_text(disk, true);
         }
         let metadata = match std::fs::metadata(&self.path) {
             Ok(metadata) => metadata,
             Err(_) => {
-                // A scratchpad may not have been saved to disk yet.
-                if !self.is_scratchpad || self.disk_modified.is_some() {
-                    self.externally_modified = true;
-                }
+                self.externally_modified = true;
                 return None;
             }
         };
@@ -394,33 +434,72 @@ impl EditorDocument {
         if self.media.is_some() {
             // The preview renderer also invalidates egui's image cache.
             self.externally_modified = true;
-            None
-        } else if self.is_dirty() {
-            self.externally_modified = true;
-            None
-        } else {
-            let old = self.content.clone();
-            self.externally_modified = self.reload_from_disk().is_err();
-            (self.content != old).then_some(old)
+            return None;
+        }
+        match self.read_disk_text() {
+            Ok((disk, modified)) => {
+                self.disk_modified = modified;
+                self.take_in_disk_text(disk, false)
+            }
+            Err(_) => {
+                self.externally_modified = true;
+                None
+            }
         }
     }
 
-    pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
-        let metadata = std::fs::metadata(&self.path).map_err(|e| e.to_string())?;
-        if metadata.len() > MAX_TEXT_FILE_BYTES {
-            return Err("The file is too large for the text editor.".into());
+    /// Bring `disk`, written by another program, into the tab: a clean tab adopts it, one with
+    /// unsaved edits gets it merged in. Only edits to the same lines (`union` aside) leave the
+    /// tab flagged as changed on disk. Returns the text it replaced, if it changed.
+    fn take_in_disk_text(&mut self, disk: String, union: bool) -> Option<String> {
+        if disk == self.saved_content {
+            self.externally_modified = false;
+            return None;
         }
-        let content = std::fs::read_to_string(&self.path).map_err(|e| e.to_string())?;
+        let next = if self.is_dirty() {
+            match crate::merge3::merge(&self.saved_content, &self.content, &disk, union) {
+                Some(merged) => merged,
+                None => {
+                    self.externally_modified = true;
+                    return None;
+                }
+            }
+        } else {
+            disk.clone()
+        };
+        self.saved_content = disk;
+        self.externally_modified = false;
+        let old = (next != self.content).then(|| self.replace_content(next));
+        self.dirty = self.content != self.saved_content;
+        old
+    }
+
+    /// Swap in new text, dropping what was derived from the old; returns the old text.
+    pub(super) fn replace_content(&mut self, content: String) -> String {
         if self.content != content {
             self.content_revision = self.content_revision.wrapping_add(1);
             self.layout_cache = EditorLayoutCache::default();
             self.minimap_cache = None;
             self.syntax_state = None;
         }
-        self.content = content.clone();
+        std::mem::replace(&mut self.content, content)
+    }
+
+    fn read_disk_text(&self) -> Result<(String, Option<std::time::SystemTime>), String> {
+        let metadata = std::fs::metadata(&self.path).map_err(|e| e.to_string())?;
+        if metadata.len() > MAX_TEXT_FILE_BYTES {
+            return Err("The file is too large for the text editor.".into());
+        }
+        let content = std::fs::read_to_string(&self.path).map_err(|e| e.to_string())?;
+        Ok((content, metadata.modified().ok()))
+    }
+
+    pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
+        let (content, modified) = self.read_disk_text()?;
+        self.replace_content(content.clone());
         self.saved_content = content;
         self.dirty = false;
-        self.disk_modified = metadata.modified().ok();
+        self.disk_modified = modified;
         self.externally_modified = false;
         Ok(())
     }
@@ -430,9 +509,21 @@ impl EditorDocument {
         if !overwrite && !self.is_scratchpad {
             match std::fs::read(&self.path) {
                 Ok(bytes) if bytes == self.saved_content.as_bytes() => {}
-                Ok(_) => {
-                    self.externally_modified = true;
-                    return Err("The file changed on disk. Review it before overwriting.".into());
+                Ok(bytes) => {
+                    // Changed since the last check: merge it in now, as a sync would have.
+                    let merged = String::from_utf8(bytes).ok().and_then(|disk| {
+                        let merged =
+                            crate::merge3::merge(&self.saved_content, &self.content, &disk, false)?;
+                        Some((disk, merged))
+                    });
+                    let Some((disk, merged)) = merged else {
+                        self.externally_modified = true;
+                        return Err(
+                            "The file changed on disk where you also edited it. Review it before overwriting.".into(),
+                        );
+                    };
+                    self.saved_content = disk;
+                    self.replace_content(merged);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     self.externally_modified = true;

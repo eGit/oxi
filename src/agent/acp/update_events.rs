@@ -109,10 +109,10 @@ impl UpdateState {
         }
         let field = |key| tool.fields.get(key).and_then(Value::as_str).unwrap_or("");
         let named = |name: &str| field("title") == name || field("name") == name;
-        // oxi's own checklist tool (see `todo_mcp`) drives the native checklist, not a tool row.
+        // oxi's own checklist tool (see `oxi_mcp`) drives the native checklist, not a tool row.
         if [field("title"), field("name")]
             .into_iter()
-            .any(super::todo_mcp::names_todo_tool)
+            .any(super::oxi_mcp::names_todo_tool)
         {
             let todos = tool
                 .fields
@@ -155,12 +155,19 @@ impl UpdateState {
                 .unwrap_or_else(|| tool.content.locations.clone()),
             status,
         };
-        let name = match kind {
-            "execute" => "bash",
-            "search" => "grep",
-            "fetch" => "web_fetch",
-            "think" | "other" | "" => metadata.name.as_deref().unwrap_or("tool"),
-            other => other,
+        // oxi's scratchpad tools render like the native agent's.
+        let oxi_tool = [field("title"), field("name")]
+            .into_iter()
+            .find_map(super::oxi_mcp::oxi_tool_name);
+        let name = match oxi_tool {
+            Some(oxi) => oxi,
+            None => match kind {
+                "execute" => "bash",
+                "search" => "grep",
+                "fetch" => "web_fetch",
+                "think" | "other" | "" => metadata.name.as_deref().unwrap_or("tool"),
+                other => other,
+            },
         }
         .to_owned();
         let output = if !tool.content.text.is_empty() {
