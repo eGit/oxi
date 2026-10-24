@@ -629,11 +629,23 @@ impl OxiApp {
                     ui.add_space(BULLET_GAP);
                 }
                 if running {
+                    // A silent agent gets a still warning dot instead of a spinner, so the
+                    // sidebar does not claim progress the chat itself would deny.
+                    let stall = self.stall_for(self.session_key(wi, si));
                     ui.allocate_ui_with_layout(
                         egui::vec2(spin_reserve, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
-                        |ui| {
-                            small_spinner(ui);
+                        |ui| match stall {
+                            Some(quiet) => {
+                                ui.label(RichText::new("•").size(FS_SMALL).color(c_warning_fg()))
+                                    .on_hover_text(format!(
+                                        "No updates from the agent for {}",
+                                        format_stream_elapsed(quiet)
+                                    ));
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_secs(1));
+                            }
+                            None => small_spinner(ui),
                         },
                     );
                     ui.add_space(SPINNER_GAP);

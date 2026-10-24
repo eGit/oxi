@@ -9,8 +9,8 @@ use eframe::egui::{self, Response, RichText, Ui};
 use crate::model::{AssistantBlock, ChatMessage, ToolStatus};
 use crate::theme::*;
 
-use super::super::OxiApp;
 use super::super::compaction::QueuedSend;
+use super::super::{OxiApp, SessionKey};
 
 /// Quiet time before the notice while the agent is thinking or writing.
 const QUIET: Duration = Duration::from_secs(90);
@@ -47,7 +47,12 @@ fn tool_in_flight(reply: &ChatMessage) -> bool {
 impl OxiApp {
     /// How long the active chat's running turn has been silent, once worth mentioning.
     pub(super) fn active_stall(&self) -> Option<Duration> {
-        let run = self.run_state(self.active_session_key())?;
+        self.stall_for(self.active_session_key())
+    }
+
+    /// The same for any chat: the sidebar shows it on chats running in the background.
+    pub(crate) fn stall_for(&self, key: SessionKey) -> Option<Duration> {
+        let run = self.run_state(key)?;
         // An approval prompt is the agent waiting on the user, not the other way round.
         if !run.waiting_response || run.pending_approval.is_some() {
             return None;
@@ -55,7 +60,7 @@ impl OxiApp {
         quiet_for(
             run.last_event_at?,
             Instant::now(),
-            self.active_session().messages.last(),
+            self.session_by_key(key).messages.last(),
         )
     }
 
