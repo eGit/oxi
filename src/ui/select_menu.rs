@@ -101,7 +101,7 @@ impl<'a> SelectMenu<'a> {
     pub fn show(self, ui: &mut Ui, options: impl FnOnce() -> Vec<SelectOption>) -> Option<usize> {
         let popup_id = self.id.with("popup");
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let button = quiet_button(ui, self.text, self.max_w, open);
+        let button = quiet_button(ui, self.id, self.text, self.max_w, open);
         let button = if self.hover.is_empty() || open {
             button
         } else {
@@ -410,30 +410,49 @@ fn option_row(ui: &mut Ui, option: &SelectOption, highlighted: bool) -> Response
 }
 
 /// Transparent label + chevron that gets a soft pill on hover and while its list is open.
-fn quiet_button(ui: &mut Ui, text: &str, max_w: f32, open: bool) -> Response {
+pub(crate) fn select_button_width(ui: &Ui, text: &str, max_w: f32) -> f32 {
+    let label = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(FS_SMALL),
+        c_text_muted(),
+    );
+    (label.size().x + CHEVRON_W + 2.0 * ui.spacing().button_padding.x).min(max_w)
+}
+
+fn quiet_button(ui: &mut Ui, id: Id, text: &str, max_w: f32, open: bool) -> Response {
+    let max_w = max_w.min(ui.available_width()).max(1.0);
     let pad = ui.spacing().button_padding;
     let color = if open { c_accent() } else { c_text_muted() };
     let mut job = egui::text::LayoutJob::single_section(
         text.to_owned(),
         egui::TextFormat::simple(egui::FontId::proportional(FS_SMALL), color),
     );
-    job.wrap = egui::text::TextWrapping::truncate_at_width((max_w - CHEVRON_W).max(8.0));
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width((max_w - CHEVRON_W - 2.0 * pad.x).max(0.0));
     let galley = ui.painter().layout_job(job);
     let height = ui
         .spacing()
         .interact_size
         .y
         .max(galley.size().y + 2.0 * pad.y);
-    let size = egui::vec2(galley.size().x + CHEVRON_W + 2.0 * pad.x, height);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let size = egui::vec2(
+        (galley.size().x + CHEVRON_W + 2.0 * pad.x).min(max_w),
+        height,
+    );
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let resp = ui.interact(rect, id.with("button"), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), text)
     });
     if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if open || resp.hovered() {
-            painter.rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        if open || resp.hovered() || resp.has_focus() {
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(RADIUS_BUTTON),
+                if open { c_row_active() } else { c_row_hover() },
+            );
         }
         let text_pos = egui::pos2(rect.left() + pad.x, rect.center().y - galley.size().y * 0.5);
         painter.galley(text_pos, galley, color);
@@ -449,6 +468,7 @@ fn quiet_button(ui: &mut Ui, text: &str, max_w: f32, open: bool) -> Response {
             },
         );
     }
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_BUTTON));
     resp
 }
 
@@ -466,6 +486,9 @@ pub fn labeled_switch(ui: &mut Ui, label: &str, on: bool, hover: &str) -> Option
     let size = egui::vec2(galley.size().x + 6.0 + track.x + 2.0 * pad.x, height);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label)
+    });
     let resp = if hover.is_empty() {
         resp
     } else {
@@ -474,7 +497,7 @@ pub fn labeled_switch(ui: &mut Ui, label: &str, on: bool, hover: &str) -> Option
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool_with_time(resp.id, on, 0.12);
         let painter = ui.painter();
-        if resp.hovered() {
+        if resp.hovered() || resp.has_focus() {
             painter.rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
         }
         painter.galley(
@@ -509,6 +532,7 @@ pub fn labeled_switch(ui: &mut Ui, label: &str, on: bool, hover: &str) -> Option
             lerp_color(c_text_muted(), c_on_accent(), t),
         );
     }
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_BUTTON));
     resp.clicked().then_some(!on)
 }
 

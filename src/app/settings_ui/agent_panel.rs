@@ -346,6 +346,21 @@ impl OxiApp {
             {
                 self.conv.settings.notify_in_background = notify;
             }
+            let mut keep_awake = self.conv.settings.keep_awake_while_working;
+            if ui
+                .checkbox(
+                    &mut keep_awake,
+                    RichText::new("Keep the computer awake while an agent works")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "Holds off idle sleep until the turn ends, so long unattended runs keep going. The screen can still turn off, and closing the lid still sleeps. Not held while a turn waits for your approval.",
+                )
+                .changed()
+            {
+                self.conv.settings.keep_awake_while_working = keep_awake;
+            }
         });
 
         // ── Limits ─────────────────────────────────────────────────────────

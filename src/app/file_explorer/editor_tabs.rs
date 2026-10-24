@@ -303,21 +303,7 @@ impl OxiApp {
             self.navigate_editor_history(true);
         }
         if let Some(index) = select {
-            self.conv.editor.git_full_highlight_path = None;
-            self.conv.editor.active = Some(index);
-            self.conv.editor.diff_tab_active = false;
-            self.conv.editor.markdown_preview_active = false;
-            self.conv.editor.focus_editor_next_frame = true;
-            if let Some(path) = self
-                .conv
-                .editor
-                .documents
-                .get(index)
-                .filter(|document| !document.is_scratchpad)
-                .map(|document| document.path.clone())
-            {
-                self.reveal_editor_file_in_explorer(&path);
-            }
+            self.select_editor_tab(index);
         }
         if let Some(index) = select_preview {
             self.conv.editor.documents[index].markdown_preview_open = true;
@@ -357,6 +343,39 @@ impl OxiApp {
 
     /// Cmd/Ctrl+W: close whatever tab is showing — the git diff tab, a Markdown preview, or the
     /// active document (asking first when it has unsaved edits).
+    /// Show document `index` as the active tab, as a click on it does.
+    fn select_editor_tab(&mut self, index: usize) {
+        self.conv.editor.git_full_highlight_path = None;
+        self.conv.editor.active = Some(index);
+        self.conv.editor.diff_tab_active = false;
+        self.conv.editor.markdown_preview_active = false;
+        self.conv.editor.focus_editor_next_frame = true;
+        if let Some(path) = self
+            .conv
+            .editor
+            .documents
+            .get(index)
+            .filter(|document| !document.is_scratchpad)
+            .map(|document| document.path.clone())
+        {
+            self.reveal_editor_file_in_explorer(&path);
+        }
+    }
+
+    /// Sublime's Ctrl+Tab in the editor: the next (or previous) document tab, wrapping.
+    pub(crate) fn cycle_editor_tab(&mut self, back: bool) {
+        let count = self.conv.editor.documents.len();
+        let Some(active) = self.conv.editor.active.filter(|_| count > 1) else {
+            return;
+        };
+        let next = if back {
+            (active + count - 1) % count
+        } else {
+            (active + 1) % count
+        };
+        self.select_editor_tab(next);
+    }
+
     pub(crate) fn close_active_editor_tab(&mut self) {
         if self.conv.editor.diff_tab_active {
             self.close_editor_git_diff();

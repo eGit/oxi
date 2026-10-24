@@ -126,8 +126,21 @@ fn setup(
 fn run_gallery(rec: &mut Recorder<'_>) {
     let project = rec.project.clone();
     let rec = &mut *rec;
+    if std::env::var_os("OXI_RESIZE_REVIEW").is_some() {
+        review_live_resize(rec);
+        return;
+    }
+    if std::env::var_os("OXI_POLISH_REVIEW").is_some() {
+        review_ui_polish(rec);
+        return;
+    }
     if std::env::var_os("OXI_WORKTREE_REVIEW").is_some() {
         review_worktree_sidebar(rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_CHAT_NAV_REVIEW").is_some() {
+        review_chat_navigation(rec);
         return;
     }
 
@@ -948,6 +961,196 @@ fn run_gallery(rec: &mut Recorder<'_>) {
     }
 }
 
+/// Compare the presented resize frame with the next frame, while a long answer is live.
+fn review_live_resize(rec: &mut Recorder<'_>) {
+    const MARKER: &str = "The live resize marker stays above the composer.";
+    let tail_rect = |rec: &Recorder<'_>| {
+        rec.harness
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text.contains(MARKER) => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("live answer tail")
+    };
+    for theme in ["dark", "light"] {
+        rec.app().conv.settings.theme_id = theme.into();
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        rec.harness
+            .ctx
+            .all_styles_mut(|style| style.visuals.text_cursor.blink = false);
+        for scale in [1.0, 1.25, 2.0] {
+            rec.harness.set_pixels_per_point(scale);
+            {
+                let app = rec.app();
+                app.conv.settings.dictation.enabled = true;
+                app.conv.composer.input =
+                    "A draft that wraps as the window gets narrower. ".repeat(3);
+                app.active_session_mut().messages = heavy_transcript(100);
+                let mut answer = message(MsgRole::Assistant, "", vec![AssistantBlock::Answer(
+                    format!("{}\n\n{MARKER}", "I am reviewing the implementation and checking the behaviour during resizing.\n\n".repeat(30))
+                )]);
+                answer.streaming = true;
+                app.active_session_mut().messages.push(answer);
+                let key = app.active_session_key();
+                app.run_state_mut(key).waiting_response = true;
+                app.conv.transcript.scroll_to_bottom_once = true;
+            }
+            rec.harness.run_steps(6);
+            for width in [
+                1240.0, 1000.0, 850.0, 760.0, 680.0, 600.0, 520.0, 480.0, 520.0, 680.0, 850.0,
+                1000.0, 1240.0,
+            ] {
+                if let Some(AssistantBlock::Answer(text)) = rec
+                    .app()
+                    .active_session_mut()
+                    .messages
+                    .last_mut()
+                    .and_then(|message| message.blocks.last_mut())
+                {
+                    text.push_str(" Still working.");
+                }
+                rec.harness.set_size(egui::vec2(width, 680.0));
+                rec.harness.step();
+                let presented = tail_rect(rec);
+                let input = rec
+                    .harness
+                    .ctx
+                    .read_response(egui::Id::new("composer_input"))
+                    .unwrap()
+                    .rect;
+                let resized = rec.harness.render().unwrap();
+                let provider = rec
+                    .label_center("Local HF")
+                    .expect("provider remains visible");
+                let send = rec.label_center("Queue message").expect("queue button");
+                assert!(
+                    (provider.y - send.y).abs() < 0.5,
+                    "{theme} {scale} {width}: composer controls wrapped"
+                );
+                rec.harness.step();
+                let settled = tail_rect(rec);
+                assert_eq!(
+                    presented, settled,
+                    "{theme} {scale} {width}: live chat moves after resize"
+                );
+                assert_eq!(
+                    input,
+                    rec.harness
+                        .ctx
+                        .read_response(egui::Id::new("composer_input"))
+                        .unwrap()
+                        .rect,
+                    "{theme} {scale} {width}: composer moves after resize"
+                );
+                let idle = rec.harness.render().unwrap();
+                let x = (presented.left().max(0.0) * scale).ceil() as u32;
+                let y = (presented.top().max(0.0) * scale).ceil() as u32;
+                let w = (presented.width() * scale).floor() as u32;
+                let h = (presented.height() * scale).floor() as u32;
+                let resized_crop = image::imageops::crop_imm(&resized, x, y, w, h).to_image();
+                let idle_crop = image::imageops::crop_imm(&idle, x, y, w, h).to_image();
+                assert_eq!(
+                    resized_crop, idle_crop,
+                    "{theme} {scale} {width}: text pixels flicker after resize"
+                );
+                if let Some(dir) = &rec.stills {
+                    resized
+                        .save(dir.join(format!("resize-{theme}-{scale}-{width}.png")))
+                        .unwrap();
+                }
+            }
+            println!("LIVE RESIZE stable: {theme}, scale {scale}");
+        }
+    }
+}
+
+/// Visual review of the actual composer at three widths in every built-in palette.
+/// Run with OXI_POLISH_REVIEW=1 OXI_GALLERY=/tmp/oxi-polish cargo test --release
+/// --locked --lib render_gallery -- --ignored --nocapture.
+fn review_ui_polish(rec: &mut Recorder<'_>) {
+    let input_id = egui::Id::new("composer_input");
+    rec.app().conv.settings.dictation.enabled = true;
+    for theme in ["dark", "light", "midnight", "sublime", "mariana"] {
+        rec.app().conv.settings.theme_id = theme.into();
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        for width in [1240.0, 760.0, 520.0] {
+            rec.harness.set_size(egui::vec2(width, 680.0));
+            rec.app().conv.composer.input.clear();
+            rec.harness.ctx.memory_mut(|m| m.request_focus(input_id));
+            rec.harness.run_steps(5);
+            rec.still(&format!("polish-{theme}-{width}-empty"));
+            rec.app().conv.composer.input = "Review the changes and explain the tradeoffs.\nKeep the interface responsive on smaller windows.".into();
+            rec.harness.run_steps(5);
+            rec.still(&format!("polish-{theme}-{width}-draft"));
+            assert!(rec.harness.query_by_label("Send message").is_some());
+            let send = rec.label_center("Send message").expect("send button");
+            let mic = rec.label_center("Dictation").expect("microphone button");
+            assert!(
+                (mic.y - send.y).abs() < 0.5,
+                "{theme} {width}: microphone and Send are misaligned"
+            );
+            if width >= 760.0 {
+                let provider = rec.label_center("Local HF").expect("provider picker");
+                let scale = rec.harness.ctx.pixels_per_point();
+                let model_y = rec
+                    .harness
+                    .query_all_by_label_contains("qwen2.5")
+                    .next()
+                    .expect("model picker")
+                    .rect()
+                    .center()
+                    .y
+                    / scale;
+                assert!(
+                    (provider.y - send.y).abs() < 0.5,
+                    "{theme} {width}: provider and Send are misaligned"
+                );
+                assert!(
+                    (model_y - send.y).abs() < 0.5,
+                    "{theme} {width}: model and Send are misaligned"
+                );
+            }
+            let text = rec
+                .harness
+                .ctx
+                .read_response(input_id)
+                .expect("composer input");
+            assert!(
+                text.rect.right() <= width,
+                "{theme} {width}: composer overflows"
+            );
+            assert!(
+                text.rect.bottom() < 680.0,
+                "{theme} {width}: composer is clipped"
+            );
+            // A click on the provider must leave keyboard focus with the picker, rather
+            // than the composer card immediately taking it back.
+            let pos = rec.label_center("Local HF").expect("provider picker");
+            rec.harness.event(Event::PointerMoved(pos));
+            for pressed in [true, false] {
+                rec.harness.event(Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                rec.harness.step();
+            }
+            assert!(
+                !rec.harness.ctx.memory(|m| m.has_focus(input_id)),
+                "{theme} {width}: composer stole picker focus"
+            );
+            rec.still(&format!("polish-{theme}-{width}-picker"));
+            egui::Popup::close_all(&rec.harness.ctx);
+        }
+    }
+}
+
 /// The scripted fix: run the suite, read the culprit, edit it.
 fn fix_turn_tools(rec: &mut Recorder<'_>) {
     rec.stream_thinking(
@@ -1409,6 +1612,23 @@ impl Recorder<'_> {
             times[frames / 2].as_secs_f64() * 1e3,
             times[frames - 1].as_secs_f64() * 1e3,
         );
+        // The chat must stay instant: every frame inside one 60 Hz refresh, typical frames
+        // with room to spare. Debug builds are an order of magnitude slower, so only release
+        // runs hold the line.
+        let chat = ["chat", "heavy", "composer", "400 chats"]
+            .iter()
+            .any(|prefix| label.starts_with(prefix));
+        if chat && !cfg!(debug_assertions) {
+            let (p50, max) = (times[frames / 2], times[frames - 1]);
+            assert!(
+                p50 < Duration::from_millis(4),
+                "{label}: typical frame {p50:?} is over the 4 ms chat budget"
+            );
+            assert!(
+                max < Duration::from_micros(16_600),
+                "{label}: slowest frame {max:?} misses a 60 Hz refresh"
+            );
+        }
         if label.ends_with("idle") {
             // Anything still asking for frames while idle keeps the CPU awake for nothing.
             repaint_causes.sort();
@@ -2035,6 +2255,53 @@ fn review_streaming_ui(rec: &mut Recorder<'_>) {
                 serde_json::from_value(json!(mode)).expect("minimal, balanced or expanded");
         }
     }
+    // ACP can pause after commentary without ending the turn. Exercise the real event
+    // consumer so a message boundary never leaves the transcript looking idle.
+    rec.begin_turn("Check the implementation and continue with the next file.");
+    rec.send(AgentEvent::TextDelta(
+        "I found the first issue. I will check the next file.".into(),
+    ));
+    rec.send(AgentEvent::AssistantMessageDone);
+    rec.harness.run_steps(4);
+    assert!(rec.app().session_row_is_running(0, 0));
+    assert!(rec.app().active_waiting_response());
+    assert_eq!(rec.harness.query_all_by_label("Working").count(), 1);
+    rec.still("stream-commentary-waiting");
+    crate::theme::apply_theme(&rec.harness.ctx, "light");
+    rec.harness.run_steps(4);
+    assert_eq!(rec.harness.query_all_by_label("Working").count(), 1);
+    rec.still("stream-commentary-waiting-light");
+    // A silent agent: the tail says so and offers a way out instead of spinning forever.
+    assert_eq!(
+        rec.harness.query_all_by_label("Stop and continue").count(),
+        0
+    );
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        app.run_state_mut(key).last_event_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(130));
+    }
+    rec.harness.run_steps(4);
+    assert_eq!(rec.harness.query_all_by_label("Continue").count(), 1);
+    assert_eq!(
+        rec.harness.query_all_by_label("Working").count(),
+        0,
+        "the stall line replaces the Working line"
+    );
+    rec.still("stream-stalled-light");
+    crate::theme::apply_theme(&rec.harness.ctx, "dark");
+    rec.harness.run_steps(4);
+    rec.still("stream-stalled");
+    crate::theme::apply_theme(&rec.harness.ctx, "light");
+    rec.finish_turn();
+    rec.harness.run_steps(4);
+    assert!(!rec.app().session_row_is_running(0, 0));
+    assert!(!rec.app().active_waiting_response());
+    assert_eq!(rec.harness.query_all_by_label("Working").count(), 0);
+    rec.still("stream-commentary-finished-light");
+    crate::theme::apply_theme(&rec.harness.ctx, "dark");
+    rec.app().active_session_mut().messages.clear();
     rec.begin_turn("Why does the percentile test flake?");
     rec.stream_thinking(
         "The user says test_percentile is flaky. Flaky usually means ordering or floating point. \
@@ -2222,6 +2489,184 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     }
 }
 
+/// Keyboard chat switching: `#` in Goto Anything (Cmd+Shift+O) and Ctrl+Tab, driven with real
+/// key events while the composer has focus.
+fn review_chat_navigation(rec: &mut Recorder<'_>) {
+    use egui::{Key, Modifiers};
+    let active = |rec: &mut Recorder<'_>| {
+        let app = rec.app();
+        (
+            app.conv.active_workspace,
+            app.conv.workspaces[app.conv.active_workspace].active,
+        )
+    };
+    rec.app().conv.composer.focus_next_frame = true;
+    rec.harness.run_steps(3);
+    let start = active(rec);
+    let titles: Vec<String> = rec.app().conv.workspaces[start.0]
+        .sessions
+        .iter()
+        .map(|session| session.title.clone())
+        .collect();
+    assert!(titles.len() >= 3, "the demo seeds several chats");
+
+    rec.harness
+        .key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::O);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.editor.file_picker_open,
+        "Cmd+Shift+O opens the chat switcher"
+    );
+    assert_eq!(rec.app().conv.editor.file_picker_query, "#");
+    rec.still("chat-switcher");
+    rec.harness.key_press(Key::Enter);
+    rec.harness.run_steps(3);
+    assert!(!rec.app().conv.editor.file_picker_open);
+    let switched = active(rec);
+    assert_ne!(
+        switched, start,
+        "Enter on an empty query goes to the previous chat"
+    );
+
+    rec.app().conv.composer.focus_next_frame = true;
+    rec.harness.run_steps(2);
+    let draft_before = rec.app().conv.composer.input.clone();
+    rec.harness.key_press_modifiers(Modifiers::CTRL, Key::Tab);
+    rec.harness.run_steps(3);
+    let next = active(rec);
+    assert_ne!(next, switched, "Ctrl+Tab moves to another chat");
+    rec.harness
+        .key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab);
+    rec.harness.run_steps(3);
+    assert_eq!(active(rec), switched, "Ctrl+Shift+Tab comes back");
+    assert_eq!(
+        rec.app().conv.composer.input,
+        draft_before,
+        "the composer never receives the Tab"
+    );
+
+    // Typing narrows the list by title.
+    let wanted = titles
+        .iter()
+        .find(|title| title.to_ascii_lowercase().contains("csv"))
+        .expect("a CSV chat in the demo")
+        .clone();
+    rec.harness
+        .key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::O);
+    rec.harness.run_steps(2);
+    rec.app().conv.editor.file_picker_query = "#csv".into();
+    rec.harness.run_steps(3);
+    rec.still("chat-switcher-query");
+    rec.harness.key_press(Key::Enter);
+    rec.harness.run_steps(3);
+    let (wi, si) = active(rec);
+    assert_eq!(rec.app().conv.workspaces[wi].sessions[si].title, wanted);
+
+    // Hot exit: an unsent draft reaches disk once typing pauses.
+    rec.app().conv.composer.input = "An unsent idea about the CSV export".into();
+    rec.harness.run_steps(2);
+    let drafts = crate::app_dirs::data_dir().join("drafts.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let saved = loop {
+        rec.harness.step();
+        let saved = std::fs::read_to_string(&drafts).unwrap_or_default();
+        if saved.contains("An unsent idea") || std::time::Instant::now() > deadline {
+            break saved;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert!(saved.contains("An unsent idea"), "draft not saved: {saved}");
+
+    // Cmd+F: type, step through matches with Enter, close with Escape.
+    {
+        let app = rec.app();
+        app.conv.composer.input.clear();
+        app.active_session_mut().messages = heavy_transcript(60);
+        app.conv.transcript.scroll_to_bottom_once = true;
+    }
+    rec.harness.run_steps(6);
+    let on_screen = |rec: &Recorder<'_>, text: &str| {
+        rec.harness
+            .query_all_by_label_contains(text)
+            .any(|node| (0.0..SIZE.y * SCALE).contains(&node.rect().center().y))
+    };
+    assert!(
+        !on_screen(rec, "Question 1:"),
+        "the first turns start off screen"
+    );
+    rec.harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.transcript.find.is_some(),
+        "Cmd+F opens chat find"
+    );
+    rec.harness.event(egui::Event::Text("Question 1".into()));
+    rec.harness.run_steps(6);
+    assert!(
+        on_screen(rec, "Question 1:"),
+        "typing reveals the first match"
+    );
+    rec.still("chat-find");
+    rec.harness.key_press(Key::Enter);
+    rec.harness.run_steps(6);
+    assert_eq!(rec.app().conv.transcript.find.as_ref().unwrap().current, 1);
+    assert!(
+        on_screen(rec, "Question 10:"),
+        "Enter moves to the next match"
+    );
+    rec.still("chat-find-next");
+    rec.harness.key_press(Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.transcript.find.is_none(),
+        "Escape closes chat find"
+    );
+
+    // Distraction Free: Sublime's binding hides the panels and brings back the same ones.
+    let (mods, key) = if cfg!(target_os = "macos") {
+        (
+            Modifiers::COMMAND | Modifiers::SHIFT | Modifiers::CTRL,
+            Key::F,
+        )
+    } else {
+        (Modifiers::SHIFT, Key::F11)
+    };
+    assert!(rec.app().conv.sidebar.open);
+    rec.harness.key_press_modifiers(mods, key);
+    rec.harness.run_steps(4);
+    assert!(
+        rec.app().distraction_free(),
+        "the shortcut enters Distraction Free"
+    );
+    assert!(!rec.app().conv.sidebar.open);
+    rec.still("distraction-free");
+    rec.harness.key_press_modifiers(mods, key);
+    rec.harness.run_steps(4);
+    assert!(!rec.app().distraction_free());
+    assert!(rec.app().conv.sidebar.open, "the sidebar comes back");
+
+    // In the editor, Ctrl+Tab walks the open files instead of leaving for another chat.
+    let chat_before = active(rec);
+    let project = rec.project.clone();
+    {
+        let app = rec.app();
+        app.open_editor_file(std::fs::canonicalize(project.join("stats.py")).unwrap());
+        app.open_editor_file(std::fs::canonicalize(project.join("test_stats.py")).unwrap());
+    }
+    rec.harness.run_steps(3);
+    let tab_before = rec.app().conv.editor.active;
+    rec.harness.key_press_modifiers(Modifiers::CTRL, Key::Tab);
+    rec.harness.run_steps(3);
+    assert_ne!(
+        rec.app().conv.editor.active,
+        tab_before,
+        "Ctrl+Tab switches file"
+    );
+    assert!(rec.app().conv.editor.active_document().is_some());
+    assert_eq!(active(rec), chat_before, "the chat stays the same");
+    println!("CHAT NAV ok");
+}
+
 /// Composer pickers fed by an ACP agent's config options, their searchable lists, and a user
 /// turn with many images.
 fn review_composer_pickers(rec: &mut Recorder<'_>) {
@@ -2248,6 +2693,64 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
         crate::agent::acp::config_options::publish(&session_key, &command, &options);
     }
     rec.harness.run_steps(4);
+    for scale in [1.0, 1.25, 2.0] {
+        rec.harness.set_pixels_per_point(scale);
+        // Apply the DPI/zoom event before testing window resize frames. egui rescales
+        // the previous viewport when the zoom changes, before consuming the next size.
+        rec.harness.run_steps(4);
+        let mut previous_count = usize::MAX;
+        for width in (430..=1240).rev().step_by(13) {
+            rec.harness.set_size(egui::vec2(width as f32, 680.0));
+            rec.harness.step();
+            let send = rec.label_center("Send message").expect("send button");
+            let context = rec
+                .label_center("Context usage")
+                .expect("context usage ring");
+            assert!(
+                (context.y - send.y).abs() < 0.5 && context.x < send.x,
+                "{width} {scale}: context usage must remain beside Send"
+            );
+            let controls: Vec<_> = rec
+                .harness
+                .query_all_by_role(egui::accesskit::Role::ComboBox)
+                .map(|node| node.rect())
+                .collect();
+            assert!(!controls.is_empty(), "provider must remain visible");
+            assert!(
+                controls.len() <= previous_count,
+                "a hidden selector reappeared while narrowing the composer"
+            );
+            previous_count = controls.len();
+            for rect in controls {
+                if rect.right() / scale > width as f32
+                    && let Some(dir) = &rec.stills
+                {
+                    rec.harness
+                        .render()
+                        .unwrap()
+                        .save(dir.join("picker-overflow.png"))
+                        .unwrap();
+                }
+                assert!(
+                    (rect.center().y / scale - send.y).abs() < 0.5,
+                    "{width} {scale}: selector wrapped"
+                );
+                assert!(
+                    rect.right() / scale <= width as f32,
+                    "{width} {scale}: selector overflowed: {rect:?}, dpi {}",
+                    rec.harness.ctx.pixels_per_point()
+                );
+            }
+        }
+    }
+    rec.harness.set_pixels_per_point(SCALE);
+    for width in [1240.0, 1000.0, 800.0, 600.0, 480.0, 430.0] {
+        rec.harness.set_size(egui::vec2(width, 680.0));
+        rec.harness.run_steps(2);
+        rec.still(&format!("pickers-responsive-{width}"));
+    }
+    rec.harness.set_size(SIZE);
+    rec.harness.run_steps(3);
     rec.still("pickers-row");
     rec.harness.set_size(egui::vec2(1000.0, 620.0));
     rec.harness.run_steps(4);
@@ -2384,6 +2887,60 @@ fn review_composer_typing(rec: &mut Recorder<'_>) {
                     "{theme}, scale {scale}, character {ch:?}: composer text changes brightness after input"
                 );
             }
+            // Deleting the final character must preserve the single-line field's anchor
+            // on the input frame itself, not only after an extra idle frame.
+            rec.app().conv.composer.input = "x".into();
+            rec.harness.run_steps(4);
+            let before = rec.harness.ctx.read_response(input_id).unwrap().rect;
+            let height = rec.app().conv.composer.measured_full_h;
+            rec.harness.event(Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.step();
+            assert!(rec.app().conv.composer.input.is_empty());
+            let deleted = rec.harness.ctx.read_response(input_id).unwrap().rect;
+            assert_eq!(
+                deleted, before,
+                "{theme} {scale}: final deletion moves the composer"
+            );
+            assert_eq!(rec.app().conv.composer.measured_full_h, height);
+            let placeholder = rec
+                .harness
+                .output()
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == "Message oxi…" => Some(t),
+                    _ => None,
+                })
+                .expect("empty composer placeholder");
+            assert!(
+                placeholder
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .all(|s| s.format.color == crate::theme::c_text_faint()),
+                "{theme} {scale}: placeholder uses the normal text color"
+            );
+            rec.still(&format!("composer-{theme}-{scale}-last-deleted"));
+            rec.harness.event(Event::Key {
+                key: egui::Key::Backspace,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.step();
+            assert_eq!(
+                rec.harness.ctx.read_response(input_id).unwrap().rect,
+                deleted,
+                "{theme} {scale}: empty composer moves on the next frame"
+            );
             println!("COMPOSER GPU stable: {theme}, scale {scale}");
         }
     }

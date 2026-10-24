@@ -24,6 +24,12 @@ const TRANSCRIPT_RESIZE_SETTLE: f64 = 0.25;
 mod transcript_model;
 use transcript_model::{transcript_unit_fingerprint, transcript_units};
 
+#[path = "conversation/stall.rs"]
+mod stall;
+
+#[path = "conversation/find.rs"]
+pub(crate) mod find;
+
 impl OxiApp {
     /// Error banner rendered above the transcript.
     pub(crate) fn render_status_banner(&mut self, ui: &mut Ui) {
@@ -351,7 +357,14 @@ impl OxiApp {
         // A manual expand/collapse changes a transcript unit's height. Suppress bottom-clamping
         // for the transition frames so content below the clicked thinking/tool block stays visually
         // anchored instead of jumping down and back while a response is streaming.
+        let frame = ui.ctx().cumulative_frame_nr();
         let manual_layout_change = ui.ctx().data_mut(|d| {
+            let cached_id = egui::Id::new("transcript_manual_layout_frame");
+            if let Some((cached_frame, active)) = d.get_temp::<(u64, bool)>(cached_id)
+                && cached_frame == frame
+            {
+                return active;
+            }
             let id = egui::Id::new("transcript_manual_layout_change");
             let frames = d.get_temp::<u8>(id).unwrap_or(0);
             if frames > 1 {
@@ -359,14 +372,17 @@ impl OxiApp {
             } else if frames == 1 {
                 d.remove::<u8>(id);
             }
+            d.insert_temp(cached_id, (frame, frames > 0));
             frames > 0
         });
 
         // Hold stick-to-bottom for a few frames while a newly opened/session-loaded
         // conversation settles its layout.
         let hold_stick = self.conv.transcript.stick_bottom_hold_frames > 0;
+        // While finding, the view belongs to the match, not to the streaming tail.
         let stick_bottom = !manual_layout_change
             && !user_has_selection
+            && self.conv.transcript.find.is_none()
             && (force_scroll_bottom
                 || hold_stick
                 || self.active_waiting_response()
@@ -375,6 +391,10 @@ impl OxiApp {
                     .last()
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
+        let stall = self.active_stall();
+        crate::ui::messages::set_turn_stalled(ui.ctx(), stall.is_some());
+        let mut painted_scroll_offset = 0.0;
+        let mut find_count = 0;
         let scroll_output = ScrollArea::vertical()
             .max_width(scroll_outer_w)
             .id_salt(self.conv.transcript.scroll_id)
@@ -387,7 +407,8 @@ impl OxiApp {
                 ..Default::default()
             })
             .stick_to_bottom(stick_bottom)
-            .show(ui, |ui| {
+            .show_viewport(ui, |ui, viewport| {
+                painted_scroll_offset = viewport.min.y;
                 let viewport_w = ui.max_rect().width();
                 ui.set_max_width(viewport_w);
                 let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
@@ -430,6 +451,20 @@ impl OxiApp {
                             // regardless of conversation length.
                             let units =
                                 transcript_units(&self.conv.workspaces[wi].sessions[si].messages);
+                            let find_matches = self.chat_find_matches(&units);
+                            find_count = find_matches.len();
+                            let find_target = self
+                                .conv
+                                .transcript
+                                .find
+                                .as_ref()
+                                .and_then(|find| find_matches.get(find.current).copied());
+                            let mut find_reveal = self
+                                .conv
+                                .transcript
+                                .find
+                                .as_ref()
+                                .is_some_and(|find| find.reveal);
                             let viewport = ui
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
@@ -503,7 +538,9 @@ impl OxiApp {
                                             && entry.fingerprint == fingerprint
                                     })
                                     .map(|entry| entry.height);
+                                let is_find_target = find_target == Some(start);
                                 if cull_enabled
+                                    && !is_find_target
                                     && let Some(height) = cached_height
                                     && (top > viewport.bottom() || top + height < viewport.top())
                                     && !(keep_rendered && previously_rendered.contains(&key))
@@ -519,6 +556,8 @@ impl OxiApp {
                                 // count, so every label's id shifted whenever culling changed —
                                 // which dropped a text selection the moment a drag began.
                                 let unit_id = ui.id().with(key);
+                                let find_slot =
+                                    is_find_target.then(|| ui.painter().add(egui::Shape::Noop));
                                 let turn_changes: Vec<(
                                     crate::model::TurnChanges,
                                     Option<crate::settings::LlmProviderKind>,
@@ -576,6 +615,18 @@ impl OxiApp {
                                     );
                                 }
                                 let height = ui.cursor().min.y - top;
+                                if let Some(slot) = find_slot {
+                                    let rect = egui::Rect::from_min_max(
+                                        egui::pos2(ui.max_rect().left(), top),
+                                        egui::pos2(ui.max_rect().right(), top + height),
+                                    );
+                                    find::paint_match(ui, slot, rect);
+                                    if std::mem::take(&mut find_reveal) {
+                                        // Land below the floating find bar, not under it.
+                                        let clear = rect.with_min_y(rect.top() - find::BAR_CLEARANCE);
+                                        ui.scroll_to_rect(clear, Some(Align::TOP));
+                                    }
+                                }
                                 if !messages_streaming(
                                     &self.conv.workspaces[wi].sessions[si].messages[start..end],
                                 ) {
@@ -603,6 +654,13 @@ impl OxiApp {
                                         height,
                                     },
                                 );
+                            }
+                            // The match was laid out (it is never culled), so its reveal is done.
+                            if let Some(find) = self.conv.transcript.find.as_mut() {
+                                find.reveal = find_reveal && find_target.is_none();
+                            }
+                            if let Some(quiet) = stall {
+                                self.render_stall_notice(ui, quiet);
                             }
                             let rollback_available = self
                                 .run_state(self.active_session_key())
@@ -696,6 +754,27 @@ impl OxiApp {
                 }
             });
 
+        // ScrollArea clamps to the new bottom after painting. Resizing or streaming can
+        // reflow the transcript substantially, so present the pass using that final offset
+        // instead of flashing one frame at the previous width's scroll position.
+        if !manual_layout_change
+            && !user_has_selection
+            && (scroll_output.state.offset.y - painted_scroll_offset).abs()
+                > 0.5 / ui.pixels_per_point()
+        {
+            ui.ctx().request_discard("transcript scroll changed");
+        }
+
+        if self.conv.transcript.find.is_some() {
+            let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
+            let pad = ((column_center_w - col_w) * 0.5).max(0.0);
+            let anchor = egui::pos2(
+                scroll_output.inner_rect.left() + pad + col_w,
+                scroll_output.inner_rect.top() + SPACE_SM,
+            );
+            self.render_chat_find_bar(ui.ctx(), anchor, find_count);
+        }
+
         if copy_selection {
             // The labels have gathered the selected text; nothing outside the transcript (the
             // terminal reads Copy as Ctrl+C) may see the synthetic event.
@@ -771,7 +850,7 @@ impl OxiApp {
             self.conv.transcript.stick_bottom_hold_frames =
                 self.conv.transcript.stick_bottom_hold_frames.max(3);
         }
-        if self.conv.transcript.stick_bottom_hold_frames > 0 {
+        if self.conv.transcript.stick_bottom_hold_frames > 0 && ui.ctx().current_pass_index() == 0 {
             self.conv.transcript.stick_bottom_hold_frames -= 1;
             ui.ctx().request_repaint();
         }
@@ -967,17 +1046,24 @@ fn suggestion_card(
     title: &str,
     prompt: &str,
 ) -> egui::Response {
-    const H: f32 = 74.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
-    let hovered = response.hovered();
+    let body = ui.painter().layout(
+        prompt.to_owned(),
+        egui::FontId::proportional(FS_TINY),
+        c_text_muted(),
+        (width - 28.0).max(1.0),
+    );
+    // On very narrow columns the prompt can need more than two lines. Let the card
+    // grow with it so its text never spills into the next suggestion.
+    let height = (body.size().y + FS_SMALL * 1.5 + 26.0).max(74.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), title)
+    });
+    let hovered = response.hovered() || response.has_focus();
     ui.painter().rect(
         rect,
         CornerRadius::same(RADIUS_CARD),
-        if hovered {
-            c_row_hover()
-        } else {
-            c_bg_elevated()
-        },
+        if hovered { c_row_hover() } else { c_bg_input() },
         Stroke::new(
             1.0,
             if hovered {
@@ -991,6 +1077,7 @@ fn suggestion_card(
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_CARD));
     let inner = rect.shrink2(egui::vec2(14.0, 11.0));
     let layout = egui::Layout::top_down(Align::Min);
     // A child Ui paints inside the allocated card without claiming more parent space.

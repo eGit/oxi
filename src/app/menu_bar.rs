@@ -59,6 +59,7 @@ fn code(key: Key) -> Option<Code> {
         Key::L => Code::KeyL,
         Key::M => Code::KeyM,
         Key::N => Code::KeyN,
+        Key::O => Code::KeyO,
         Key::P => Code::KeyP,
         Key::Q => Code::KeyQ,
         Key::R => Code::KeyR,
@@ -76,6 +77,7 @@ fn code(key: Key) -> Option<Code> {
         Key::Space => Code::Space,
         Key::ArrowUp => Code::ArrowUp,
         Key::ArrowDown => Code::ArrowDown,
+        Key::F11 => Code::F11,
         Key::F12 => Code::F12,
         _ => return None,
     })

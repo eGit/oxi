@@ -97,6 +97,22 @@ them explicitly when touching that code:
 cargo test -- --ignored
 ```
 
+For UI changes, review real GPU-rendered screenshots in an isolated sample workspace:
+
+```bash
+OXI_GALLERY=/tmp/oxi-gallery cargo test --release --locked --lib render_gallery -- --ignored --nocapture
+OXI_POLISH_REVIEW=1 OXI_GALLERY=/tmp/oxi-polish cargo test --release --locked --lib render_gallery -- --ignored --nocapture
+OXI_RESIZE_REVIEW=1 OXI_GALLERY=/tmp/oxi-resize cargo test --release --locked --lib render_gallery -- --ignored --nocapture
+```
+
+The first command covers chat, tools, approvals, editor, Git and settings. The second
+captures empty and multiline composers at 1240, 760 and 520 points in all five themes.
+The resize review compares the presented frame with the next idle frame during a live
+answer, including a wrapping draft, long history and fractional display scales.
+`OXI_CHAT_NAV_REVIEW=1` drives chat switching (Cmd/Ctrl+Shift+O, Ctrl+Tab), draft saving,
+find in chat (Cmd/Ctrl+F) and Distraction Free mode with real key events. In release builds the first command also fails when a chat
+frame takes over 4 ms typically or misses a 60 Hz refresh. Rendering requires a GPU; the gallery uses temporary settings and a mock credential store.
+
 ## Commit / PR conventions
 
 - Keep PRs focused — one logical change per PR is easier to review and bisect than a

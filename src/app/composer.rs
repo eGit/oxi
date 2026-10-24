@@ -26,13 +26,14 @@ use super::composer_helpers::{
 use super::{OxiApp, SessionKey};
 
 /// Diameter of the round send button.
-const SEND_DIAM: f32 = 30.0;
+const SEND_DIAM: f32 = 32.0;
 /// Diameter of the round attach (`+`) button.
 const ATTACH_DIAM: f32 = 28.0;
 /// Diameter of the round mic (dictation) button.
 const MIC_DIAM: f32 = 28.0;
-const COMPOSER_FRAME_MARGIN: f32 = 10.0;
-const COMPOSER_GAP: f32 = 6.0;
+const COMPOSER_FRAME_MARGIN: f32 = SPACE_MD;
+const COMPOSER_GAP: f32 = SPACE_SM;
+const COMPOSER_CONTROLS_GAP: f32 = 6.0;
 /// Fixed height of an attachment thumbnail; width follows the image aspect ratio.
 const THUMB_H: f32 = 52.0;
 const THUMB_MAX_W: f32 = 132.0;
@@ -181,13 +182,15 @@ fn composer_text_edit(
                     // the old, empty galley for one frame on the first keystroke. Always lay out
                     // the real editor, then paint a placeholder only if it is still empty.
                     if input.is_empty() {
-                        let galley = egui::WidgetText::from(RichText::new(hint).size(FS_BODY))
-                            .into_galley(
-                                ui,
-                                Some(egui::TextWrapMode::Truncate),
-                                output.response.rect.width(),
-                                egui::TextStyle::Body,
-                            );
+                        let galley = egui::WidgetText::from(
+                            RichText::new(hint).size(FS_BODY).color(c_text_faint()),
+                        )
+                        .into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Truncate),
+                            output.response.rect.width(),
+                            egui::TextStyle::Body,
+                        );
                         ui.painter().with_clip_rect(output.response.rect).set(
                             hint_shape,
                             egui::Shape::galley(output.galley_pos, galley, c_text_faint()),
@@ -335,11 +338,7 @@ impl OxiApp {
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let input_id = Id::new("composer_input");
         self.intercept_large_pastes(ui, input_id);
-        let can_send = !self.conv.composer.input.trim().is_empty()
-            || !self.conv.composer.pending_images.is_empty()
-            || !self.conv.composer.pending_texts.is_empty();
-        let had_draft_content = !self.conv.composer.input.is_empty()
-            || !self.conv.composer.pending_images.is_empty()
+        let mut draft_laid_out = !self.conv.composer.pending_images.is_empty()
             || !self.conv.composer.pending_texts.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
@@ -360,11 +359,17 @@ impl OxiApp {
             ui.vertical(|ui| {
                 let composer_w = chat_column_max.min(column_center_w);
                 ui.set_width(composer_w);
+                let mut controls_rect = egui::Rect::NOTHING;
                 let composer_card = Frame::new()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
                     .corner_radius(crate::theme::RADIUS_PANEL)
-                    .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
+                    .inner_margin(Margin {
+                        left: COMPOSER_FRAME_MARGIN as i8,
+                        right: COMPOSER_FRAME_MARGIN as i8,
+                        top: COMPOSER_FRAME_MARGIN as i8,
+                        bottom: 6,
+                    })
                     .show(ui, |ui| {
                         // === Agent checklist and plan hand-off ===
                         self.render_task_panel(ui);
@@ -425,6 +430,7 @@ impl OxiApp {
                             slash_menu_open,
                             plan_mode,
                         );
+                        draft_laid_out |= !te_output.galley.job.text.is_empty();
                         self.composer_text_menu(
                             ui,
                             input_id,
@@ -478,22 +484,27 @@ impl OxiApp {
                             self.handle_composer_history_keys(ui, &te_output.response);
                         }
 
-                        ui.add_space(COMPOSER_GAP);
+                        ui.add_space(COMPOSER_CONTROLS_GAP);
 
-                        // === Controls row ===
-                        self.render_controls_row(ui, can_send, composer_focused);
+                        // Selectors and actions share a centered baseline, independent of the
+                        // text editor's height and the selected provider's label length.
+                        let can_send = !self.conv.composer.input.trim().is_empty()
+                            || !self.conv.composer.pending_images.is_empty()
+                            || !self.conv.composer.pending_texts.is_empty();
+                        controls_rect = ui.scope(|ui| {
+                            ui.spacing_mut().interact_size.y = CONTROL_HEIGHT;
+                            self.render_controls_row(ui, can_send, composer_focused);
+                        }).response.rect;
                     });
 
-                // Clicking anywhere inside the composer card should focus the text input, not just
-                // the TextEdit's own line-height rect. This makes the lower controls/empty area of
-                // the orange-focused border behave like one large chat input surface. We request
-                // focus without consuming the click, so buttons/combos inside the card keep their
-                // normal behavior.
+                // The padding is part of the input target. Controls keep their own focus so
+                // clicking a picker can be followed by keyboard navigation or Tab.
                 let clicked_inside_card = ui.ctx().input(|i| {
                     i.pointer.primary_clicked()
                         && i.pointer
                             .interact_pos()
-                            .is_some_and(|pos| composer_card.response.rect.contains(pos))
+                            .is_some_and(|pos| composer_card.response.rect.contains(pos)
+                                && !controls_rect.contains(pos))
                 });
                 if clicked_inside_card {
                     ui.ctx().memory_mut(|m| m.request_focus(input_id));
@@ -504,14 +515,14 @@ impl OxiApp {
             }
         });
         let measured_h = row.response.rect.height();
-        let draft_cleared = had_draft_content
+        let draft_cleared = draft_laid_out
             && self.conv.composer.input.is_empty()
             && self.conv.composer.pending_images.is_empty()
             && self.conv.composer.pending_texts.is_empty();
         if draft_cleared {
-            // Sending clears the model after TextEdit has already laid out the old text in this
-            // pass. Reset to the compact anchor before the second pass instead of carrying that
-            // stale, tall measurement into it.
+            // Sending clears content that was already laid out. Deleting the final character
+            // does not: TextEdit has already measured the empty field in this pass, so keep
+            // its valid height rather than resetting the floating composer's anchor to zero.
             self.conv.composer.measured_full_h = 0.0;
             ui.ctx().request_discard("composer draft cleared");
         } else if (measured_h - self.conv.composer.measured_full_h).abs() > 0.5 {
@@ -522,25 +533,15 @@ impl OxiApp {
         }
     }
 
-    /// Move selectors above the action row when the column cannot fit both groups.
+    /// A fixed-height row whose controls disappear by priority as the column narrows.
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let width = ui.available_width();
-        let narrow = width < 520.0;
-        let compact = width < 410.0;
-        let stacked = width < self.composer_single_row_width(ui.ctx(), narrow, compact);
-        if stacked {
-            // Attach leads the selector row so the second row is only mode + send controls;
-            // left on the action row it sat alone under the selectors, detached from both.
-            ui.horizontal_wrapped(|ui| {
-                self.render_attach_button(ui);
-                self.render_measured_selectors(ui, narrow, compact);
-            });
-            ui.add_space(COMPOSER_GAP);
-        }
-        ui.horizontal(|ui| {
-            self.render_action_controls(ui, can_send, composer_focused, stacked, narrow, compact);
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, SEND_DIAM),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| self.render_action_controls(ui, can_send, composer_focused, width),
+        );
     }
 
     /// Round paper-clip button that opens the image picker.
@@ -552,9 +553,9 @@ impl OxiApp {
             15.0,
             false,
             &crate::ui::chrome::IconButtonLook {
-                fill: c_bg_input(),
+                fill: Color32::TRANSPARENT,
                 hover_fill: c_row_hover(),
-                stroke: c_border_subtle(),
+                stroke: Color32::TRANSPARENT,
                 hover_stroke: c_border(),
                 rounding: CornerRadius::same((ATTACH_DIAM * 0.5) as u8),
                 glyph: c_text_muted(),
@@ -571,20 +572,43 @@ impl OxiApp {
         ui: &mut Ui,
         can_send: bool,
         composer_focused: bool,
-        stacked: bool,
-        narrow: bool,
-        compact: bool,
+        width: f32,
     ) {
-        if !stacked {
-            self.render_attach_button(ui);
+        let mut budget = width - SEND_DIAM - 6.0;
+        // Context usage is persistent status, so reserve it before optional controls.
+        // Selectors can shed secondary options and truncate the provider in the rest.
+        let show_context = budget >= 48.0 + 32.0;
+        if show_context {
+            budget -= 32.0;
         }
-
-        // ── Left: provider + model (compact widths when the chat column is squeezed) ──
-        if !stacked {
-            self.render_measured_selectors(ui, narrow, compact);
+        let show_mic = self.conv.settings.dictation.enabled && budget >= 48.0 + MIC_DIAM + 6.0;
+        if show_mic {
+            budget -= MIC_DIAM + 6.0;
         }
-        self.render_plan_toggle(ui, compact);
-
+        let show_attach = budget >= 48.0 + ATTACH_DIAM + 6.0;
+        if show_attach {
+            budget -= ATTACH_DIAM + 6.0;
+        }
+        let show_plan =
+            self.plan_mode_on() && !self.agent_shows_plan_mode() && budget >= 48.0 + 40.0;
+        if show_plan {
+            budget -= 40.0;
+        }
+        // Output speed is status, kept beside the context ring, but it is the first thing to go:
+        // the selectors keep enough room for provider, model and effort.
+        const SELECTORS_ROOM: f32 = 340.0;
+        let tokens_per_sec = self.tokens_per_sec_text().filter(|text| {
+            let w = ui
+                .painter()
+                .layout_no_wrap(
+                    text.clone(),
+                    egui::FontId::proportional(FS_TINY),
+                    c_text_faint(),
+                )
+                .size()
+                .x;
+            budget - w - 6.0 >= SELECTORS_ROOM
+        });
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
@@ -627,7 +651,7 @@ impl OxiApp {
                     "Type a message or attach an image",
                 )
             };
-            let clicked = ui
+            let send = ui
                 .add_enabled(
                     enabled,
                     Button::new(crate::ui::chrome::icon_glyph_rich(icon, 15.0, fg))
@@ -637,9 +661,21 @@ impl OxiApp {
                         .corner_radius(SEND_DIAM * 0.5),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(hover)
-                .clicked();
-            if clicked {
+                .on_hover_text(hover);
+            send.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    enabled && ui.is_enabled(),
+                    if queue_instead {
+                        "Queue message"
+                    } else if active_session_streaming {
+                        "Stop generation"
+                    } else {
+                        "Send message"
+                    },
+                )
+            });
+            if send.clicked() {
                 if queue_instead {
                     self.send_message();
                 } else if active_session_streaming {
@@ -650,32 +686,35 @@ impl OxiApp {
             }
 
             // ── Mic (dictation) button, only when configured in Settings ──
-            if self.conv.settings.dictation.enabled {
+            if show_mic {
                 self.render_mic_button(ui);
             }
 
-            if ui.available_width() >= 32.0 {
+            if show_context {
                 self.render_context_indicator(ui);
             }
-            self.render_tokens_per_sec(ui);
-
-            let show_hint = composer_focused && self.active_session().messages.is_empty();
-            let hint_t =
-                ui.ctx()
-                    .animate_bool_with_time(Id::new("composer_hint_anim"), show_hint, 0.15);
-            if hint_t > 0.0 {
-                for hint in ["Enter to send · Shift+Enter for newline", "Enter sends"] {
-                    if composer_text_fits(ui, hint, 8.0) {
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new(hint)
-                                .size(FS_TINY)
-                                .color(c_text_faint().gamma_multiply(hint_t)),
-                        );
-                        break;
+            if let Some(text) = tokens_per_sec {
+                self.render_tokens_per_sec(ui, text);
+            }
+            if show_plan {
+                self.render_plan_toggle(ui, true);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if show_attach {
+                    self.render_attach_button(ui);
+                }
+                self.render_model_selector(ui);
+                let show_hint = composer_focused && self.active_session().messages.is_empty();
+                if show_hint {
+                    for hint in ["Enter to send · Shift+Enter for newline", "Enter sends"] {
+                        if composer_text_fits(ui, hint, 8.0) {
+                            ui.add_space(8.0);
+                            ui.label(RichText::new(hint).size(FS_TINY).color(c_text_faint()));
+                            break;
+                        }
                     }
                 }
-            }
+            });
         });
     }
 

@@ -129,3 +129,44 @@ fn long_thinking_keeps_its_height_when_the_next_tool_starts() {
         &"I should look at how the config is loaded and where retries are handled.\n".repeat(25),
     );
 }
+
+#[test]
+fn streaming_commentary_keeps_activity_visible_below_the_answer_until_finished() {
+    for activity in [
+        vec![],
+        vec![AssistantBlock::Thinking("Checking the code.".into())],
+        {
+            let mut completed = tool("read", "read", r#"{"path":"src/main.rs"}"#);
+            if let AssistantBlock::Tool { is_error, .. } = &mut completed {
+                *is_error = Some(false);
+            }
+            vec![completed]
+        },
+    ] {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx, "dark");
+        let mut frame = 0;
+        let mut msg = ChatMessage::streaming_assistant(None);
+        msg.blocks = activity;
+        msg.blocks
+            .push(AssistantBlock::Answer("I will check the next file.".into()));
+
+        let answer_y = text_ys(&ctx, &mut frame, &msg, "I will check the next file.")[0];
+        for _ in 0..3 {
+            let status_ys = text_ys(&ctx, &mut frame, &msg, "Working");
+            assert!(
+                status_ys.iter().any(|&y| y > answer_y),
+                "a running turn must keep an activity indicator at its visible tail"
+            );
+            assert_eq!(
+                text_ys(&ctx, &mut frame, &msg, "I will check the next file.")[0],
+                answer_y,
+                "the idle activity indicator must not move the answer"
+            );
+        }
+
+        msg.finish_streaming();
+        assert!(text_ys(&ctx, &mut frame, &msg, "Working").is_empty());
+        assert!(!text_ys(&ctx, &mut frame, &msg, "I will check the next file.").is_empty());
+    }
+}

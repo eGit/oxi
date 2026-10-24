@@ -186,6 +186,12 @@ fn build_menus() -> Vec<MenuSpec> {
     } else {
         (cmd(), Key::Backtick)
     };
+    // Sublime's Distraction Free Mode binding.
+    let distraction_free = if MAC {
+        (cmd_shift().plus(ctrl), Key::F)
+    } else {
+        (Modifiers::SHIFT, Key::F11)
+    };
     let move_line = if MAC { cmd().plus(ctrl) } else { cmd_shift() };
     let bracket = if MAC { ctrl } else { cmd() };
     // Ctrl+G is Find Next outside macOS; Go to Line is `:` in the picker there.
@@ -296,6 +302,13 @@ fn build_menus() -> Vec<MenuSpec> {
                 c(run("Activity Log", ActivityLog)
                     .palette("View: Toggle Activity Log")
                     .panel(Panel::ActivityLog)),
+                Separator,
+                c(keys(
+                    "Distraction Free Mode",
+                    distraction_free.0,
+                    distraction_free.1,
+                )
+                .palette("View: Toggle Distraction Free Mode")),
             ],
         },
         MenuSpec {
@@ -304,6 +317,7 @@ fn build_menus() -> Vec<MenuSpec> {
                 c(keys("Go to File…", cmd(), Key::P)),
                 editor(keys("Go to Symbol in File…", cmd(), Key::R)),
                 c(keys("Go to Symbol in Workspace…", cmd_shift(), Key::R)),
+                c(keys("Go to Chat…", cmd_shift(), Key::O)),
                 editor(goto_line),
                 Separator,
                 editor(keys("Go to Definition", Modifiers::NONE, Key::F12)),
@@ -315,6 +329,13 @@ fn build_menus() -> Vec<MenuSpec> {
             title: "Chat",
             entries: vec![
                 c(run("Attach Image…", AttachImage)),
+                Separator,
+                c(keys("Next Chat", Modifiers::CTRL, Key::Tab)),
+                c(keys(
+                    "Previous Chat",
+                    Modifiers::CTRL.plus(Modifiers::SHIFT),
+                    Key::Tab,
+                )),
                 Separator,
                 c(keys("Stop Response", cmd(), Key::Period)),
                 Separator,

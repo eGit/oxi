@@ -21,8 +21,10 @@ mod connection;
 mod conversation;
 #[cfg(test)]
 mod demo_recording;
+mod drafts;
 mod eframe_app;
 mod file_explorer;
+mod focus_mode;
 mod fork;
 mod frame_stats;
 mod git_panel;
@@ -98,6 +100,12 @@ pub struct OxiApp {
     pending_app_actions: Vec<commands::AppAction>,
     /// Notices chats another oxi process (the headless daemon) changed on disk.
     chat_watch: chat_sync::ChatDiskWatch,
+    /// Holds off idle sleep while [`OxiApp::agent_is_working`].
+    keep_awake: crate::keep_awake::KeepAwake,
+    /// Unsent composer text, saved for the next start (see [`drafts`]).
+    drafts: drafts::DraftStore,
+    /// Set while Distraction Free mode hides the panels, with the ones it hid.
+    distraction_free: Option<focus_mode::PanelsBefore>,
 }
 
 impl OxiApp {
@@ -287,10 +295,14 @@ impl OxiApp {
             queued_actions: Vec::new(),
             pending_app_actions: Vec::new(),
             chat_watch: Default::default(),
+            keep_awake: Default::default(),
+            drafts: Default::default(),
+            distraction_free: None,
             context_overhead_cache: Default::default(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
+        app.restore_drafts();
         app.ensure_active_session_loaded();
         app.restore_active_session_config();
         app
@@ -380,6 +392,15 @@ impl OxiApp {
             .and_then(|w| w.sessions.get(session_idx))
             .and_then(|s| s.messages.last())
             .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
+    }
+
+    /// Some chat's agent is running a turn (or compacting it). A turn stopped on an approval
+    /// prompt does not count: it waits for the user, and sleeping does not lose anything.
+    pub(crate) fn agent_is_working(&self) -> bool {
+        self.conv.compaction.is_some()
+            || self.flow.sessions.values().any(|run| {
+                (run.waiting_response || run.agent_rx.is_some()) && run.pending_approval.is_none()
+            })
     }
 
     /// True when a non-active session has a stream error the user hasn't seen yet.
@@ -796,5 +817,41 @@ impl OxiApp {
         if self.conv.composer.history.len() > 100 {
             self.conv.composer.history.pop();
         }
+    }
+}
+
+#[cfg(test)]
+mod keep_awake_tests {
+    use super::OxiApp;
+    use super::state::{PendingApproval, SessionKey};
+
+    #[test]
+    fn working_covers_running_turns_but_not_one_waiting_for_approval() {
+        crate::secrets::use_mock_store();
+        let mut app = OxiApp::new();
+        app.flow.sessions.clear();
+        app.conv.compaction = None;
+        assert!(!app.agent_is_working());
+
+        let key = SessionKey {
+            workspace_idx: 0,
+            session_idx: 0,
+        };
+        app.run_state_mut(key).begin_waiting_response();
+        assert!(app.agent_is_working());
+
+        app.run_state_mut(key).pending_approval = Some(PendingApproval {
+            name: "bash".into(),
+            summary: "cargo test".into(),
+            allow_prefix: None,
+        });
+        assert!(
+            !app.agent_is_working(),
+            "a turn waiting on the user may sleep"
+        );
+
+        app.run_state_mut(key).pending_approval = None;
+        app.run_state_mut(key).end_waiting_response();
+        assert!(!app.agent_is_working());
     }
 }

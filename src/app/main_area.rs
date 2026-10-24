@@ -96,7 +96,11 @@ impl OxiApp {
                         } else {
                             CHAT_VIEW_MARGIN_LEFT as i8
                         },
-                        right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                        right: if editor_open {
+                            CHAT_VIEW_MARGIN_RIGHT as i8
+                        } else {
+                            crate::theme::CHAT_VIEW_MARGIN_RIGHT_CHAT as i8
+                        },
                         top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
                         // The editor owns a bottom-docked find panel, so it must meet the
                         // status bar without the chat view's composer breathing room.

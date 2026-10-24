@@ -6,6 +6,10 @@ use crate::theme::*;
 use super::OxiApp;
 
 impl eframe::App for OxiApp {
+    fn on_exit(&mut self) {
+        self.flush_drafts_now();
+    }
+
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         #[cfg(target_os = "macos")]
         self.take_menu_actions();
@@ -85,6 +89,9 @@ impl eframe::App for OxiApp {
             self.conv.settings.acp_max_live_agents,
         );
         self.prewarm_typed_acp_chat(ctx);
+        self.keep_awake
+            .set(self.conv.settings.keep_awake_while_working && self.agent_is_working());
+        self.persist_drafts(ctx);
 
         // A focus event runs these checks again when returning to an idle background window.
         if ctx.input(|i| i.focused)
@@ -122,6 +129,18 @@ impl eframe::App for OxiApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Panel/child sizing caches may still describe the previous viewport on the
+        // first resize pass. Resolve them before presenting the newly sized window.
+        let viewport_size = ui.ctx().content_rect().size();
+        let resized = ui.ctx().data_mut(|data| {
+            let id = egui::Id::new("oxi_layout_viewport_size");
+            let previous = data.get_temp::<egui::Vec2>(id);
+            data.insert_temp(id, viewport_size);
+            previous.is_some_and(|size| size != viewport_size)
+        });
+        if resized {
+            ui.ctx().request_discard("viewport resized");
+        }
         super::frame_stats::record(ui.ctx(), frame.info().cpu_usage);
         crate::theme::set_chat_column_max_width(ui.ctx(), self.conv.settings.chat_column_max_width);
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
@@ -134,7 +153,9 @@ impl eframe::App for OxiApp {
         // Persistent status bar (sidebar/git/terminal/settings toggles + branch) — claims the very
         // bottom strip of the window, below the terminal panel. It stays visible on Settings too;
         // clicking any non-settings toggle leaves Settings and returns to the normal chat layout.
-        self.render_status_bar(ui);
+        if !self.distraction_free() {
+            self.render_status_bar(ui);
+        }
 
         // Bottom terminal panel (added before the CentralPanel so it claims the bottom strip and
         // the chat area fills what's left). Hidden while the settings page is open.
@@ -355,6 +376,49 @@ impl OxiApp {
             )
         });
 
+        // Sublime's Ctrl+Tab cycles tabs; here it walks the chats. The Tab presses are taken out
+        // of the input so a focused composer or editor never sees them.
+        let chat_step = ctx.input_mut(|i| {
+            let ctrl_tab = i.modifiers.ctrl
+                && !i.modifiers.alt
+                && !i.modifiers.mac_cmd
+                && i.key_pressed(Key::Tab);
+            if !ctrl_tab {
+                return None;
+            }
+            i.events
+                .retain(|event| !matches!(event, egui::Event::Key { key: Key::Tab, .. }));
+            Some(i.modifiers.shift)
+        });
+        let goto_chat =
+            ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::O));
+        let distraction_free = ctx.input(|i| {
+            if cfg!(target_os = "macos") {
+                i.modifiers.matches_exact(cmd_shift.plus(Modifiers::CTRL)) && i.key_pressed(Key::F)
+            } else {
+                i.modifiers.matches_exact(Modifiers::SHIFT) && i.key_pressed(Key::F11)
+            }
+        });
+        if distraction_free && !self.conv.settings_page.open {
+            self.toggle_distraction_free();
+        }
+        // egui's exact match lets an extra Ctrl through, so ⌃⇧⌘F also reads as ⇧⌘F.
+        let find_in_files = find_in_files && !distraction_free;
+        let pickers_free = !self.conv.settings_page.open && !self.conv.editor.file_picker_open;
+        if let Some(back) = chat_step
+            && pickers_free
+        {
+            // In the editor it walks the open files, as in Sublime; over the chat, the chats.
+            if self.conv.editor.active_document().is_some() {
+                self.cycle_editor_tab(back);
+            } else {
+                self.cycle_chat(back);
+            }
+        }
+        if goto_chat && pickers_free {
+            self.open_file_picker_with("#");
+        }
+
         if new_chat {
             self.request_settings_exit(super::state::SettingsExitAction::NewChat);
         }
@@ -394,6 +458,14 @@ impl OxiApp {
             && self.conv.editor.prompt.is_none()
         {
             self.close_active_editor_tab();
+        }
+        if find_file
+            && !self.conv.settings_page.open
+            && !self.conv.editor.file_picker_open
+            && self.conv.editor.active_document().is_none()
+            && !(self.conv.diff_view.open && self.conv.git.diff.is_some())
+        {
+            self.open_chat_find();
         }
         if (find_file || find_replace)
             && !self.conv.settings_page.open
@@ -469,6 +541,8 @@ impl OxiApp {
             self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.close_find();
+        } else if escape && self.conv.transcript.find.is_some() && !self.conv.settings_page.open {
+            self.close_chat_find();
         } else if escape && self.conv.settings_page.open {
             if self.conv.settings_page.exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".
