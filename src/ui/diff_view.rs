@@ -49,12 +49,13 @@ const GUTTER_PAD: f32 = 10.0;
 /// changed text the line tint alone reads better.
 const MAX_WORD_CHANGE: f32 = 0.6;
 
+/// Diffs read at the editor's font size (Cmd/Ctrl +/- over a file changes both).
 fn line_height() -> f32 {
-    FS_SMALL * 1.35
+    crate::theme::editor_line_height()
 }
 
 fn code_font() -> FontId {
-    FontId::monospace(FS_SMALL)
+    crate::theme::editor_font()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

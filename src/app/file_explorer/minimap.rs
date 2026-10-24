@@ -255,7 +255,7 @@ pub(super) fn refresh(
                 &mut document.syntax_state,
                 &document.content,
                 extension,
-                egui::FontId::monospace(FS_SMALL),
+                crate::theme::editor_font(),
                 Some(document.content_revision),
                 None,
             );
@@ -272,7 +272,7 @@ pub(super) fn refresh(
                 crate::theme::highlight_code_async(
                     &document.content,
                     extension,
-                    egui::FontId::monospace(FS_SMALL),
+                    crate::theme::editor_font(),
                     ctx,
                 )
             })
@@ -334,9 +334,13 @@ pub(super) fn paint(
         egui::pos2(minimap_rect.right(), whole_rect.top()),
         whole_rect.max,
     );
-    ui.painter().rect_filled(minimap_rect, 0.0, c_bg_main());
     ui.painter()
         .rect_filled(scrollbar_rect, 0.0, c_bg_elevated());
+    // Minimap turned off: just the scrollbar.
+    if minimap_rect.width() < 1.0 {
+        return scrollbar_only(ui, &response, scroll, scrollbar_rect);
+    }
+    ui.painter().rect_filled(minimap_rect, 0.0, c_bg_main());
 
     // Fixed-scale rows, VS Code style. When the file outgrows the strip, the map scrolls in sync
     // with the editor instead of crushing the complete file into sub-pixel noise.
@@ -422,21 +426,31 @@ pub(super) fn paint(
         egui::pos2(minimap_rect.left() + 1.0, viewport_top),
         egui::vec2((minimap_rect.width() - 2.0).max(0.0), viewport_height),
     );
+    // Like Sublime (`always_show_minimap_viewport: false`): a faint band at rest, the full
+    // outline while the pointer is over the map or dragging it.
     let accent = c_accent();
+    let hot = response.hovered() || response.dragged();
     ui.painter().rect_filled(
         viewport_rect,
         1.0,
-        egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 18),
-    );
-    ui.painter().rect_stroke(
-        viewport_rect,
-        1.0,
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 52),
+        egui::Color32::from_rgba_unmultiplied(
+            accent.r(),
+            accent.g(),
+            accent.b(),
+            if hot { 22 } else { 10 },
         ),
-        egui::StrokeKind::Inside,
     );
+    if hot {
+        ui.painter().rect_stroke(
+            viewport_rect,
+            1.0,
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 60),
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
 
     let scrollbar_viewport_fraction = exact_viewport_fraction.clamp(0.06, 1.0);
     let handle_height = scrollbar_rect.height() * scrollbar_viewport_fraction;
@@ -466,6 +480,48 @@ pub(super) fn paint(
     }
 }
 
+/// The editor's scrollbar without a minimap beside it: drag or click the track to scroll.
+fn scrollbar_only(
+    ui: &Ui,
+    response: &egui::Response,
+    scroll: &EditorScrollOutput,
+    rect: egui::Rect,
+) -> Option<f32> {
+    const INSET: f32 = 2.0;
+    let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
+    if max_y <= 0.0 {
+        return None;
+    }
+    let fraction = (scroll.state.offset.y / max_y).clamp(0.0, 1.0);
+    let visible = (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.06, 1.0);
+    let handle_height = rect.height() * visible;
+    let handle_top = rect.top() + fraction * (rect.height() - handle_height);
+    let hot = response.hovered() || response.dragged();
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left() + INSET, handle_top),
+            egui::vec2(rect.width() - INSET * 2.0, handle_height),
+        ),
+        3.0,
+        crate::theme::blend_color(
+            if hot { c_text_muted() } else { c_text_faint() },
+            c_bg_elevated(),
+            0.25,
+        ),
+    );
+    if response.clicked() || response.dragged() {
+        response.interact_pointer_pos().map(|position| {
+            let travel = (rect.height() - handle_height).max(1.0);
+            ((position.y - rect.top() - handle_height * 0.5) / travel).clamp(0.0, 1.0)
+        })
+    } else if response.hovered() {
+        let wheel_y = ui.input(|input| input.smooth_scroll_delta.y);
+        (wheel_y != 0.0).then(|| ((scroll.state.offset.y - wheel_y) / max_y).clamp(0.0, 1.0))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,7 +532,7 @@ mod tests {
             galley = Some(ui.fonts_mut(|fonts| {
                 fonts.layout_job(egui::text::LayoutJob::simple(
                     text.to_owned(),
-                    egui::FontId::monospace(FS_SMALL),
+                    crate::theme::editor_font(),
                     egui::Color32::TRANSPARENT,
                     width,
                 ))

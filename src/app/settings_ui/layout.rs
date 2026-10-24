@@ -39,6 +39,7 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
         caption: "App",
         items: &[
             (SettingsTab::Voice, ICON_MIC, "Voice"),
+            (SettingsTab::Editor, ICON_FILE, "Editor"),
             (SettingsTab::Terminal, ICON_TERMINAL, "Terminal"),
             (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
             (SettingsTab::About, ICON_INFO, "About"),
@@ -249,8 +250,10 @@ impl OxiApp {
                                     crate::ui::chrome::alert_banner(ui, &err, true);
                                 });
                         }
+                        // One scroll position per tab: switching from a long page scrolled
+                        // down used to open the next one halfway down.
                         ScrollArea::vertical()
-                            .id_salt("settings_page_scroll")
+                            .id_salt(("settings_page_scroll", self.conv.settings_page.tab))
                             .auto_shrink([false, false])
                             .scroll_bar_visibility(
                                 egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
@@ -447,6 +450,7 @@ impl OxiApp {
             SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
             SettingsTab::Voice => self.render_settings_voice_panel(ui),
             SettingsTab::Terminal => self.render_settings_terminal_panel(ui),
+            SettingsTab::Editor => self.render_settings_editor_panel(ui),
             SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
             SettingsTab::About => self.render_settings_about_panel(ui),
         }

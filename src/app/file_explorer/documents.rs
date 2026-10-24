@@ -45,6 +45,7 @@ impl OxiApp {
             dirty: false,
             layout_cache: EditorLayoutCache::default(),
             minimap_cache: None,
+            view: Default::default(),
             viewport_width_bits: None,
             viewport_anchor_line: 0,
             media: None,
@@ -179,6 +180,7 @@ impl OxiApp {
                     dirty: false,
                     layout_cache: EditorLayoutCache::default(),
                     minimap_cache: None,
+                    view: Default::default(),
                     viewport_width_bits: None,
                     viewport_anchor_line: 0,
                     media,
@@ -199,7 +201,7 @@ impl OxiApp {
         }
     }
 
-    pub(crate) fn save_editor_file(&mut self) {
+    pub(crate) fn save_editor_file(&mut self, ctx: &egui::Context) {
         let Some(index) = self.conv.editor.active else {
             return;
         };
@@ -210,6 +212,7 @@ impl OxiApp {
         if self.conv.editor.documents[index].media.is_some() {
             return;
         }
+        self.tidy_before_save(Some(ctx), index);
         let path = self.conv.editor.documents[index].path.clone();
         if let Err(error) = self.save_editor_document(index, false) {
             if self.conv.editor.documents[index].externally_modified {
@@ -227,6 +230,8 @@ impl OxiApp {
         index: usize,
         overwrite: bool,
     ) -> Result<(), String> {
+        // Saves without an editor frame at hand (close prompts, the diff tab): no undo step.
+        self.tidy_before_save(None, index);
         self.conv.editor.documents[index].save_to_disk(overwrite)?;
         self.conv.editor.error = None;
         if let Some(tx) = &self.conv.git_ui.tx {
@@ -318,7 +323,13 @@ impl OxiApp {
     }
 
     /// Make a whole-text replacement of tab `index` one undo step in its editor.
-    fn record_replacement_undo(&self, ctx: &egui::Context, index: usize, old: String, new: String) {
+    pub(super) fn record_replacement_undo(
+        &self,
+        ctx: &egui::Context,
+        index: usize,
+        old: String,
+        new: String,
+    ) {
         let path = &self.conv.editor.documents[index].path;
         let Some(id) = self.conv.editor.text_edit_ids.get(path).copied() else {
             return;

@@ -26,7 +26,7 @@ pub struct PendingApproval {
 }
 
 /// Active section in the settings window (sidebar).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum SettingsTab {
     #[default]
     Providers,
@@ -35,6 +35,7 @@ pub enum SettingsTab {
     Prompts,
     Voice,
     Terminal,
+    Editor,
     Appearance,
     About,
 }
@@ -258,6 +259,8 @@ pub struct EditorDocument {
     pub media: Option<super::file_explorer::MediaKind>,
     /// The tab shows the document's changes against a base (see `file_explorer::diff_editor`).
     pub diff: Option<super::file_explorer::DocumentDiff>,
+    /// Extra selections, folds and bookmarks.
+    pub view: super::file_explorer::DocumentView,
 }
 
 impl EditorDocument {

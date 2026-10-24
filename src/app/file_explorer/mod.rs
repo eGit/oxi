@@ -5,26 +5,31 @@ use crate::theme::c_warning_fg;
 use eframe::egui::{self, RichText, Ui};
 
 mod code_navigation;
+mod completion;
 mod diff_editor;
 mod documents;
 mod editor_body;
 mod editor_commands;
 mod editor_logic;
 mod editor_paint;
+mod editor_prefs;
 mod editor_tabs;
 mod editor_text;
 mod explorer_tree;
 mod file_operations;
 mod file_picker;
 mod find_replace;
+mod folding;
 mod layout_cache;
 mod line_layout;
 mod markdown_preview;
 mod media_view;
 mod minimap;
+mod multi_cursor;
 mod navigation_diff;
 mod project_search;
 mod safety;
+mod status_info;
 mod support;
 mod syntax_window;
 
@@ -32,9 +37,13 @@ mod syntax_window;
 mod tests;
 
 pub(crate) use code_navigation::CodeNavState;
+pub(crate) use editor_commands::chord_pending;
 pub(crate) use file_picker::{PickerCache, PickerOutline};
 pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
+pub(crate) use multi_cursor::DocumentView;
+#[cfg(test)]
+pub(crate) use multi_cursor::text_point;
 pub(crate) use project_search::{FIND_REFERENCES_REQUEST, ProjectSearchState};
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 

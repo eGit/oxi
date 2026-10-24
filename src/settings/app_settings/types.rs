@@ -200,3 +200,72 @@ pub struct WorkspaceEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folded_groups: Vec<String>,
 }
+
+/// What the editor draws for spaces and tabs (Sublime's `draw_white_space`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawWhiteSpace {
+    /// Only inside the selection.
+    #[default]
+    Selection,
+    /// Everywhere on screen.
+    All,
+    /// Never.
+    None,
+}
+
+impl DrawWhiteSpace {
+    pub const ALL: [Self; 3] = [Self::Selection, Self::All, Self::None];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Selection => "In the selection",
+            Self::All => "Always",
+            Self::None => "Never",
+        }
+    }
+}
+
+/// Editor preferences, named after their Sublime Text counterparts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorSettings {
+    /// Code font size in points (`font_size`). Cmd/Ctrl +/- change it while an editor is open.
+    pub font_size: f32,
+    /// Soft-wrap long lines at the window edge (`word_wrap`).
+    pub word_wrap: bool,
+    /// Wrapped rows start at their line's indentation (`indent_subsequent_lines`).
+    pub wrap_indent: bool,
+    /// Show the minimap beside the text.
+    pub minimap: bool,
+    /// Tint the caret's line (`highlight_line`).
+    pub highlight_line: bool,
+    pub draw_white_space: DrawWhiteSpace,
+    /// Keep scrolling past the last line so it can sit at the top (`scroll_past_end`).
+    pub scroll_past_end: bool,
+    pub trim_trailing_white_space_on_save: bool,
+    pub ensure_newline_at_eof_on_save: bool,
+    /// Offer words from the file while typing (`auto_complete`).
+    pub auto_complete: bool,
+}
+
+pub const EDITOR_FONT_SIZE_DEFAULT: f32 = 12.5;
+pub const EDITOR_FONT_SIZE_MIN: f32 = 8.0;
+pub const EDITOR_FONT_SIZE_MAX: f32 = 32.0;
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            font_size: EDITOR_FONT_SIZE_DEFAULT,
+            word_wrap: true,
+            wrap_indent: true,
+            minimap: true,
+            highlight_line: false,
+            draw_white_space: DrawWhiteSpace::Selection,
+            scroll_past_end: true,
+            trim_trailing_white_space_on_save: false,
+            ensure_newline_at_eof_on_save: false,
+            auto_complete: true,
+        }
+    }
+}
