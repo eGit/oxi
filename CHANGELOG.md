@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-10-24
+
+### Added
+- **Agent:** Scratchpad is now available to agents for reading and writing shared notes.
+- **Editor:** Concurrent changes from multiple sources merge automatically using three-way merge logic.
+
+
 ## [1.24.0] - 2026-10-24
 
 ### Added
@@ -1198,7 +1205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.24.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.25.0...HEAD
+[1.25.0]: https://github.com/maziluiosif/oxi/compare/v1.24.0...v1.25.0
 [1.24.0]: https://github.com/maziluiosif/oxi/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/maziluiosif/oxi/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/maziluiosif/oxi/compare/v1.21.2...v1.22.0
