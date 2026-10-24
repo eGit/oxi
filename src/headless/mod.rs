@@ -262,6 +262,7 @@ struct Server {
     exe: Value,
     idle_since: Option<Instant>,
     last_disk_check: Instant,
+    keep_awake: crate::keep_awake::KeepAwake,
 }
 
 impl Server {
@@ -288,6 +289,7 @@ impl Server {
             exe: daemon::exe_identity(),
             idle_since: None,
             last_disk_check: Instant::now(),
+            keep_awake: Default::default(),
         }
     }
 
@@ -326,6 +328,8 @@ impl Server {
             }
             self.flush_if_due();
             self.check_disk_if_due();
+            let working = self.settings.keep_awake_while_working && self.working();
+            self.keep_awake.set(working);
             if self.should_exit() {
                 break;
             }
@@ -359,6 +363,13 @@ impl Server {
         self.chats
             .values()
             .any(|chat| chat.run.is_some() || !chat.queued.is_empty())
+    }
+
+    /// A turn is running and not stopped on an approval prompt (see `OxiApp::agent_is_working`).
+    fn working(&self) -> bool {
+        self.chats
+            .values()
+            .any(|chat| chat.run.is_some() && chat.pending_approval.is_none())
     }
 
     /// The stdio server stops with its editor; the daemon once it was idle for a while.

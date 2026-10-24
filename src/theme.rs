@@ -61,19 +61,34 @@ pub const RADIUS_CARD: u8 = 10;
 /// Large floating surfaces (composer card).
 pub const RADIUS_PANEL: u8 = 14;
 
+/// Shared spacing rhythm for app chrome and conversation surfaces, in logical points.
+pub const SPACE_XS: f32 = 4.0;
+pub const SPACE_SM: f32 = 8.0;
+pub const SPACE_MD: f32 = 12.0;
+pub const SPACE_LG: f32 = 16.0;
+pub const CONTROL_HEIGHT: f32 = 28.0;
+
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;
-pub const CHAT_VIEW_MARGIN_LEFT: f32 = 12.0;
-pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 8.0;
+pub const CHAT_VIEW_MARGIN_LEFT: f32 = 16.0;
+pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 12.0;
+/// Right margin of the chat view (not the editor): the transcript scroll bar sits in it, and
+/// [`chat_column_center_width`] adds the rest so text ends as far from the edge as it starts.
+pub const CHAT_VIEW_MARGIN_RIGHT_CHAT: f32 = 6.0;
 /// Inner margin of the chat [`Frame`] (transcript + composer stack).
 pub const CHAT_FRAME_TOP: f32 = 10.0;
 pub const CHAT_FRAME_BOTTOM: f32 = 10.0;
 
-/// Usable width for the chat column (transcript + bottom composer). Subtracts scrollbar gutter so
-/// input and transcript line up.
+/// Usable width for the chat column (transcript + bottom composer). Subtracts a scroll bar gutter
+/// so input and transcript line up. Floating bars take no layout space, but they are painted over
+/// the right edge of the content, so a narrow transcript (whose column fills the viewport) would
+/// otherwise run its bubbles and cards under the bar.
 pub fn chat_column_center_width(available: f32, style: &egui::Style) -> f32 {
-    let g = style.spacing.scroll.allocated_width();
-    (available - g).max(1.0)
+    let scroll = &style.spacing.scroll;
+    let gutter = scroll
+        .allocated_width()
+        .max(CHAT_VIEW_MARGIN_LEFT - CHAT_VIEW_MARGIN_RIGHT_CHAT);
+    (available - gutter).max(1.0)
 }
 
 /// Wrap width for transcript text (thinking, markdown, tool bodies). `available_width()` alone can

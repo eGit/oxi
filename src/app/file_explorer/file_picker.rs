@@ -1,7 +1,8 @@
 //! Workspace file discovery, fuzzy ranking, and temporary editor previews. Like Sublime's Goto
 //! Anything, `@query` lists the current file's symbols, `:42` goes to a line and `name:42` opens
 //! a file at a line; Cmd/Ctrl+Shift+R lists the whole project's symbols. `>query` is the command
-//! palette (Cmd/Ctrl+Shift+P): every menu command, run as if its keys were pressed.
+//! palette (Cmd/Ctrl+Shift+P): every menu command, run as if its keys were pressed. `#query`
+//! switches chat (Cmd/Ctrl+Shift+O), across every workspace.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,11 @@ enum PickerTarget {
     Location { path: PathBuf, range: Range<usize> },
     /// A palette command (index into [`crate::app::commands::palette_commands`]).
     Command(usize),
+    /// A chat, by workspace and session index.
+    Chat {
+        workspace_idx: usize,
+        session_idx: usize,
+    },
 }
 
 /// Goto Symbol entries of one file: outline symbols with their 1-based line numbers.
@@ -103,6 +109,7 @@ const NO_MATCHES: &[&str] = &[
     "No matching files",
     "No matching symbols",
     "No matching commands",
+    "No matching chats",
 ];
 
 impl OxiApp {
@@ -309,8 +316,9 @@ impl OxiApp {
 
     /// Rows for the current query, best first; reused until the query or its inputs change.
     fn cached_picker_entries(&mut self, root: &Path, query: &str) -> Arc<Vec<PickerEntry>> {
-        // A few dozen commands, ordered by recent use: cheap, and not worth a cache key.
-        if query.starts_with('>') {
+        // A few dozen commands, ordered by recent use, or the chats: cheap, and not worth a
+        // cache key (chat titles and recency change under it).
+        if query.starts_with('>') || query.starts_with('#') {
             return Arc::new(self.picker_entries(root, query));
         }
         let origin = self
@@ -359,6 +367,9 @@ impl OxiApp {
         };
         if let Some(command_query) = query.strip_prefix('>') {
             return self.palette_entries(command_query.trim_start());
+        }
+        if let Some(chat_query) = query.strip_prefix('#') {
+            return self.chat_entries(chat_query.trim_start());
         }
         if self.conv.editor.file_picker_project_symbols {
             let Some(symbols) = self.conv.editor.code_nav.project_symbols.clone() else {
@@ -572,6 +583,56 @@ impl OxiApp {
             .collect()
     }
 
+    /// Every chat, most recent first; with an empty query the current chat is left out, so
+    /// Enter goes back to the previous one.
+    fn chat_entries(&self, query: &str) -> Vec<PickerEntry> {
+        let active = (
+            self.conv.active_workspace,
+            self.conv.workspaces[self.conv.active_workspace].active,
+        );
+        let mut ranked: Vec<_> = self
+            .conv
+            .workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(wi, workspace)| {
+                workspace
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .map(move |(si, session)| (wi, si, workspace, session))
+            })
+            .filter(|&(wi, si, ..)| !query.is_empty() || (wi, si) != active)
+            .filter_map(|(wi, si, workspace, session)| {
+                let score = if query.is_empty() {
+                    0
+                } else {
+                    fuzzy_path_score(&session.title, query)?
+                };
+                Some((score, wi, si, workspace, session))
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then(b.4.modified.cmp(&a.4.modified)));
+        ranked
+            .into_iter()
+            .take(100)
+            .map(|(_, wi, si, workspace, session)| PickerEntry {
+                primary: session.title.clone(),
+                primary_matches: fuzzy_match_positions(&session.title, query),
+                secondary: Path::new(&workspace.root_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| workspace.root_path.clone()),
+                secondary_matches: Vec::new(),
+                trailing: format_relative_time(session.modified),
+                target: Some(PickerTarget::Chat {
+                    workspace_idx: wi,
+                    session_idx: si,
+                }),
+            })
+            .collect()
+    }
+
     /// Close the palette and run command `index` as if its keys were pressed where the user
     /// was: focus goes back to what had it before the palette, or to the editor for an editor
     /// command.
@@ -599,7 +660,7 @@ impl OxiApp {
     /// every frame.
     fn preview_picker_target(&mut self, target: &PickerTarget) {
         let (path, range) = match target {
-            PickerTarget::Command(_) => {
+            PickerTarget::Command(_) | PickerTarget::Chat { .. } => {
                 if self.conv.editor.file_picker_preview.is_some() {
                     self.clear_file_picker_preview();
                 }
@@ -648,12 +709,24 @@ impl OxiApp {
             self.run_palette_command(ctx, index);
             return;
         }
+        if let PickerTarget::Chat {
+            workspace_idx,
+            session_idx,
+        } = target
+        {
+            self.cancel_file_picker();
+            self.conv.editor.file_picker_return_focus = None;
+            self.select_session_in_workspace(workspace_idx, session_idx);
+            self.reveal_chat_view();
+            self.focus_active_view_next_frame();
+            return;
+        }
         let origin = self.conv.editor.file_picker_origin.take();
         self.conv.editor.file_picker_previewed = None;
         self.preview_picker_target(&target);
         let path = match &target {
             PickerTarget::File { path, .. } | PickerTarget::Location { path, .. } => path.clone(),
-            PickerTarget::Command(_) => return,
+            PickerTarget::Command(_) | PickerTarget::Chat { .. } => return,
         };
         if let Some((target_path, range)) = self.conv.editor.file_picker_previewed.take() {
             self.conv.editor.navigation_target = Some((target_path, range));
@@ -691,6 +764,8 @@ impl OxiApp {
         }
         let mode = if query.starts_with('>') {
             2
+        } else if query.starts_with('#') {
+            3
         } else {
             usize::from(self.conv.editor.file_picker_project_symbols || query.starts_with('@'))
         };
@@ -781,7 +856,7 @@ impl OxiApp {
                         .hint_text(if self.conv.editor.file_picker_project_symbols {
                             "Go to symbol in project…"
                         } else {
-                            "Go to file…  (@ symbol, : line, > command)"
+                            "Go to file…  (@ symbol, : line, > command, # chat)"
                         })
                         .desired_width(f32::INFINITY),
                 );

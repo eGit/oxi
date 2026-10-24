@@ -28,21 +28,23 @@ impl OxiApp {
             c_text(),
         )
         .on_hover_text("Start a new chat in the active workspace");
-        ui.painter().text(
-            new_chat.rect.right_center() - egui::vec2(8.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            if cfg!(target_os = "macos") {
-                "⌘N"
-            } else {
-                "Ctrl+N"
-            },
-            FontId::proportional(FS_TINY),
-            c_text_faint(),
-        );
+        if new_chat.rect.width() >= 170.0 {
+            ui.painter().text(
+                new_chat.rect.right_center() - egui::vec2(8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                if cfg!(target_os = "macos") {
+                    "⌘N"
+                } else {
+                    "Ctrl+N"
+                },
+                FontId::proportional(FS_TINY),
+                c_text_faint(),
+            );
+        }
         if new_chat.clicked() {
             self.new_chat();
         }
-        ui.add_space(6.0);
+        ui.add_space(SPACE_SM);
 
         // Search row + add-workspace button.
         ui.horizontal(|ui| {
@@ -88,7 +90,7 @@ impl OxiApp {
             }
         });
 
-        ui.add_space(8.0);
+        ui.add_space(SPACE_MD);
 
         if let Some(notice) = self.conv.sidebar.notice.clone() {
             if crate::ui::chrome::dismissible_notice(ui, "sidebar_notice", &notice) {
@@ -301,6 +303,36 @@ impl SidebarGroup {
     }
 }
 
+impl OxiApp {
+    /// Ctrl+Tab / Ctrl+Shift+Tab: the next or previous chat of the active workspace, in the
+    /// order the sidebar lists them, wrapping around.
+    pub(crate) fn cycle_chat(&mut self, back: bool) {
+        let wi = self.conv.active_workspace;
+        let Some(workspace) = self.conv.workspaces.get(wi) else {
+            return;
+        };
+        let order: Vec<usize> = sidebar_session_order(workspace)
+            .into_iter()
+            .map(|(si, _)| si)
+            .collect();
+        let Some(next) = cycled(&order, workspace.active, back) else {
+            return;
+        };
+        self.select_session_in_workspace(wi, next);
+        self.reveal_chat_view();
+    }
+}
+
+/// The entry after (or before) `current` in `order`, wrapping; `None` with nothing to move to.
+fn cycled(order: &[usize], current: usize, back: bool) -> Option<usize> {
+    if order.len() < 2 {
+        return None;
+    }
+    let n = order.len();
+    let at = order.iter().position(|&si| si == current).unwrap_or(0);
+    Some(order[if back { (at + n - 1) % n } else { (at + 1) % n }])
+}
+
 /// Rows in display order: pinned chats first, then by recency bucket. The sort is stable, so
 /// within a bucket chats keep their stored (most-recent-first) order.
 fn sidebar_session_order(ws: &super::state::Workspace) -> Vec<(usize, SidebarGroup)> {
@@ -353,6 +385,21 @@ fn sidebar_workspace_order(workspaces: &[super::state::Workspace]) -> Vec<(usize
         }
     }
     order
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::cycled;
+
+    #[test]
+    fn ctrl_tab_walks_the_listed_order_and_wraps() {
+        // Sidebar order (pinned first) differs from storage order.
+        let order = [2, 0, 1];
+        assert_eq!(cycled(&order, 2, false), Some(0));
+        assert_eq!(cycled(&order, 1, false), Some(2), "wraps to the top");
+        assert_eq!(cycled(&order, 2, true), Some(1), "wraps to the bottom");
+        assert_eq!(cycled(&[0], 0, false), None, "nothing to switch to");
+    }
 }
 
 #[cfg(test)]

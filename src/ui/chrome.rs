@@ -7,6 +7,19 @@ use eframe::egui::{
 
 use crate::theme::*;
 
+/// A keyboard focus ring shared by hand-painted controls. Draw inside their allocation so
+/// tightly clipped toolbar and list rows keep the entire ring visible.
+pub fn keyboard_focus_ring(ui: &Ui, response: &Response, radius: CornerRadius) {
+    if response.has_focus() && ui.is_enabled() {
+        ui.painter().rect_stroke(
+            response.rect.shrink(1.0),
+            radius,
+            Stroke::new(1.0, c_accent()),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 mod copy_modal;
 pub use copy_modal::*;
 
@@ -29,7 +42,7 @@ pub fn combo_chevron_icon(
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let id = ui.id().with(("sidebar_text_field", hint));
     let focused = ui.ctx().memory(|m| m.has_focus(id));
-    Frame::new()
+    let frame = Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(
             1.0,
@@ -56,8 +69,28 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Respons
                 )
             })
             .inner
-        })
-        .inner
+        });
+    finish_text_field(ui, frame, RADIUS_CHIP)
+}
+
+fn finish_text_field(ui: &Ui, frame: egui::InnerResponse<Response>, radius: u8) -> Response {
+    let focused = frame.inner.has_focus();
+    if ui.is_enabled() && (focused || frame.response.contains_pointer()) {
+        ui.painter().rect_stroke(
+            frame.response.rect,
+            CornerRadius::same(radius),
+            Stroke::new(
+                1.0,
+                if focused {
+                    c_composer_focus_border()
+                } else {
+                    c_border()
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    frame.inner
 }
 
 /// Framed single-line settings input — matches the sidebar field language so settings
@@ -88,7 +121,7 @@ fn settings_text_field_opts(
     password: bool,
     width: f32,
 ) -> Response {
-    Frame::new()
+    let frame = Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
@@ -104,13 +137,13 @@ fn settings_text_field_opts(
                 edit = edit.password(true);
             }
             ui.add(edit)
-        })
-        .inner
+        });
+    finish_text_field(ui, frame, RADIUS_BUTTON)
 }
 
 /// Framed multiline settings editor (system prompts, etc.).
 pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
-    Frame::new()
+    let frame = Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
@@ -123,8 +156,8 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
                     .desired_rows(rows)
                     .hint_text(hint),
             )
-        })
-        .inner
+        });
+    finish_text_field(ui, frame, RADIUS_BUTTON)
 }
 
 /// Settings list row: left-aligned identity, right-aligned actions, optional divider.
@@ -498,7 +531,8 @@ pub fn icon_button_core_with_hover(
             )
         }
     });
-    let hovered = show_hover_visuals && (response.hovered() || response.has_focus());
+    let hovered =
+        ui.is_enabled() && show_hover_visuals && (response.hovered() || response.has_focus());
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {
         look.hover_stroke
@@ -527,7 +561,8 @@ pub fn icon_button_core_with_hover(
             look.glyph
         },
     );
-    if response.hovered() {
+    keyboard_focus_ring(ui, &response, look.rounding);
+    if ui.is_enabled() && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response
@@ -550,7 +585,11 @@ pub fn icon_button_framed(ui: &mut Ui, icon: &str, size: egui::Vec2, active: boo
         FS_SMALL,
         active,
         &IconButtonLook {
-            fill: c_bg_elevated(),
+            fill: if active {
+                c_row_active()
+            } else {
+                c_bg_elevated()
+            },
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
@@ -570,7 +609,11 @@ pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> 
         FS_SMALL,
         active,
         &IconButtonLook {
-            fill: Color32::TRANSPARENT,
+            fill: if active {
+                c_row_active()
+            } else {
+                Color32::TRANSPARENT
+            },
             hover_fill: c_row_hover(),
             stroke: Color32::TRANSPARENT,
             hover_stroke: Color32::TRANSPARENT,
@@ -594,7 +637,8 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
             icon_accessible_label(icon),
         )
     });
-    let hovered = resp.hovered() || resp.has_focus();
+    let hovered = ui.is_enabled() && (resp.hovered() || resp.has_focus());
+    keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_ROW));
     if hovered {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), c_row_active());
@@ -748,7 +792,7 @@ fn icon_text_button_core(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled() && enabled, label)
     });
-    let hovered = enabled && response.hovered();
+    let hovered = enabled && ui.is_enabled() && (response.hovered() || response.has_focus());
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {
         look.hover_stroke
@@ -791,6 +835,9 @@ fn icon_text_button_core(
         label_font_id,
         label_ink,
     );
+    if enabled {
+        keyboard_focus_ring(ui, &response, look.rounding);
+    }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -895,7 +942,15 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     let row_w = ui.available_width();
     let h = 30.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, h), Sense::click());
-    let hovered = response.hovered();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
+    let hovered = response.hovered() || response.has_focus();
     let fill = if selected {
         c_row_active()
     } else if hovered {
@@ -905,6 +960,7 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     };
     ui.painter()
         .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+    keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
     if selected {
         ui.painter().rect_stroke(
             rect,

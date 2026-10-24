@@ -676,6 +676,10 @@ fn install_fonts(ctx: &egui::Context) {
 
 /// Build egui visuals from the active palette: neutral surfaces, subtle borders, one accent.
 pub fn setup_style(ctx: &egui::Context) {
+    // A resize can update viewport geometry, then the composer's wrapped draft, then
+    // the transcript's bottom offset. Allow these dependent corrections before presenting;
+    // unchanged frames still use a single pass.
+    ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::new(4).unwrap());
     install_fonts(ctx);
     let p = active_palette();
     let mut visuals = if p.dark_base {

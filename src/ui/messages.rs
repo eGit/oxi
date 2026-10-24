@@ -229,7 +229,7 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
 
     if msg.role == MsgRole::User {
         // Right-aligned chat bubble (capped width) so user turns read as chat, not a document.
-        let bubble_w = (col_w * 0.78).clamp(220.0, col_w);
+        let bubble_w = (col_w * 0.78).max(220.0).min(col_w);
         let response = ui
             .with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                 ui.set_max_width(col_w);
@@ -272,7 +272,7 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                 &msg.text,
             );
         }
-        ui.add_space(10.0);
+        ui.add_space(SPACE_LG);
         return response;
     }
 
@@ -403,7 +403,7 @@ pub fn render_assistant_message_run(
         }
         render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
     });
-    ui.add_space(8.0);
+    ui.add_space(SPACE_LG);
 }
 
 /// The chat moved to another agent with this turn: "Claude Code → Codex · gpt-5.5". The new
@@ -769,7 +769,7 @@ pub fn render_assistant_blocks(
             started_at,
             worked_duration,
         );
-        ui.add_space(4.0);
+        ui.add_space(SPACE_SM);
     }
 
     // "Planning next steps" overlay: shown while streaming, after tool calls all completed,
@@ -806,6 +806,35 @@ pub fn render_assistant_blocks(
             }
         }
     }
+
+    // Text can be interim commentary, especially with ACP: only Finished ends the turn.
+    // Keep activity at the visible tail even when no tool or reasoning update follows it;
+    // the activity summary above the answer may already be outside the viewport.
+    if streaming
+        && !turn_stalled(ui.ctx())
+        && blocks[worked_end..]
+            .iter()
+            .any(|block| matches!(block, AssistantBlock::Answer(text) if !text.trim().is_empty()))
+    {
+        ui.add_space(SPACE_SM);
+        ui.horizontal(|ui| {
+            animated_status_label(ui, "Working", FS_SMALL);
+        });
+    }
+}
+
+fn turn_stalled_id() -> Id {
+    Id::new("oxi_turn_stalled")
+}
+
+/// The chat says the running turn went quiet (and offers Stop/Continue) below the transcript,
+/// so the "Working" line is dropped for that frame instead of claiming progress.
+pub fn set_turn_stalled(ctx: &egui::Context, stalled: bool) {
+    ctx.data_mut(|d| d.insert_temp(turn_stalled_id(), stalled));
+}
+
+fn turn_stalled(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp(turn_stalled_id())).unwrap_or(false)
 }
 
 /// Run failures are appended to the answer as a `[Error] …` line. Split that tail off so it

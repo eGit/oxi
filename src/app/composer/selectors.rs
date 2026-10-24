@@ -13,34 +13,24 @@ use crate::settings::LlmProviderKind;
 use crate::ui::select_menu::{SelectMenu, SelectOption, labeled_switch};
 
 use super::super::OxiApp;
-use super::{ATTACH_DIAM, MIC_DIAM, SEND_DIAM, composer_provider_groups, composer_provider_label};
+use super::{composer_provider_groups, composer_provider_label};
 
 /// Widest the thinking-level dropdown gets.
 const EFFORT_W: f32 = 72.0;
 /// Widest an agent option other than model / effort gets ("Accept edits", "Bypass permissions").
 const AGENT_OPTION_W: f32 = 110.0;
-/// Horizontal padding the dropdown button adds around its label + chevron, plus spacing.
-const COMBO_PAD: f32 = 22.0;
 const GAP: f32 = 6.0;
 
-/// Maximum (provider, model) dropdown widths for the column width class.
-fn composer_selector_widths(narrow: bool, compact: bool) -> (f32, f32) {
-    if compact {
-        (82.0, 90.0)
-    } else if narrow {
-        (96.0, 114.0)
-    } else {
-        (104.0, 130.0)
-    }
+enum ComposerSelector {
+    Agent(usize),
+    Model,
+    Effort,
+    Router,
 }
 
 /// Where a failed agent-option change leaves its error for the UI thread.
 fn option_error_id() -> eframe::egui::Id {
     eframe::egui::Id::new("composer_agent_option_error")
-}
-
-fn selectors_width_id(narrow: bool, compact: bool) -> eframe::egui::Id {
-    eframe::egui::Id::new(("composer_selectors_w", narrow, compact))
 }
 
 /// The agent option that holds its plan mode, which oxi drives through its own plan toggle.
@@ -54,11 +44,6 @@ fn is_plan_switch(option: &AcpConfigOption) -> bool {
         && matches!(&option.kind, AcpConfigKind::Select { values, .. } if values.iter().any(|v| v.value == "plan"))
 }
 
-/// A squeezed composer keeps the permission mode and the model; the rest returns with room.
-fn agent_option_shown(option: &AcpConfigOption, compact: bool) -> bool {
-    !compact || option.is_model() || option.category == "mode"
-}
-
 fn agent_option_width(option: &AcpConfigOption, model_w: f32) -> f32 {
     if option.is_model() {
         model_w
@@ -67,6 +52,22 @@ fn agent_option_width(option: &AcpConfigOption, model_w: f32) -> f32 {
     } else {
         AGENT_OPTION_W
     }
+}
+
+fn agent_option_label(option: &AcpConfigOption, plan_on: bool) -> String {
+    let AcpConfigKind::Select { current, values } = &option.kind else {
+        return option.name.clone();
+    };
+    let current = if plan_on && is_plan_switch(option) {
+        "plan"
+    } else {
+        current.as_str()
+    };
+    values
+        .iter()
+        .find(|value| value.value == current)
+        .map(|value| value.name.clone())
+        .unwrap_or_else(|| short_model_label(current, 18))
 }
 
 /// Show `value` as the current choice of the option `is_option` matches, when the agent offers
@@ -124,39 +125,114 @@ impl OxiApp {
     /// Provider dropdown (only providers the user has configured), then either the agent's own
     /// options or model + thinking level. Each hugs its label up to a cap, so short names keep
     /// the chevron close and long ones truncate instead of growing the bar.
-    pub(super) fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
+    pub(super) fn render_model_selector(&mut self, ui: &mut Ui) {
         if let Some(error) = ui
             .ctx()
             .data_mut(|d| d.remove_temp::<String>(option_error_id()))
         {
             self.notify_composer(error);
         }
-        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
-        self.render_provider_selector(ui, provider_w);
-        let model_chars = if compact {
-            10usize
-        } else if narrow {
-            14
-        } else {
-            18
-        };
-        if let Some(options) = self.active_agent_options() {
-            self.render_agent_options(ui, &options, model_w, compact);
-            // Agents that keep model or effort out of their options still get oxi's pickers.
-            if !options.iter().any(AcpConfigOption::is_model) {
-                self.render_model_list_selector(ui, model_w, model_chars);
-            }
-            if !options.iter().any(AcpConfigOption::is_thought_level) {
-                self.render_effort_selector(ui, compact);
-            }
+        let budget = ui.available_width();
+        if budget < 24.0 {
             return;
+        }
+        let options = self.active_agent_options().unwrap_or_default();
+        let mut controls = Vec::new();
+        for (index, option) in options.iter().enumerate() {
+            let width = match &option.kind {
+                AcpConfigKind::Select { .. } => crate::ui::select_menu::select_button_width(
+                    ui,
+                    &agent_option_label(option, self.plan_mode_on()),
+                    agent_option_width(option, 130.0),
+                ),
+                AcpConfigKind::Boolean(_) => {
+                    ui.painter()
+                        .layout_no_wrap(
+                            option.name.clone(),
+                            eframe::egui::FontId::proportional(crate::theme::FS_SMALL),
+                            crate::theme::c_text_muted(),
+                        )
+                        .size()
+                        .x
+                        + 34.0
+                        + 2.0 * ui.spacing().button_padding.x
+                }
+            };
+            let priority = if self.plan_mode_on() && is_plan_switch(option) {
+                4
+            } else if option.is_model() {
+                3
+            } else if is_plan_switch(option) || option.category == "mode" {
+                2
+            } else if option.is_thought_level() {
+                1
+            } else {
+                0
+            };
+            controls.push((ComposerSelector::Agent(index), width, priority));
         }
         if self.conv.settings.active_provider == LlmProviderKind::Router {
-            self.render_router_strategy_selector(ui, model_w);
-            return;
+            controls.push((ComposerSelector::Router, 130.0, 3));
+        } else {
+            if !options.iter().any(AcpConfigOption::is_model) {
+                let label = short_model_label(&self.conv.settings.active_config().model_id, 18);
+                let width = crate::ui::select_menu::select_button_width(ui, &label, 130.0);
+                controls.push((ComposerSelector::Model, width, 3));
+            }
+            if self.active_provider_supports_effort()
+                && !options.iter().any(AcpConfigOption::is_thought_level)
+            {
+                controls.push((ComposerSelector::Effort, EFFORT_W, 1));
+            }
         }
-        self.render_model_list_selector(ui, model_w, model_chars);
-        self.render_effort_selector(ui, compact);
+        // Remove secondary options one by one. The provider is the last selector left;
+        // its label truncates within the remaining width instead of wrapping the row.
+        let provider_min = budget.min(48.0);
+        while controls
+            .iter()
+            .map(|(_, width, _)| width + GAP)
+            .sum::<f32>()
+            + provider_min
+            > budget
+        {
+            let Some(index) = controls
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (_, _, priority))| *priority)
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let (hidden, _, _) = controls.remove(index);
+            let popup = match hidden {
+                ComposerSelector::Agent(index) => {
+                    eframe::egui::Id::new(("select_menu", ("agent_option", &options[index].id)))
+                }
+                ComposerSelector::Model => eframe::egui::Id::new(("select_menu", "model")),
+                ComposerSelector::Effort => eframe::egui::Id::new(("select_menu", "effort")),
+                ComposerSelector::Router => {
+                    eframe::egui::Id::new(("select_menu", "router_strategy"))
+                }
+            };
+            eframe::egui::Popup::close_id(ui.ctx(), popup.with("popup"));
+        }
+        let provider_width = (budget
+            - controls
+                .iter()
+                .map(|(_, width, _)| width + GAP)
+                .sum::<f32>())
+        .min(104.0);
+        self.render_provider_selector(ui, provider_width);
+        for (control, width, _) in controls {
+            match control {
+                ComposerSelector::Agent(index) => {
+                    self.render_agent_options(ui, std::slice::from_ref(&options[index]), width)
+                }
+                ComposerSelector::Model => self.render_model_list_selector(ui, width, 18),
+                ComposerSelector::Effort => self.render_effort_selector(ui, false),
+                ComposerSelector::Router => self.render_router_strategy_selector(ui, width),
+            }
+        }
     }
 
     fn render_provider_selector(&mut self, ui: &mut Ui, width: f32) {
@@ -349,16 +425,10 @@ impl OxiApp {
 
     /// One control per option the agent advertised, in its order: a dropdown for a select, a
     /// switch for a boolean.
-    fn render_agent_options(
-        &mut self,
-        ui: &mut Ui,
-        options: &[AcpConfigOption],
-        model_w: f32,
-        compact: bool,
-    ) {
+    fn render_agent_options(&mut self, ui: &mut Ui, options: &[AcpConfigOption], model_w: f32) {
         let plan_on = self.plan_mode_on();
         let mut picked: Option<(&AcpConfigOption, Value)> = None;
-        for option in options.iter().filter(|o| agent_option_shown(o, compact)) {
+        for option in options {
             let hover = if option.description.is_empty() {
                 option.name.clone()
             } else {
@@ -372,14 +442,10 @@ impl OxiApp {
                     } else {
                         current.as_str()
                     };
-                    let label = values
-                        .iter()
-                        .find(|v| v.value == current)
-                        .map(|v| v.name.clone())
-                        .unwrap_or_else(|| short_model_label(current, 18));
+                    let label = agent_option_label(option, plan_on);
                     let choice = SelectMenu::new(("agent_option", &option.id), &label)
                         .hover(&hover)
-                        .max_width(agent_option_width(option, model_w))
+                        .max_width(model_w)
                         .show(ui, || {
                             values
                                 .iter()
@@ -477,70 +543,5 @@ impl OxiApp {
                 ctx.request_repaint();
             },
         );
-    }
-
-    /// Width the controls need on a single row: the selectors at their caps plus the round
-    /// buttons. The right-side extras (speed, context ring, hint) are left out because they
-    /// already hide themselves when space runs short.
-    pub(super) fn composer_single_row_width(
-        &self,
-        ctx: &eframe::egui::Context,
-        narrow: bool,
-        compact: bool,
-    ) -> f32 {
-        let mut width = ATTACH_DIAM + SEND_DIAM + 3.0 * GAP;
-        width += ctx
-            .data(|d| d.get_temp::<f32>(selectors_width_id(narrow, compact)))
-            .unwrap_or_else(|| self.estimated_selectors_width(narrow, compact));
-        if self.plan_mode_on() && !self.agent_shows_plan_mode() {
-            width += if compact { 34.0 } else { 72.0 } + GAP;
-        }
-        if self.conv.settings.dictation.enabled {
-            width += MIC_DIAM + GAP;
-        }
-        width
-    }
-
-    /// The pickers, remembering how wide they came out so the next frame's one-row-or-two
-    /// decision uses their real labels rather than every dropdown at its cap (which put a
-    /// five-control ACP bar on two rows in a column it fits easily).
-    pub(super) fn render_measured_selectors(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
-        let start = ui.cursor().min;
-        let top = ui.min_rect().top();
-        self.render_model_selector(ui, narrow, compact);
-        let end = ui.cursor().min;
-        // Wrapped onto another line: it doesn't fit on one, whatever the exact width.
-        let width = if end.y > start.y || ui.min_rect().top() < top {
-            ui.max_rect().width()
-        } else {
-            end.x - start.x
-        };
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(selectors_width_id(narrow, compact), width));
-    }
-
-    /// Selector width with every dropdown at its cap, before the first measurement.
-    fn estimated_selectors_width(&self, narrow: bool, compact: bool) -> f32 {
-        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
-        let mut width = provider_w + COMBO_PAD + GAP;
-        let options = self.active_agent_options().unwrap_or_default();
-        for option in options.iter().filter(|o| agent_option_shown(o, compact)) {
-            width += GAP
-                + match option.kind {
-                    AcpConfigKind::Select { .. } => agent_option_width(option, model_w) + COMBO_PAD,
-                    // Label (≈7px per character) + switch + padding.
-                    AcpConfigKind::Boolean(_) => option.name.chars().count() as f32 * 7.0 + 50.0,
-                };
-        }
-        if !options.iter().any(AcpConfigOption::is_model) {
-            width += model_w + COMBO_PAD + GAP;
-        }
-        if self.active_provider_supports_effort()
-            && !compact
-            && !options.iter().any(AcpConfigOption::is_thought_level)
-        {
-            width += EFFORT_W + COMBO_PAD + GAP;
-        }
-        width
     }
 }

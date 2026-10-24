@@ -16,6 +16,7 @@ pub mod fsutil;
 mod git;
 mod headless;
 mod hydrate;
+mod keep_awake;
 mod local_models;
 mod local_models_remote;
 mod logging;

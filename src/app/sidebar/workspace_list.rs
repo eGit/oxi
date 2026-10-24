@@ -11,7 +11,7 @@ impl OxiApp {
         parent_folded: bool,
         q: &str,
     ) -> bool {
-        const FS_WORKSPACE: f32 = FS_SMALL + 1.5;
+        const FS_WORKSPACE: f32 = FS_SMALL;
         let mut sidebar_changed = false;
         let is_main = self.conv.workspaces[wi].worktree.is_none();
         let active_si = self.conv.workspaces[wi].active;
@@ -24,14 +24,14 @@ impl OxiApp {
         let folded = self.conv.workspaces[wi].sidebar_folded || parent_folded;
         ui.add_space(1.0);
 
-        const ROW_H: f32 = 22.0;
+        const ROW_H: f32 = 26.0;
         const PLUS_W: f32 = 22.0;
         const GLYPH_W: f32 = 18.0;
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
         // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
         // below steals hover from the row response, which would flicker the fill.
-        let row_hovered = ui.rect_contains_pointer(rect);
+        let row_hovered = ui.rect_contains_pointer(rect) || response.has_focus();
         if row_hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             ui.painter()
@@ -64,7 +64,8 @@ impl OxiApp {
                     egui::Label::new(
                         RichText::new(&root_label)
                             .size(FS_WORKSPACE)
-                            .color(c_sidebar_section()),
+                            .color(c_text())
+                            .strong(),
                     )
                     .truncate()
                     .halign(Align::LEFT)
@@ -72,6 +73,7 @@ impl OxiApp {
                 );
             });
         });
+        crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
         let mut worktree_clicked = false;
         let mut worktree_hovered = false;
         if is_main {
@@ -311,9 +313,17 @@ impl OxiApp {
                         let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                         let (rect, response) =
                             ui.allocate_exact_size(egui::vec2(row_w, row_outer_h), Sense::click());
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::SelectableLabel,
+                                ui.is_enabled(),
+                                selected,
+                                &title,
+                            )
+                        });
                         // Keep the row hovered while the pointer is over an
                         // overlapping action such as the hover-only trash button.
-                        let hovered = ui.rect_contains_pointer(rect);
+                        let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
                         if hovered {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -349,6 +359,18 @@ impl OxiApp {
                         };
                         ui.painter()
                             .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+                        crate::ui::chrome::keyboard_focus_ring(
+                            ui,
+                            &response,
+                            CornerRadius::same(RADIUS_ROW),
+                        );
+                        if selected {
+                            let rail = egui::Rect::from_min_max(
+                                rect.left_top() + egui::vec2(0.0, 8.0),
+                                rect.left_bottom() + egui::vec2(2.0, -8.0),
+                            );
+                            ui.painter().rect_filled(rail, 1.0, c_accent());
+                        }
                         if needs_attention {
                             ui.painter().rect_stroke(
                                 rect,
@@ -589,7 +611,7 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            if selected || has_error || needs_approval || completion_unseen {
+                            if has_error || needs_approval || completion_unseen {
                                 let resp =
                                     ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
                                 if has_error {
@@ -662,7 +684,7 @@ pub(super) fn sidebar_group_header(
     count: usize,
 ) -> bool {
     const H: f32 = 20.0;
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), H), Sense::click());
     let response = response.on_hover_text(if group_folded {
@@ -670,7 +692,8 @@ pub(super) fn sidebar_group_header(
     } else {
         "Hide these chats"
     });
-    let hovered = response.hovered();
+    let hovered = response.hovered() || response.has_focus();
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         ui.painter()

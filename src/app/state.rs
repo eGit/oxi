@@ -373,6 +373,8 @@ pub struct SessionRunState {
     pub completion_unseen: bool,
     pub waiting_response: bool,
     pub stream_started_at: Option<Instant>,
+    /// When the running turn last produced any event; drives the "no updates" notice.
+    pub last_event_at: Option<Instant>,
     pub stream_error: Option<String>,
     /// Set while the provider stream is being retried after a transient failure
     /// ("Reconnecting…" in the header chip); cleared on the next stream event.
@@ -422,12 +424,14 @@ impl SessionRunState {
         self.completion_unseen = false;
         self.waiting_response = true;
         self.stream_started_at = Some(Instant::now());
+        self.last_event_at = self.stream_started_at;
         self.turn_usage = TokenUsage::default();
     }
 
     pub fn end_waiting_response(&mut self) {
         self.waiting_response = false;
         self.stream_started_at = None;
+        self.last_event_at = None;
     }
 }
 
@@ -728,6 +732,8 @@ pub struct TranscriptState {
     pub held_selection: Option<egui::text_selection::LabelSelectionState>,
     /// "Copy selection" was chosen: copy the held selection on the next frame.
     pub copy_held_selection: bool,
+    /// The Cmd/Ctrl+F bar over the transcript, while open.
+    pub find: Option<super::conversation::find::ChatFind>,
 }
 
 impl Default for TranscriptState {
@@ -746,6 +752,7 @@ impl Default for TranscriptState {
             message_menu: None,
             held_selection: None,
             copy_held_selection: false,
+            find: None,
         }
     }
 }

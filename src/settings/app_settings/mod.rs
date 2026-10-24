@@ -96,6 +96,9 @@ pub struct AppSettings {
     /// asks for approval while oxi is in the background.
     #[serde(default = "default_true")]
     pub notify_in_background: bool,
+    /// Hold off idle sleep while an agent works, so a long unattended turn is not frozen.
+    #[serde(default = "default_true")]
+    pub keep_awake_while_working: bool,
     /// Legacy single approval switch. Migrated in `AppSettings::normalize` and no longer saved.
     #[serde(default, skip_serializing)]
     pub require_approval: Option<bool>,
@@ -327,6 +330,7 @@ impl Default for AppSettings {
             acp_idle_minutes: default_acp_idle_minutes(),
             acp_max_live_agents: default_acp_max_live_agents(),
             notify_in_background: true,
+            keep_awake_while_working: true,
             require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),

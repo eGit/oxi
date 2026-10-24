@@ -26,7 +26,7 @@ use super::{is_edit_like_tool, selectable_layout_job};
 const BLOCK_PREVIEW_LINES: usize = 10;
 const EDIT_PREVIEW_LINES: usize = 10;
 /// Vertical gap between consecutive pills.
-const TOOL_PILL_GAP: f32 = 3.0;
+const TOOL_PILL_GAP: f32 = SPACE_XS;
 
 /// Shape of a detail panel: a free-standing card, or a drawer hanging off the bottom of a tool
 /// pill (square top corners, the pill's border colour).
@@ -196,7 +196,7 @@ pub(super) fn render_tool_pill(
         .fill(pill_bg)
         .stroke(Stroke::new(1.0, pill_border))
         .corner_radius(header_radius)
-        .inner_margin(Margin::symmetric(10, 5))
+        .inner_margin(Margin::symmetric(12, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {

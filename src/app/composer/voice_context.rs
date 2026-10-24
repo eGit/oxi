@@ -168,6 +168,9 @@ impl OxiApp {
 
         let size = egui::vec2(26.0, 26.0);
         let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Context usage")
+        });
         let center = rect.center();
         let radius = 8.0;
         ui.painter()
@@ -285,9 +288,8 @@ impl OxiApp {
 
     /// Output speed of the running turn (or the last finished one) beside the context ring.
     /// Hidden until a provider has streamed long enough to measure a meaningful rate.
-    pub(super) fn render_tokens_per_sec(&self, ui: &mut Ui) {
-        let Some(rate) = self
-            .active_run_state()
+    pub(super) fn tokens_per_sec_text(&self) -> Option<String> {
+        self.active_run_state()
             .map(|s| {
                 if s.turn_usage.output_tokens_per_sec().is_some() {
                     s.turn_usage
@@ -296,13 +298,10 @@ impl OxiApp {
                 }
             })
             .and_then(|usage| usage.output_tokens_per_sec())
-        else {
-            return;
-        };
-        let text = format_tokens_per_sec(rate);
-        if !composer_text_fits(ui, &text, 0.0) {
-            return;
-        }
+            .map(format_tokens_per_sec)
+    }
+
+    pub(super) fn render_tokens_per_sec(&self, ui: &mut Ui, text: String) {
         ui.label(RichText::new(text).size(FS_TINY).color(c_text_faint()))
             .on_hover_text(
                 "Output speed of the latest response, measured while the model streams \

@@ -198,6 +198,7 @@ impl OxiApp {
         if !matches!(ev, AgentEvent::StreamRetry { .. }) {
             self.run_state_mut(key).stream_retrying = None;
         }
+        self.run_state_mut(key).last_event_at = Some(std::time::Instant::now());
         match ev {
             AgentEvent::AgentStart => {}
             AgentEvent::AcpTerminal(pending) => {
