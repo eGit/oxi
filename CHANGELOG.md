@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-24
+
+### Added
+- **Sidebar:** Silent agents now show a warning dot instead of a spinner, with hover tooltip showing how long they've been quiet.
+- **Chat:** Find text with Cmd/Ctrl+F.
+- **Chat:** Switch between chats using Goto Anything (# or Cmd/Ctrl+Shift+O) or Ctrl+Tab.
+- **Chat:** Unsent message drafts are now saved and restored when you restart the app.
+- **Chat:** Distraction Free mode hides the sidebar and panels (Ctrl+Cmd+Shift+F on Mac, Shift+F11 elsewhere).
+- **Chat:** Show 'Working' status under interim agent text, and offer Stop or Continue options after long silence instead of spinning indefinitely.
+
+### Changed
+- **Composer:** Redesigned with a single-row layout where secondary options collapse as the window narrows, with clearer visual hierarchy.
+- **Chat:** Transcript stays steady while resizing during live answers, and narrow transcripts no longer obscured by the scroll bar.
+- **Editor:** Ctrl+Tab now navigates between open files instead of switching chats.
+- **Focus:** App and headless daemon now stay awake while an agent is working.
+- **Sidebar:** Clearer selection and keyboard focus indicators.
+
+### Security
+- Updated crypto-bigint dependency to address RUSTSEC-2026-0387.
+
+
 ## [1.22.0] - 2026-10-23
 
 ### Added
@@ -1164,7 +1185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.22.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.23.0...HEAD
+[1.23.0]: https://github.com/maziluiosif/oxi/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/maziluiosif/oxi/compare/v1.21.2...v1.22.0
 [1.21.2]: https://github.com/maziluiosif/oxi/compare/v1.21.1...v1.21.2
 [1.21.1]: https://github.com/maziluiosif/oxi/compare/v1.21.0...v1.21.1
