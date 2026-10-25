@@ -10,8 +10,10 @@ use crate::ui::chrome::{ghost_button, primary_button, settings_caption, settings
 
 use super::super::OxiApp;
 use super::super::state::{SettingsExitAction, SettingsTab};
+use crate::settings::LlmProviderKind;
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
+const SAVE_BAR_H: f32 = 52.0;
 
 /// One settings-sidebar section: a caption + the navigation rows under it.
 struct SettingsNavGroup {
@@ -38,10 +40,10 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
     SettingsNavGroup {
         caption: "App",
         items: &[
-            (SettingsTab::Voice, ICON_MIC, "Voice"),
+            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
             (SettingsTab::Editor, ICON_FILE, "Editor"),
             (SettingsTab::Terminal, ICON_TERMINAL, "Terminal"),
-            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
+            (SettingsTab::Voice, ICON_MIC, "Voice"),
             (SettingsTab::About, ICON_INFO, "About"),
         ],
     },
@@ -53,7 +55,18 @@ impl OxiApp {
             self.conv.settings_page.original = Some(self.conv.settings.clone());
         }
         self.conv.settings_page.save_error = None;
+        self.conv.settings_page.search.clear();
         self.conv.settings_page.open = true;
+    }
+
+    /// Open Settings, or leave it (asking about unsaved changes) when it is already open:
+    /// the status-bar gear and Cmd/Ctrl+, both toggle.
+    pub(crate) fn toggle_settings_page(&mut self) {
+        if self.conv.settings_page.open {
+            self.request_settings_exit(SettingsExitAction::BackToChat);
+        } else {
+            self.open_settings_page();
+        }
     }
 
     pub(crate) fn settings_dirty(&self) -> bool {
@@ -141,11 +154,19 @@ impl OxiApp {
             self.conv.settings_page.exit_prompt = None;
             return;
         }
+        // Stay on the page: the save bar disappears, and Back/Esc leaves when done.
         self.conv.settings_page.save_error = None;
         self.conv.settings_page.original = Some(self.conv.settings.clone());
         self.conv.settings_page.exit_prompt = None;
-        self.conv.settings_page.open = false;
-        self.focus_active_view_next_frame();
+    }
+
+    /// Put back the settings as they were when the page opened (or last saved).
+    fn discard_settings_changes(&mut self, ctx: &egui::Context) {
+        if let Some(original) = self.conv.settings_page.original.clone() {
+            self.conv.settings = original;
+        }
+        self.conv.settings_page.save_error = None;
+        self.reapply_appearance(ctx);
     }
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {
@@ -236,24 +257,20 @@ impl OxiApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     Frame::new().fill(c_bg_main()).show(ui, |ui| {
-                        self.render_settings_header(ui);
-                        if let Some(err) = self.conv.settings_page.save_error.clone() {
-                            Frame::new()
-                                .inner_margin(Margin {
-                                    left: 36,
-                                    right: 26,
-                                    top: 10,
-                                    bottom: 0,
-                                })
-                                .show(ui, |ui| {
-                                    ui.set_max_width(SETTINGS_CONTENT_MAX);
-                                    crate::ui::chrome::alert_banner(ui, &err, true);
-                                });
-                        }
+                        // The save bar only exists while there is something to save, so a
+                        // clean page is all settings and no chrome.
+                        let show_bar =
+                            self.settings_dirty() || self.conv.settings_page.save_error.is_some();
+                        let scroll_h = if show_bar {
+                            (full_h - SAVE_BAR_H).max(80.0)
+                        } else {
+                            full_h
+                        };
                         // One scroll position per tab: switching from a long page scrolled
                         // down used to open the next one halfway down.
                         ScrollArea::vertical()
                             .id_salt(("settings_page_scroll", self.conv.settings_page.tab))
+                            .max_height(scroll_h)
                             .auto_shrink([false, false])
                             .scroll_bar_visibility(
                                 egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
@@ -265,7 +282,7 @@ impl OxiApp {
                                         // The reserved 10px scroll gutter adds to this;
                                         // 26 + 10 keeps optical symmetry with the left.
                                         right: 26,
-                                        top: 24,
+                                        top: 20 + crate::ui::window_chrome::TITLEBAR_H as i8,
                                         bottom: 48,
                                     })
                                     .show(ui, |ui| {
@@ -277,6 +294,9 @@ impl OxiApp {
                                         self.render_settings_body(ui);
                                     });
                             });
+                        if show_bar {
+                            self.render_settings_save_bar(ui);
+                        }
                         ui.expand_to_include_rect(ui.max_rect());
                     });
                     ui.expand_to_include_rect(ui.max_rect());
@@ -346,71 +366,158 @@ impl OxiApp {
         }
     }
 
-    fn render_settings_header(&mut self, ui: &mut Ui) {
-        Frame::new()
-            .fill(c_bg_main())
-            .inner_margin(Margin {
-                left: 36,
-                right: 24,
-                top: 16,
-                bottom: 14,
-            })
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    // The page's own section title names the tab; a breadcrumb here only
-                    // repeated it.
-                    ui.label(
-                        RichText::new("Settings")
-                            .size(FS_H1)
-                            .color(c_text())
-                            .strong(),
-                    );
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        let dirty = self.settings_dirty();
-                        if ui
-                            .add_enabled(dirty, crate::ui::chrome::primary_button_widget("Save"))
-                            .on_hover_text("Write settings.json and return to chat")
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
-                            self.save_settings_page();
-                        }
-                        if ghost_button(ui, "Cancel", false)
-                            .on_hover_text(
-                                "Return to chat (asks before discarding unsaved changes)",
-                            )
-                            .clicked()
-                        {
-                            // Same guarded flow as every other exit: with unsaved
-                            // changes this opens the Save/Discard/Stay prompt instead
-                            // of silently dropping them.
-                            self.request_settings_exit(SettingsExitAction::BackToChat);
-                        }
-                        if dirty {
-                            ui.label(
-                                RichText::new("Unsaved")
-                                    .size(FS_TINY)
-                                    .color(c_accent())
-                                    .strong(),
-                            );
-                        }
-                    });
-                });
-            });
+    /// Bottom bar shown while settings differ from what is on disk: what changed, Discard,
+    /// Save. A failed save shows its error here too, next to the button that retries it.
+    fn render_settings_save_bar(&mut self, ui: &mut Ui) {
+        let save_key = if cfg!(target_os = "macos") {
+            "\u{2318}S"
+        } else {
+            "Ctrl+S"
+        };
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(ui.max_rect().left(), ui.cursor().min.y),
+            egui::vec2(ui.max_rect().width(), SAVE_BAR_H),
+        );
+        ui.painter()
+            .rect_filled(rect, CornerRadius::ZERO, c_bg_sidebar());
         ui.painter().hline(
-            ui.min_rect().x_range(),
-            ui.cursor().min.y,
+            rect.x_range(),
+            rect.top(),
             Stroke::new(1.0, c_border_subtle()),
         );
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 36.0, rect.top()),
+            egui::pos2(
+                (rect.left() + 36.0 + SETTINGS_CONTENT_MAX).min(rect.right() - 36.0),
+                rect.bottom(),
+            ),
+        );
+        // Buttons first (right to left), then the message truncated to what is left: a long
+        // save error laid out first ran under Save/Discard.
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(Layout::right_to_left(Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let error = self.conv.settings_page.save_error.clone();
+                let dirty = self.settings_dirty();
+                if ui
+                    .add_enabled(dirty, crate::ui::chrome::primary_button_widget("Save"))
+                    .on_hover_text(format!("Write settings.json ({save_key})"))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    self.save_settings_page();
+                }
+                if dirty
+                    && ghost_button(ui, "Discard", false)
+                        .on_hover_text("Put back the settings as they were")
+                        .clicked()
+                {
+                    self.discard_settings_changes(ui.ctx());
+                }
+                ui.add_space(8.0);
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if error.is_some() {
+                        ui.label(
+                            RichText::new(ICON_WARNING)
+                                .font(egui::FontId::new(FS_TINY, icon_font()))
+                                .color(c_error_fg()),
+                        );
+                    } else {
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().circle_filled(dot.center(), 3.5, c_accent());
+                    }
+                    let text = error.unwrap_or_else(|| "You have unsaved changes".to_owned());
+                    ui.add(
+                        egui::Label::new(RichText::new(text).size(FS_SMALL).color(c_text()))
+                            .truncate(),
+                    );
+                });
+            },
+        );
+        ui.advance_cursor_after_rect(rect);
     }
 
     fn render_settings_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        ui.add_space(4.0);
+        let search = crate::ui::chrome::sidebar_text_field(
+            ui,
+            &mut self.conv.settings_page.search,
+            "Search settings\u{2026}",
+        );
+        if std::mem::take(&mut self.conv.settings_page.focus_search) {
+            search.request_focus();
+        }
+        let query = self.conv.settings_page.search.trim().to_owned();
+        let enter = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add_space(12.0);
 
+        // Leave room for the pinned Back row so a long result list scrolls above it.
+        let list_h = (ui.available_height() - 40.0).max(60.0);
+        if query.is_empty() {
+            ScrollArea::vertical()
+                .id_salt("settings_nav_scroll")
+                .max_height(list_h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| self.render_settings_nav(ui));
+        } else {
+            let hits = super::search::search(&query);
+            let mut chosen = enter.then(|| hits.first().map(|hit| hit.target)).flatten();
+            ScrollArea::vertical()
+                .id_salt("settings_search_scroll")
+                .max_height(list_h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    if hits.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("No matching settings")
+                                .size(FS_SMALL)
+                                .color(c_text_faint()),
+                        );
+                    }
+                    for (i, hit) in hits.iter().enumerate() {
+                        let crumb = match hit.card {
+                            Some(card) => format!("{} \u{203a} {card}", hit.page),
+                            None => hit.page.to_owned(),
+                        };
+                        if settings_search_row(ui, hit.label, &crumb, i == 0)
+                            .on_hover_text(if i == 0 { "Enter" } else { "" })
+                            .clicked()
+                        {
+                            chosen = Some(hit.target);
+                        }
+                    }
+                });
+            if let Some(target) = chosen {
+                self.go_to_settings_target(ui.ctx(), target);
+            }
+        }
+
+        // Pinned to the bottom of the sidebar, level with where the chat sidebar's rows end.
+        // In a `bottom_up` layout the first item added sits lowest.
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.add_space(2.0);
+            let back = if self.conv.editor.active.is_some() || self.conv.diff_view.open {
+                "Back to editor"
+            } else {
+                "Back to chat"
+            };
+            if settings_nav_row(ui, ICON_CHEVRON_LEFT, back, false)
+                .on_hover_text("Esc \u{2014} asks before discarding unsaved changes")
+                .clicked()
+            {
+                self.request_settings_exit(SettingsExitAction::BackToChat);
+            }
+            ui.add_space(2.0);
+        });
+    }
+
+    fn render_settings_nav(&mut self, ui: &mut Ui) {
         for (group_i, group) in SETTINGS_NAV.iter().enumerate() {
             if group_i > 0 {
                 ui.add_space(12.0);
@@ -426,20 +533,41 @@ impl OxiApp {
                 ui.add_space(2.0);
             }
         }
+    }
 
-        // Pinned to the bottom of the sidebar so "Back to chat" lines up with the
-        // chat sidebar's settings row. In a `bottom_up` layout the first item added
-        // sits lowest.
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(2.0);
-            if settings_nav_row(ui, ICON_CHEVRON_LEFT, "Back to chat", false)
-                .on_hover_text("Return to chat (asks before discarding unsaved changes)")
-                .clicked()
-            {
-                self.request_settings_exit(SettingsExitAction::BackToChat);
+    fn go_to_settings_target(
+        &mut self,
+        ctx: &egui::Context,
+        target: super::search::SettingsTarget,
+    ) {
+        use super::search::SettingsTarget;
+        match target {
+            SettingsTarget::Page { tab, card } => {
+                self.conv.settings_page.tab = tab;
+                if let Some(card) = card {
+                    crate::ui::chrome::request_settings_reveal(ctx, card);
+                }
             }
-            ui.add_space(2.0);
-        });
+            SettingsTarget::Provider { kind, card } => {
+                // A field every provider form has ("API key", "Base URL") opens the form already
+                // showing, or the active provider's when that is the Router, which has none.
+                let kind = kind.unwrap_or_else(|| {
+                    [
+                        self.conv.settings_page.provider_tab,
+                        self.conv.settings.active_provider,
+                    ]
+                    .into_iter()
+                    .find(|kind| *kind != LlmProviderKind::Router)
+                    .unwrap_or(LlmProviderKind::OpenAi)
+                });
+                self.conv.settings_page.tab = SettingsTab::Providers;
+                self.conv.settings_page.provider_tab = kind;
+                if let Some(card) = card {
+                    crate::ui::chrome::request_settings_reveal(ctx, card);
+                }
+            }
+        }
+        self.conv.settings_page.search.clear();
     }
 
     fn render_settings_body(&mut self, ui: &mut Ui) {
@@ -545,5 +673,49 @@ pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Respons
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    response
+}
+
+/// One Settings search result: the setting's name over a muted "Page › Card" breadcrumb.
+fn settings_search_row(ui: &mut Ui, label: &str, crumb: &str, first: bool) -> egui::Response {
+    let w = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(w, 42.0), egui::Sense::click());
+    let hovered = response.hovered() || response.has_focus();
+    if hovered || first {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(RADIUS_ROW),
+            if hovered {
+                c_row_hover()
+            } else {
+                c_row_active()
+            },
+        );
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
+    let text_w = rect.width() - 20.0;
+    let one_line = |text: &str, size: f32, color: Color32| {
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            text.to_owned(),
+            egui::FontId::proportional(size),
+            color,
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
+        ui.painter().layout_job(job)
+    };
+    let label_galley = one_line(label, FS_SMALL, c_text());
+    let crumb_galley = one_line(crumb, FS_TINY, c_text_faint());
+    let left = rect.left() + 10.0;
+    ui.painter()
+        .galley(egui::pos2(left, rect.top() + 5.0), label_galley, c_text());
+    ui.painter().galley(
+        egui::pos2(left, rect.bottom() - 5.0 - crumb_galley.size().y),
+        crumb_galley,
+        c_text_faint(),
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    ui.add_space(2.0);
     response
 }

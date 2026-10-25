@@ -104,8 +104,7 @@ impl OxiApp {
             if crate::update::can_self_update() {
                 ui.add_space(4.0);
                 let mut auto_update = self.conv.settings.auto_update;
-                if ui
-                    .checkbox(
+                if crate::ui::chrome::toggle(ui,
                         &mut auto_update,
                         RichText::new("Install updates automatically")
                             .size(FS_SMALL)

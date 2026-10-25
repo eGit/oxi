@@ -212,7 +212,8 @@ impl OxiApp {
         ui.add_space(8.0);
         ui.add_space(1.0);
 
-        const FOOTER_H: f32 = 36.0;
+        // Settings moved to the status bar; only a little bottom breathing room is left.
+        const FOOTER_H: f32 = 4.0;
         let content_height = (ui.available_height() - FOOTER_H).max(48.0);
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), content_height),
@@ -306,23 +307,6 @@ impl OxiApp {
                 }
             },
         );
-
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            if crate::ui::chrome::flat_button_icon(
-                ui,
-                ICON_SETTINGS,
-                "Settings",
-                FS_SMALL,
-                egui::vec2(ui.available_width(), 28.0),
-                c_text_muted(),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
-            {
-                self.open_settings_page();
-            }
-        });
     }
 
     fn render_explorer_directory(

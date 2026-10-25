@@ -677,6 +677,10 @@ pub struct SettingsPageState {
     pub save_error: Option<String>,
     pub open: bool,
     pub tab: SettingsTab,
+    /// Settings search query (left nav); results replace the page list while non-empty.
+    pub search: String,
+    /// Focus the search field next frame (Cmd/Ctrl+F on the Settings page).
+    pub focus_search: bool,
     pub provider_tab: LlmProviderKind,
     pub oauth_busy: bool,
     pub oauth_last_message: Option<String>,

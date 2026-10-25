@@ -443,8 +443,16 @@ impl OxiApp {
         if command_palette && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_file_picker_with(">");
         }
-        if open_settings && !self.conv.settings_page.open {
-            self.open_settings_page();
+        if open_settings {
+            self.toggle_settings_page();
+        }
+        if self.conv.settings_page.open && self.conv.settings_page.exit_prompt.is_none() {
+            if save_file && self.settings_dirty() {
+                self.save_settings_page();
+            }
+            if find_file {
+                self.conv.settings_page.focus_search = true;
+            }
         }
         if open_scratchpad && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_scratchpad();
@@ -550,6 +558,9 @@ impl OxiApp {
             if self.conv.settings_page.exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".
                 self.conv.settings_page.exit_prompt = None;
+            } else if !self.conv.settings_page.search.is_empty() {
+                // First Escape clears a settings search; the next one leaves.
+                self.conv.settings_page.search.clear();
             } else if self.settings_dirty() {
                 self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
             } else {

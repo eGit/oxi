@@ -212,6 +212,38 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 rec.still("settings-agent-mcp");
             }
         }
+        // Settings search: the result list, then a hit's card scrolled to and flashing.
+        rec.app().conv.settings_page.search = "awake".into();
+        rec.harness.run_steps(3);
+        rec.still("settings-search");
+        {
+            let app = rec.app();
+            app.conv.settings_page.search.clear();
+            app.conv.settings_page.tab = SettingsTab::Agent;
+        }
+        crate::ui::chrome::request_settings_reveal(&rec.harness.ctx, "Approvals");
+        rec.harness.run_steps(4);
+        rec.still("settings-search-reveal");
+        // A pending change shows the save bar.
+        rec.app().conv.settings.editor.minimap = !rec.app().conv.settings.editor.minimap;
+        rec.app().conv.settings_page.tab = SettingsTab::Editor;
+        rec.harness.run_steps(3);
+        rec.still("settings-unsaved");
+        // A long save error truncates before the buttons instead of running under them.
+        rec.app().conv.settings_page.save_error = Some(
+            "Could not save settings: Could not save credentials to the OS keychain: access to \
+             this item is restricted by the system policy for this application"
+                .into(),
+        );
+        rec.harness.run_steps(3);
+        rec.still("settings-save-error");
+        rec.app().conv.settings_page.save_error = None;
+        // Search into a provider form: "API key" opens the form and flashes Connection.
+        rec.app().conv.settings_page.search = "api key".into();
+        rec.harness.run_steps(3);
+        rec.still("settings-search-provider");
+        rec.app().conv.settings_page.search.clear();
+        rec.app().conv.settings.editor.minimap = !rec.app().conv.settings.editor.minimap;
         rec.app()
             .conv
             .settings

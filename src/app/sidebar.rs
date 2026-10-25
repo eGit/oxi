@@ -1,4 +1,4 @@
-//! Sidebar: workspace list, session rows, search, settings button.
+//! Sidebar: workspace list, session rows, search.
 
 mod workspace_list;
 
@@ -99,33 +99,13 @@ impl OxiApp {
             ui.add_space(8.0);
         }
 
-        const FOOTER_H: f32 = 36.0;
-        let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
-            .max_height(scroll_h)
             .auto_shrink([false, false])
             .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
-
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            if crate::ui::chrome::flat_button_icon(
-                ui,
-                ICON_SETTINGS,
-                "Settings",
-                FS_SMALL,
-                egui::vec2(ui.available_width(), 28.0),
-                c_text_muted(),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
-            {
-                self.open_settings_page();
-            }
-        });
 
         // The outer sidebar allocation already owns the full fixed width/height. Expanding
         // again from content made Conversations report a subtly different size than Explorer.

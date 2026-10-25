@@ -40,7 +40,7 @@ impl OxiApp {
                 ),
             );
 
-            ui.checkbox(&mut self.conv.settings.router.use_jev, "Use Jev for multilingual task classification (default)");
+            crate::ui::chrome::toggle(ui, &mut self.conv.settings.router.use_jev, "Use Jev for multilingual task classification (default)");
             field_hint(ui, "Uses your OpenRouter API key from Settings or OPENROUTER_API_KEY. Sends the current message and limited recent text context to Jev 1.13; classification is billed to OpenRouter and included in the monthly budget. Without a key, or on errors / uncertain answers, uses a conservative local fallback.");
 
             field_label(ui, "Default strategy (new chats; each chat can change it in the composer)");
@@ -94,7 +94,7 @@ impl OxiApp {
             field_hint(ui, "0 = no cap. Pay-per-use providers are skipped once the cap would be exceeded.");
 
             ui.add_space(8.0);
-            ui.checkbox(
+            crate::ui::chrome::toggle(ui,
                 &mut router.failover,
                 RichText::new("Continue with another provider when quota is reached")
                     .size(FS_SMALL)
@@ -106,7 +106,7 @@ impl OxiApp {
             field_hint(ui, "In Router mode it may switch to any eligible provider. An agent picked in the composer only switches to other ACP agents already set up on this machine, so it stays on subscriptions. At most two switches at a time; unfinished tools or pending approvals stop continuation. An explicit ‘only’ provider instruction disables switching.");
 
             ui.add_space(4.0);
-            ui.checkbox(
+            crate::ui::chrome::toggle(ui,
                 &mut router.wait_for_quota,
                 RichText::new("Wait for quota to reset when every provider is out")
                     .size(FS_SMALL)
@@ -121,12 +121,16 @@ impl OxiApp {
     fn render_router_quota_card(&mut self, ui: &mut Ui, configured: &[LlmProviderKind]) {
         card_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
+                // Hand-built header (it shares the row with Refresh), so it hooks into the
+                // Settings search reveal itself.
+                let flash = ui.painter().add(egui::Shape::Noop);
+                let title = ui.label(
                     RichText::new("Usage & quota")
                         .size(FS_BODY)
                         .color(c_text())
                         .strong(),
                 );
+                crate::ui::chrome::settings_reveal_flash(ui, "Usage & quota", title.rect, flash);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if quota::is_refreshing() {
                         ui.spinner();
@@ -138,7 +142,7 @@ impl OxiApp {
             ui.add_space(6.0);
 
             let router = &mut self.conv.settings.router;
-            ui.checkbox(
+            crate::ui::chrome::toggle(ui,
                 &mut router.read_claude_code_usage,
                 RichText::new("Read Claude Code subscription usage (/usage)")
                     .size(FS_SMALL)
@@ -147,7 +151,7 @@ impl OxiApp {
             .on_hover_text(
                 "Reads Claude Code's login (macOS keychain or ~/.claude/.credentials.json) only to query the usage windows. The token is never refreshed or used for requests. macOS asks for permission the first time.",
             );
-            ui.checkbox(
+            crate::ui::chrome::toggle(ui,
                 &mut router.read_codex_cli_usage,
                 RichText::new("Read Codex CLI subscription usage (/status)")
                     .size(FS_SMALL)
@@ -274,7 +278,7 @@ impl OxiApp {
                 let before = prefs.clone();
                 'prefs: {
                 ui.horizontal(|ui| {
-                    ui.checkbox(
+                    crate::ui::chrome::toggle(ui,
                         &mut prefs.enabled,
                         RichText::new(kind.label())
                             .size(FS_SMALL)

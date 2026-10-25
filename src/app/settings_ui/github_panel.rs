@@ -123,8 +123,7 @@ impl OxiApp {
                 Some("For remotes that reject token authentication, such as company servers."),
             );
             let mut use_system = self.conv.settings.git_use_system_cli;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut use_system,
                     RichText::new("Use system Git for push, pull, and fetch")
                         .size(FS_SMALL)
