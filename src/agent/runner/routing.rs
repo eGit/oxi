@@ -436,7 +436,7 @@ pub fn spawn_agent_run(
                         .flatten(),
                     chars_per_token: request.chars_per_token,
                     plan_mode: request.plan_mode,
-                    evidence_mode: request.evidence_mode,
+                    evidence_mode: request.evidence_mode.clone(),
                     undo_journal: request.undo_journal.clone(),
                 },
                 event_tx,

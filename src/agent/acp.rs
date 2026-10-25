@@ -225,7 +225,7 @@ pub struct AcpPrompt {
     pub plan_mode: bool,
     /// Evidence mode: ask the agent to prove the change (see [`crate::evidence`]) and follow up
     /// when the proof is incomplete.
-    pub evidence_mode: bool,
+    pub evidence_policy: crate::evidence::Policy,
     /// Repository root and snapshot tree of the work tree as the turn starts, for
     /// `evidence_base_checkout`.
     pub evidence_base: Option<(PathBuf, String)>,
@@ -1221,7 +1221,7 @@ async fn run_prompt(
         mut allowed_tools,
         cancel,
         plan_mode,
-        evidence_mode,
+        evidence_policy,
         evidence_base,
         ..
     } = req;
@@ -1236,6 +1236,13 @@ async fn run_prompt(
     let evidence_ready = crate::evidence::begin_turn(
         &handles.evidence_dir,
         &crate::evidence::TurnMarker {
+            baseline: evidence_base
+                .as_ref()
+                .map(|(repo, tree)| crate::evidence::WorkspaceState {
+                    root: repo.to_string_lossy().into_owned(),
+                    tree: tree.clone(),
+                })
+                .or_else(|| crate::evidence::WorkspaceState::capture(&cwd).ok()),
             turn: evidence_turn.clone(),
             started_ms: crate::evidence::now_ms(),
             cwd: cwd.to_string_lossy().into_owned(),
@@ -1247,7 +1254,7 @@ async fn run_prompt(
     )
     .inspect_err(|e| log::warn!("evidence: could not start the turn: {e}"))
     .is_ok();
-    let evidence_mode = evidence_mode && evidence_ready && !plan_mode;
+    let evidence_enabled = || evidence_policy.mode.enabled() && evidence_ready && !plan_mode;
     // Sent anyway, the agent would fail the turn with an opaque error or drop the images.
     if !images.is_empty() && !handles.images {
         let _ = reply.send(Err(format!(
@@ -1297,7 +1304,7 @@ async fn run_prompt(
         .await;
     let text = if plan_mode && !slash_command && !native_plan {
         format!("{ACP_PLAN_MODE_PREFIX}\n\n{text}")
-    } else if evidence_mode && !slash_command {
+    } else if evidence_enabled() && !slash_command {
         format!("{}\n\n{text}", crate::evidence::PROMPT_PREFIX)
     } else {
         text
@@ -1375,13 +1382,13 @@ async fn run_prompt(
         let finished = result
             .as_ref()
             .is_ok_and(|res| res["stopReason"].as_str() == Some("end_turn"));
-        if evidence_mode
+        if evidence_enabled()
             && finished
             && followups < crate::evidence::MAX_FOLLOWUPS
             && !cancel.load(Ordering::SeqCst)
         {
-            let report = crate::evidence::collect(&handles.evidence_dir, &evidence_turn, true);
-            let problems = report.problems();
+            let decision = evidence_policy.inspect(&handles.evidence_dir, &evidence_turn);
+            let problems = decision.problems;
             if !problems.is_empty() {
                 followups += 1;
                 if let Ok(res) = &result
@@ -1395,7 +1402,7 @@ async fn run_prompt(
                 )));
                 prompt_blocks = json!([{
                     "type": "text",
-                    "text": crate::evidence::followup_prompt(&problems),
+                    "text": format!("{}\n\n{}", crate::evidence::PROMPT_PREFIX, crate::evidence::followup_prompt(&problems)),
                 }]);
                 continue;
             }
@@ -1420,8 +1427,12 @@ async fn run_prompt(
         }
     }
     if evidence_ready {
-        let report = crate::evidence::collect(&handles.evidence_dir, &evidence_turn, evidence_mode);
-        if evidence_mode || !report.is_empty() {
+        let mut policy = evidence_policy.clone();
+        if plan_mode {
+            policy.mode = false.into();
+        }
+        let report = policy.inspect(&handles.evidence_dir, &evidence_turn).report;
+        if report.requested || !report.is_empty() {
             let _ = event_tx.send(AgentEvent::Evidence(Box::new(report)));
         }
     }

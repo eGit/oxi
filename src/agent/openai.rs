@@ -83,7 +83,6 @@ async fn run_chat_loop_at(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let mut context_char_budget = ctx.context_char_budget;
-    let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     // Reasoning the model streamed before each tool round, keyed by the round's first tool call
     // id: `(field it arrived in, text)`. Replayed only within this run, so the persisted wire
@@ -106,6 +105,12 @@ async fn run_chat_loop_at(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        let tools = super::dispatch::tools_for_round(tools, env);
+        let tools_chars = tools
+            .iter()
+            .map(|t| t.to_string().len())
+            .sum::<usize>()
+            .max(ctx.tools_chars);
         // Keep the accumulating history under the context ceiling as tool rounds pile up, so a
         // long multi-round run can't overflow the window mid-flight. A no-op until it's needed.
         crate::agent::history::trim_wire_history_to_budget(

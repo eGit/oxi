@@ -86,7 +86,7 @@ pub struct AgentRunRequest {
     /// Plan mode: read-only tools only, and the model is asked for a plan instead of changes.
     pub plan_mode: bool,
     /// Evidence mode: the change is to be proven with oxi's evidence tools.
-    pub evidence_mode: bool,
+    pub evidence_mode: crate::evidence::Mode,
     pub undo_journal: UndoJournal,
 }
 
@@ -194,11 +194,18 @@ fn spawn_agent_attempt(
             }
         }
         let max_rounds = settings.max_tool_rounds;
-        let evidence = if evidence_mode && !plan_mode {
-            match evidence::begin(&cwd, cancel.clone(), settings.bash_timeout_cap_secs).await {
+        let evidence = if !plan_mode {
+            let enabled = evidence_mode.enabled();
+            let policy =
+                crate::evidence::Policy::from_history(evidence_mode.clone(), &chat_for_history);
+            match evidence::begin(&cwd, cancel.clone(), settings.bash_timeout_cap_secs, policy)
+                .await
+            {
                 Ok(context) => {
-                    system.push_str("\n\n");
-                    system.push_str(crate::evidence::PROMPT_PREFIX);
+                    if enabled {
+                        system.push_str("\n\n");
+                        system.push_str(crate::evidence::PROMPT_PREFIX);
+                    }
                     Some(context)
                 }
                 Err(_) if cancel.load(Ordering::SeqCst) => {
@@ -214,7 +221,7 @@ fn spawn_agent_attempt(
             None
         };
         let mut tools = tool_definitions_json(&enabled, settings.bash_timeout_cap_secs);
-        if evidence.is_some() {
+        if evidence_mode.enabled() && !plan_mode {
             tools.extend(crate::evidence::tools::native_definitions());
         }
         // Connects new/changed servers and restarts dead ones; a no-op when everything is up.
@@ -476,7 +483,7 @@ async fn run_acp_turn(
     allowed_tools: Vec<String>,
     cancel: &Arc<AtomicBool>,
     plan_mode: bool,
-    evidence_mode: bool,
+    evidence_mode: crate::evidence::Mode,
     evidence_base: Option<(PathBuf, String)>,
 ) -> AgentOutcome {
     let last_user_idx = chat_for_history
@@ -517,6 +524,7 @@ async fn run_acp_turn(
 
     let env = cfg.acp_env();
 
+    let evidence_policy = crate::evidence::Policy::from_history(evidence_mode, chat_for_history);
     let req = crate::agent::acp::AcpPrompt {
         session_key: acp_session_key,
         cwd,
@@ -537,7 +545,7 @@ async fn run_acp_turn(
         allowed_tools,
         cancel: cancel.clone(),
         plan_mode,
-        evidence_mode,
+        evidence_policy,
         evidence_base,
     };
 

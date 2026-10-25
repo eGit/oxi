@@ -16,6 +16,7 @@ pub(super) async fn begin(
     cwd: &Path,
     cancel: Arc<AtomicBool>,
     timeout_cap_secs: u32,
+    policy: evidence::Policy,
 ) -> Result<Context, String> {
     let cwd = cwd.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -26,13 +27,19 @@ pub(super) async fn begin(
         execution.check_cancelled()?;
         // Keep the baseline separate from native tools' per-file undo journal.
         let baseline = crate::git::checkpoint::snapshot(&cwd).ok();
+        let state = baseline
+            .as_ref()
+            .map(evidence::WorkspaceState::from_snapshot)
+            .or_else(|| evidence::WorkspaceState::capture(&cwd).ok());
         let context = Context {
             dir: evidence::new_conn_dir(),
             execution,
+            policy: Some(policy),
         };
         evidence::begin_turn(
             &context.dir,
             &TurnMarker {
+                baseline: state,
                 turn: "turn".into(),
                 started_ms: evidence::now_ms(),
                 cwd: cwd.to_string_lossy().into_owned(),
@@ -60,8 +67,17 @@ pub(super) async fn run_provider_loop(
     let tx = p.tx;
     let result = crate::agent::dispatch::run_provider_loop(p, messages, tools).await;
     // Retain partial proof on errors or cancellation, before the terminal event.
-    let report = evidence::collect(&context.dir, &marker.turn, true);
-    let _ = tx.send(AgentEvent::Evidence(Box::new(report)));
+    let decision = context
+        .policy
+        .as_ref()
+        .map(|p| p.inspect(&context.dir, &marker.turn));
+    let report = decision.map_or_else(
+        || evidence::collect(&context.dir, &marker.turn, true),
+        |d| d.report,
+    );
+    if report.requested || !report.is_empty() {
+        let _ = tx.send(AgentEvent::Evidence(Box::new(report)));
+    }
     result
 }
 

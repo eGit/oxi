@@ -15,7 +15,9 @@
 
 pub mod capture;
 pub mod exec;
+mod policy;
 pub mod tools;
+pub use policy::{Mode, Policy, WorkspaceState};
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +55,8 @@ pub enum Origin {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceItem {
+    #[serde(default)]
+    pub workspace: Option<WorkspaceState>,
     pub id: String,
     pub kind: ItemKind,
     pub phase: Phase,
@@ -131,6 +135,11 @@ pub enum ClaimStatus {
 /// What one turn proved. Persisted with the assistant message.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceReport {
+    /// The workspace or a cited check/capture changed after the proof was produced.
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default)]
+    pub workspace: Option<WorkspaceState>,
     pub turn: String,
     /// The turn ran in evidence mode (so missing evidence is worth flagging).
     #[serde(default)]
@@ -170,6 +179,9 @@ impl EvidenceReport {
             claim.evidence.iter().map(|id| self.item(id)).collect();
         if cited.iter().flatten().any(|item| item.failed()) {
             return ClaimStatus::Contradicted;
+        }
+        if self.stale {
+            return ClaimStatus::Declared;
         }
         if !cited.is_empty() && cited.iter().all(|item| item.is_some_and(|i| i.attested())) {
             ClaimStatus::Attested
@@ -215,6 +227,9 @@ impl EvidenceReport {
     /// What an evidence-mode turn still owes, phrased for the agent. Empty when complete.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
+        if self.stale {
+            problems.push("The workspace changed after this evidence was produced. Verify the new state and submit fresh evidence.".into());
+        }
         if !self.submitted {
             problems.push(
                 "You have not called `evidence_submit`. Finish with it: a short summary and the claims you make, each citing evidence ids."
@@ -263,7 +278,7 @@ impl EvidenceReport {
 }
 
 /// Prepended to the user's message in evidence mode.
-pub const PROMPT_PREFIX: &str = "[Evidence mode] The user will judge this change by what it does, not by reading the code. Prove it with oxi's evidence tools:\n\
+pub const PROMPT_PREFIX: &str = "[Evidence mode] Verify changes when proof is needed. For an explanation or other task that makes no changes, do not create captures or run checks just because this mode is enabled. Reuse existing evidence only when it still covers the current workspace state; changes since that proof need fresh verification. If the task changes the workspace, or the user explicitly asks for proof, use oxi's evidence tools:\n\
 1. Before editing anything, capture each user-visible thing you will change with `evidence_capture` (phase \"before\"): a page of the running app (url), an app window (window), the screen, or an image/video a command writes (command + output). Use `seconds` for a short recording when motion or interaction matters, with `during` to drive it.\n\
 2. Make the change.\n\
 3. Capture the same things again with phase \"after\" and the same labels.\n\
@@ -290,6 +305,8 @@ pub fn followup_prompt(problems: &[String]) -> String {
 /// The turn the MCP server files evidence under, written by the app before each prompt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnMarker {
+    #[serde(default)]
+    pub baseline: Option<WorkspaceState>,
     pub turn: String,
     pub started_ms: u64,
     pub cwd: String,
@@ -357,18 +374,30 @@ pub fn next_id(turn_dir: &Path) -> String {
 pub fn save_item(turn_dir: &Path, item: &EvidenceItem) -> Result<(), String> {
     let dir = items_dir(turn_dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_vec_pretty(item).map_err(|e| e.to_string())?;
+    let mut item = item.clone();
+    item.workspace = item
+        .cwd
+        .as_deref()
+        .and_then(|cwd| WorkspaceState::capture(Path::new(cwd)).ok());
+    let json = serde_json::to_vec_pretty(&item).map_err(|e| e.to_string())?;
     crate::fsutil::write_atomic(&dir.join(format!("{}.json", item.id)), &json)
 }
 
 #[derive(Serialize, Deserialize)]
 struct Submission {
+    #[serde(default)]
+    workspace: Option<WorkspaceState>,
     summary: String,
     claims: Vec<Claim>,
 }
 
 pub fn save_submission(turn_dir: &Path, summary: &str, claims: &[Claim]) -> Result<(), String> {
+    let workspace = turn_dir
+        .parent()
+        .and_then(current_turn)
+        .and_then(|m| WorkspaceState::capture(Path::new(&m.cwd)).ok());
     let json = serde_json::to_vec_pretty(&Submission {
+        workspace,
         summary: summary.to_string(),
         claims: claims.to_vec(),
     })
@@ -398,10 +427,12 @@ pub fn collect(conn_dir: &Path, turn: &str, requested: bool) -> EvidenceReport {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
     let submitted = submission.is_some();
-    let (summary, claims) = submission
-        .map(|s| (s.summary, s.claims))
+    let (summary, claims, workspace) = submission
+        .map(|s| (s.summary, s.claims, s.workspace))
         .unwrap_or_default();
     EvidenceReport {
+        stale: false,
+        workspace,
         turn: turn.to_string(),
         requested,
         submitted,
@@ -417,6 +448,7 @@ mod tests {
 
     fn check(id: &str, exit: i32) -> EvidenceItem {
         EvidenceItem {
+            workspace: None,
             id: id.into(),
             kind: ItemKind::Check,
             phase: Phase::Check,
@@ -437,6 +469,7 @@ mod tests {
 
     fn capture(id: &str, label: &str, phase: Phase, file: &Path, origin: Origin) -> EvidenceItem {
         EvidenceItem {
+            workspace: None,
             id: id.into(),
             kind: ItemKind::Image,
             phase,
@@ -461,6 +494,8 @@ mod tests {
         let png = dir.join("a.png");
         std::fs::write(&png, b"png").unwrap();
         let report = EvidenceReport {
+            stale: false,
+            workspace: None,
             items: vec![
                 check("e1", 0),
                 check("e2", 1),
@@ -489,6 +524,8 @@ mod tests {
         let png = dir.join("a.png");
         std::fs::write(&png, b"png").unwrap();
         let mut report = EvidenceReport {
+            stale: false,
+            workspace: None,
             items: vec![capture("e1", "Login page", Phase::After, &png, Origin::Oxi)],
             claims: vec![Claim {
                 text: "It works".into(),
@@ -517,10 +554,13 @@ mod tests {
     #[test]
     fn store_round_trips_a_turn() {
         let conn = tempfile_dir("store");
+        let work = conn.join("work");
+        std::fs::create_dir_all(&work).unwrap();
         let marker = TurnMarker {
+            baseline: None,
             turn: "t1".into(),
             started_ms: 1,
-            cwd: "/tmp".into(),
+            cwd: work.to_string_lossy().into_owned(),
             repo: None,
             base_tree: None,
         };

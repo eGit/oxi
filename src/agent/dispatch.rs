@@ -82,7 +82,10 @@ pub(crate) fn evidence_followup(
         return false;
     };
     let report = crate::evidence::collect(&context.dir, &marker.turn, true);
-    let problems = report.problems();
+    let problems = context.policy.as_ref().map_or_else(
+        || report.problems(),
+        |p| p.inspect(&context.dir, &marker.turn).problems,
+    );
     if problems.is_empty() {
         return false;
     }
@@ -92,9 +95,32 @@ pub(crate) fn evidence_followup(
         problems.len()
     )));
     messages.push(serde_json::json!({
-        "role": "user", "content": crate::evidence::followup_prompt(&problems),
+        "role": "user", "content": format!("{}\n\n{}", crate::evidence::PROMPT_PREFIX, crate::evidence::followup_prompt(&problems)),
     }));
     true
+}
+
+/// Re-read the live switch before every request, including an end-of-response follow-up.
+pub(crate) fn tools_for_round(tools: &[Value], env: &ToolEnv) -> Vec<Value> {
+    let Some(context) = &env.evidence else {
+        return tools.to_vec();
+    };
+    let Some(policy) = &context.policy else {
+        return tools.to_vec();
+    };
+    let mut available: Vec<_> = tools
+        .iter()
+        .filter(|tool| {
+            !tool["function"]["name"]
+                .as_str()
+                .is_some_and(|n| crate::evidence::tools::NAMES.contains(&n))
+        })
+        .cloned()
+        .collect();
+    if policy.mode.enabled() {
+        available.extend(crate::evidence::tools::native_definitions());
+    }
+    available
 }
 
 /// Run the provider loop for `p.cfg` over `messages` until the model stops calling tools (or

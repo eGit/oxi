@@ -151,7 +151,14 @@ Also: chats saved per workspace, local Whisper voice dictation, web search witho
 `/evidence <task>` enables it and sends the task. ACP agents and API/local models that
 support tool calls can capture before/after images or recordings, run checks, and cite
 them in a report beneath their response. oxi records check results and flags missing or
-contradicted claims, requesting missing evidence at most twice. Commands use the usual
+contradicted claims, requesting missing evidence at most twice. You can enable or disable
+it while the agent is answering: the live choice applies when that response finishes.
+Informational replies with no workspace changes do not trigger automatic verification.
+Unverified edits from earlier in the conversation can still need proof. Existing reports
+in the same chat are reused when their cited checks/captures cover the exact current
+workspace state; later changes invalidate that proof. Older reports without workspace
+version information are not assumed to cover the current state.
+Commands use the usual
 shell approvals and, for API/local providers, the configured command timeout. Plan mode
 takes precedence. Capturing a URL needs a Chromium browser; screen/window capture depends
 on OS support and permissions. A model can produce captures without vision, but cannot

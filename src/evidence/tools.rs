@@ -13,6 +13,7 @@ use super::{Claim, EvidenceItem, ItemKind, Origin, Phase, TurnMarker};
 pub struct Context {
     pub dir: PathBuf,
     pub execution: super::exec::Execution,
+    pub policy: Option<super::Policy>,
 }
 
 /// Commands must use the same approval rules as an ordinary shell tool call.
@@ -58,7 +59,7 @@ const MAX_RUN_SECS: u64 = 1800;
 const REPLY_OUTPUT_CHARS: usize = 3000;
 
 /// Read by the agent in the server's `initialize` reply.
-pub const INSTRUCTIONS: &str = "The evidence_* tools let you prove a change works: oxi itself captures before/after screenshots or recordings and runs checks, then shows them to the user next to your reply. Use them when the user's message starts with [Evidence mode] or asks you to show or prove a result.";
+pub const INSTRUCTIONS: &str = "The evidence_* tools let you prove a change works: oxi itself captures before/after screenshots or recordings and runs checks, then shows them to the user next to your reply. In [Evidence mode], use them when changes need proof or the user explicitly asks for verification. Informational replies without changes need no automatic captures or checks. Reuse earlier proof only for the same workspace state.";
 
 /// The connection folder, when the app enabled evidence for this server.
 pub fn conn_dir() -> Option<PathBuf> {
@@ -162,6 +163,7 @@ pub fn call(name: &str, args: &Value) -> Result<String, String> {
     Context {
         dir: conn,
         execution: Default::default(),
+        policy: None,
     }
     .call(name, args)
 }
@@ -213,6 +215,7 @@ fn new_item(
     cwd: &str,
 ) -> EvidenceItem {
     EvidenceItem {
+        workspace: None,
         id,
         kind,
         phase,
@@ -520,6 +523,7 @@ mod tests {
         let cwd = conn.join("work");
         std::fs::create_dir_all(&cwd).unwrap();
         let marker = TurnMarker {
+            baseline: None,
             turn: "t1".into(),
             started_ms: super::super::now_ms(),
             cwd: path_string(&cwd),

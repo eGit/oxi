@@ -104,7 +104,7 @@ struct Chat {
     run: Option<Run>,
     queued: VecDeque<Prompt>,
     plan_mode: bool,
-    evidence_mode: bool,
+    evidence_mode: crate::evidence::Mode,
     pending_approval: Option<Value>,
     status: Option<String>,
     /// PTYs the agent opened; dropping one kills its command, so they live as long as it runs.
@@ -123,7 +123,7 @@ impl Chat {
             run: None,
             queued: VecDeque::new(),
             plan_mode: false,
-            evidence_mode: false,
+            evidence_mode: false.into(),
             pending_approval: None,
             status: None,
             terminals: Vec::new(),
@@ -615,7 +615,7 @@ impl Server {
             "title": chat.session.title,
             "config": config_json(&config),
             "plan": chat.plan_mode,
-            "evidence": chat.evidence_mode,
+            "evidence": chat.evidence_mode.enabled(),
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "approval": chat.pending_approval,
@@ -836,7 +836,7 @@ impl Server {
             chat.plan_mode = plan;
         }
         if let Some(evidence) = prompt.evidence {
-            chat.evidence_mode = evidence;
+            chat.evidence_mode.set(evidence);
         }
         let cwd = PathBuf::from(chat.root.trim());
         let expanded = crate::app::mentions::expand_at_mentions(&prompt.text, &cwd);
@@ -893,7 +893,7 @@ impl Server {
                 .chars_per_token
                 .unwrap_or(crate::agent::DEFAULT_CHARS_PER_TOKEN),
             plan_mode: chat.plan_mode,
-            evidence_mode: chat.evidence_mode,
+            evidence_mode: chat.evidence_mode.clone(),
             undo_journal,
         };
         let worker_tx = self.worker_channel(&id, run_id);
@@ -1460,7 +1460,7 @@ impl Server {
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "plan": chat.plan_mode,
-            "evidence": chat.evidence_mode,
+            "evidence": chat.evidence_mode.enabled(),
         });
         if let Some((outcome, error)) = finished {
             params["outcome"] = json!(outcome);
@@ -1916,6 +1916,8 @@ mod tests {
     fn evidence_reports_reach_headless_clients_with_their_claims() {
         let mut reply = ChatMessage::streaming_assistant(None);
         reply.evidence = Some(Box::new(crate::evidence::EvidenceReport {
+            stale: false,
+            workspace: None,
             turn: "turn".into(),
             requested: true,
             submitted: true,

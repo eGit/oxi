@@ -9,12 +9,14 @@ use std::sync::mpsc;
 fn environment() -> (PathBuf, ToolEnv) {
     let root = temp_workspace("evidence");
     let context = evidence::tools::Context {
-        dir: root.join("proof"),
+        dir: root.with_extension("proof"),
         execution: Default::default(),
+        policy: None,
     };
     evidence::begin_turn(
         &context.dir,
         &TurnMarker {
+            baseline: None,
             turn: "turn".into(),
             started_ms: 0,
             cwd: root.to_string_lossy().into_owned(),
@@ -168,4 +170,19 @@ fn simultaneous_runs_keep_their_evidence_separate() {
     for worker in workers {
         worker.join().unwrap();
     }
+}
+
+#[test]
+fn project_subprocesses_cannot_inherit_the_active_mcp_evidence_store() {
+    let mut command = std::process::Command::new(crate::agent::test_python_executable());
+    command
+        .args([
+            "-c",
+            "import os; print(os.environ.get('OXI_EVIDENCE_DIR', 'isolated'))",
+        ])
+        .env(crate::evidence::DIR_ENV, "another-conversation");
+    crate::agent::tools::sanitize_bash_env(&mut command);
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "isolated");
 }

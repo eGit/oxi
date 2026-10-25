@@ -396,9 +396,8 @@ pub struct SessionRunState {
     pub plan_mode: bool,
     /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
     pub last_turn_planned: bool,
-    /// Composer "Evidence" toggle for this chat: each turn proves its change with
-    /// before/after captures and checks oxi makes itself.
-    pub evidence_mode: bool,
+    /// Shared with the running turn: verify unproven changes at completion, reusing valid proof.
+    pub evidence_mode: crate::evidence::Mode,
     /// Provider/model the running turn bills against (the routed one under the Router), for
     /// the usage ledger.
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
@@ -409,7 +408,10 @@ pub struct SessionRunState {
 impl SessionRunState {
     /// Per-chat composer modes that must survive idle-state pruning.
     pub fn keeps_chat_modes(&self) -> bool {
-        self.plan_mode || self.evidence_mode || self.last_turn_planned || !self.queued.is_empty()
+        self.plan_mode
+            || self.evidence_mode.enabled()
+            || self.last_turn_planned
+            || !self.queued.is_empty()
     }
 
     pub fn clear_agent(&mut self) {

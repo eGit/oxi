@@ -243,7 +243,7 @@ async fn run_case(
             wire_candidate: None,
             chars_per_token: 4.0,
             plan_mode: plan,
-            evidence_mode: false,
+            evidence_mode: false.into(),
             undo_journal: Arc::new(std::sync::Mutex::new(Default::default())),
         },
         tx,

@@ -331,6 +331,7 @@ mod tests {
             evidence: Some(crate::evidence::tools::Context {
                 dir: PathBuf::from("unused-parent-evidence"),
                 execution: Default::default(),
+                policy: None,
             }),
         };
         let rt = tokio::runtime::Runtime::new().unwrap();

@@ -195,6 +195,12 @@ impl OxiApp {
                     });
                 });
                 ui.add_space(2.0);
+                if report.stale {
+                    ui.label(
+                        RichText::new("The workspace changed after this evidence was produced. Fresh verification is needed.")
+                            .size(FS_SMALL).color(c_warning_fg()),
+                    );
+                }
                 if report.requested && report.items.is_empty() && !report.submitted {
                     ui.label(
                         RichText::new("The agent gave no evidence for this response.")

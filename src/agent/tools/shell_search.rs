@@ -166,6 +166,8 @@ pub(crate) fn sanitize_bash_env(cmd: &mut Command) {
     }
     // Keep the child rooted: do not inherit a custom CDPATH that could redirect relative paths.
     cmd.env_remove("CDPATH");
+    // Project subprocesses must not attach themselves to the current MCP evidence turn.
+    cmd.env_remove(crate::evidence::DIR_ENV);
 }
 
 fn spawn_pipe_reader<R: Read + Send + 'static>(

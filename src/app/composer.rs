@@ -570,7 +570,9 @@ impl OxiApp {
     /// Round camera button for evidence mode: accent while on.
     fn render_evidence_toggle(&mut self, ui: &mut Ui) {
         let key = self.active_session_key();
-        let on = self.run_state(key).is_some_and(|r| r.evidence_mode);
+        let on = self
+            .run_state(key)
+            .is_some_and(|r| r.evidence_mode.enabled());
         let look = if on {
             crate::ui::chrome::IconButtonLook {
                 fill: c_pill_selected_bg(),
@@ -599,9 +601,9 @@ impl OxiApp {
             &look,
         )
         .on_hover_text(if on {
-            "Evidence mode is on: the agent proves each change with before/after captures and checks oxi runs itself. Click (or send /evidence) to turn it off."
+            "Evidence mode is on: oxi checks at the end when changes need proof. You can toggle it while the agent works; valid existing evidence is reused. Click (or send /evidence) to turn it off."
         } else {
-            "Evidence mode: the agent proves its changes with before/after screenshots or recordings and checks oxi runs itself"
+            "Evidence mode: verify changes when needed, including the current response. Informational replies and changes already covered by valid evidence need no repeat verification."
         });
         button.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -613,7 +615,7 @@ impl OxiApp {
         });
         if button.clicked() {
             let run = self.run_state_mut(key);
-            run.evidence_mode = !run.evidence_mode;
+            run.evidence_mode.toggle();
             self.conv.composer.focus_next_frame = true;
         }
     }

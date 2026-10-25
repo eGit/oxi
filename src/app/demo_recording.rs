@@ -2663,6 +2663,20 @@ impl Recorder<'_> {
 /// the agent's claims in the evidence card (`OXI_EVIDENCE_REVIEW=1`).
 fn review_evidence_ui(rec: &mut Recorder<'_>) {
     use crate::evidence::{Claim, EvidenceItem, EvidenceReport, ItemKind, Origin, Phase};
+    fn click_toggle(rec: &mut Recorder<'_>) {
+        let at = rec.label_center("Evidence mode").unwrap();
+        rec.harness.event(Event::PointerMoved(at));
+        rec.harness.run_steps(2);
+        for pressed in [true, false] {
+            rec.harness.event(Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.run_steps(2);
+        }
+    }
     rec.harness.run_steps(4);
     let dir = rec.project.join(".evidence-review");
     std::fs::create_dir_all(&dir).unwrap();
@@ -2693,6 +2707,7 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
         ),
     );
     let item = |id: &str, kind, phase, label: &str, file: Option<&Path>| EvidenceItem {
+        workspace: None,
         id: id.into(),
         kind,
         phase,
@@ -2715,6 +2730,8 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
     check.duration_ms = 4_210;
     check.output = "PASS src/login.test.ts\n  ✓ shows an inline error on a wrong password (41 ms)\n\nTests: 1 passed, 1 total".into();
     let report = EvidenceReport {
+        stale: false,
+        workspace: None,
         turn: "review".into(),
         requested: true,
         submitted: true,
@@ -2739,7 +2756,7 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
         let app = rec.app();
         app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
         let key = app.active_session_key();
-        app.run_state_mut(key).evidence_mode = true;
+        app.run_state_mut(key).evidence_mode.set(true);
         app.conv.sidebar.open = false;
     }
     rec.begin_turn("Show an error when the password is wrong");
@@ -2780,22 +2797,57 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
             }
         }
         for enabled in [false, true] {
-            let at = rec.label_center("Evidence mode").unwrap();
-            rec.harness.event(Event::PointerMoved(at));
-            rec.harness.run_steps(2);
-            for pressed in [true, false] {
-                rec.harness.event(Event::PointerButton {
-                    pos: at,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                });
-                rec.harness.run_steps(2);
-            }
+            click_toggle(rec);
             let key = rec.app().active_session_key();
-            assert_eq!(rec.app().run_state(key).unwrap().evidence_mode, enabled);
+            assert_eq!(
+                rec.app().run_state(key).unwrap().evidence_mode.enabled(),
+                enabled
+            );
         }
     }
+    rec.app()
+        .set_active_session_provider(LlmProviderKind::OpenAi);
+    rec.harness.set_pixels_per_point(1.0);
+    rec.harness.run_steps(4);
+    rec.harness.set_size(egui::vec2(1240.0, 900.0));
+    {
+        let report = rec
+            .app()
+            .active_session_mut()
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.evidence.as_deref_mut())
+            .unwrap();
+        report.stale = true;
+    }
+    rec.harness.run_steps(5);
+    assert!(rec.harness.query_by_label("The workspace changed after this evidence was produced. Fresh verification is needed.").is_some());
+    rec.still("evidence-stale");
+    let key = rec.app().active_session_key();
+    rec.app().run_state_mut(key).evidence_mode.set(false);
+    let running_mode = rec.app().run_state(key).unwrap().evidence_mode.clone();
+    rec.begin_turn("Explain how Evidence chooses whether verification is needed");
+    rec.send(AgentEvent::TextDelta("Informational replies need no automatic verification. Enabling Evidence during an edit applies at the end of that response.".into()));
+    rec.harness.run_steps(6);
+    assert!(rec.harness.query_by_label("Stop generation").is_some());
+    click_toggle(rec);
+    assert!(
+        running_mode.enabled(),
+        "the in-flight response must see the composer toggle immediately"
+    );
+    rec.still("evidence-enabled-during-response");
+    rec.app().conv.composer.input = "/evidence".into();
+    rec.app().send_message();
+    assert!(
+        !running_mode.enabled(),
+        "a bare /evidence must toggle the running turn immediately"
+    );
+    assert!(
+        rec.app().run_state(key).unwrap().queued.is_empty(),
+        "the toggle must not be queued as a new task"
+    );
+    rec.finish_turn();
 }
 
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed
