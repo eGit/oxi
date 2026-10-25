@@ -119,6 +119,7 @@ fn setup(
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         },
     }
 }
@@ -2760,6 +2761,41 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
         std::thread::sleep(Duration::from_millis(30));
     }
     rec.still("evidence-card-narrow");
+    for provider in [LlmProviderKind::OpenAi, LlmProviderKind::Ollama] {
+        rec.app().set_active_session_provider(provider);
+        for scale in [1.0, 1.5, 2.0] {
+            rec.harness.set_pixels_per_point(scale);
+            rec.harness.run_steps(4);
+            for width in [1240.0, 560.0, 430.0] {
+                rec.harness.set_size(egui::vec2(width, 900.0));
+                rec.harness.run_steps(6);
+                let rendered = rec.harness.render().unwrap();
+                assert_eq!(
+                    rendered.dimensions(),
+                    ((width * scale) as u32, (900.0 * scale) as u32)
+                );
+                assert!(rec.harness.query_by_label("Evidence mode").is_some());
+                assert!(rec.harness.query_by_label("Send message").is_some());
+                rec.still(&format!("evidence-{provider:?}-{width}-{scale}"));
+            }
+        }
+        for enabled in [false, true] {
+            let at = rec.label_center("Evidence mode").unwrap();
+            rec.harness.event(Event::PointerMoved(at));
+            rec.harness.run_steps(2);
+            for pressed in [true, false] {
+                rec.harness.event(Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                rec.harness.run_steps(2);
+            }
+            let key = rec.app().active_session_key();
+            assert_eq!(rec.app().run_state(key).unwrap().evidence_mode, enabled);
+        }
+    }
 }
 
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed

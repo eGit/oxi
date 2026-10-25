@@ -90,6 +90,7 @@ async fn run_chat_loop_at(
     // history stays plain Chat Completions.
     let mut reasoning_by_call: HashMap<String, (&'static str, String)> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     let mut overflow_retries = 0u32;
     // A round whose "final answer" was really a tool call written out as text (the server's
@@ -453,6 +454,17 @@ async fn run_chat_loop_at(
             "role": "assistant",
             "content": assistant_text,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())
@@ -908,6 +920,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1003,6 +1016,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1071,6 +1085,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1164,6 +1179,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "read hello.txt"})];
         let tools = vec![json!({
@@ -1291,6 +1307,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "make an app"})];
         let tools = vec![json!({

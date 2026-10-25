@@ -501,6 +501,7 @@ pub async fn run_codex_responses_loop(
     let rtools = responses_tools(tools);
     let mut reasoning_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -794,6 +795,17 @@ pub async fn run_codex_responses_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())
@@ -919,6 +931,7 @@ mod tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

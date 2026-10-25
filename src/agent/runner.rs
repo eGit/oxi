@@ -85,7 +85,7 @@ pub struct AgentRunRequest {
     pub chars_per_token: f32,
     /// Plan mode: read-only tools only, and the model is asked for a plan instead of changes.
     pub plan_mode: bool,
-    /// Evidence mode (ACP agents): the change is to be proven with oxi's evidence tools.
+    /// Evidence mode: the change is to be proven with oxi's evidence tools.
     pub evidence_mode: bool,
     pub undo_journal: UndoJournal,
 }
@@ -110,6 +110,7 @@ impl AgentExecutor {
     }
 }
 
+mod evidence;
 mod handoff;
 mod routing;
 use handoff::{acp_history_transcript, acp_missed_transcript, with_agent_notes};
@@ -193,7 +194,29 @@ fn spawn_agent_attempt(
             }
         }
         let max_rounds = settings.max_tool_rounds;
+        let evidence = if evidence_mode && !plan_mode {
+            match evidence::begin(&cwd, cancel.clone(), settings.bash_timeout_cap_secs).await {
+                Ok(context) => {
+                    system.push_str("\n\n");
+                    system.push_str(crate::evidence::PROMPT_PREFIX);
+                    Some(context)
+                }
+                Err(_) if cancel.load(Ordering::SeqCst) => {
+                    let _ = tx.send(AgentEvent::Finished(AgentOutcome::Cancelled));
+                    return;
+                }
+                Err(error) => {
+                    finish_with_error(&tx, format!("Could not start evidence mode: {error}"));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let mut tools = tool_definitions_json(&enabled, settings.bash_timeout_cap_secs);
+        if evidence.is_some() {
+            tools.extend(crate::evidence::tools::native_definitions());
+        }
         // Connects new/changed servers and restarts dead ones; a no-op when everything is up.
         // Blocking (process spawns, HTTP handshakes), so keep it off the async workers.
         {
@@ -242,6 +265,7 @@ fn spawn_agent_attempt(
             mcp: (!plan_mode).then_some(mcp),
             undo_journal: Some(undo_journal),
             subagent: None,
+            evidence,
         };
         let mut gate = ApprovalGate::new(
             ApprovalPolicy {
@@ -279,7 +303,7 @@ fn spawn_agent_attempt(
                 }
             };
 
-            let r = crate::agent::dispatch::run_provider_loop(
+            let r = evidence::run_provider_loop(
                 crate::agent::dispatch::DispatchParams {
                     cfg: &cfg,
                     client: &client,

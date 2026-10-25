@@ -1,6 +1,6 @@
-//! Evidence mode: an ACP agent proves its change works instead of only saying so.
+//! Evidence mode: an agent proves its change works instead of only saying so.
 //!
-//! oxi's MCP server (`agent::acp::oxi_mcp`) gives the agent evidence tools. Captures (screenshots
+//! Native provider loops and oxi's ACP MCP server offer the same evidence tools. Captures (screenshots
 //! of a URL or an app window, screen recordings, files a command writes) and checks (commands
 //! such as the test suite) are made by oxi itself, so what they show is not the agent's word. The
 //! agent ends with `evidence_submit`: a summary and claims, each citing the evidence behind it.
@@ -11,6 +11,7 @@
 //! (`<data dir>/evidence/<id>`, handed to the server in [`DIR_ENV`]): the app writes the current
 //! turn's marker before each prompt, the server writes items and the submission under the turn's
 //! folder, and the app collects them into an [`EvidenceReport`] when the turn ends.
+//! Native runs pass their storage and execution limits explicitly, without process-wide state.
 
 pub mod capture;
 pub mod exec;

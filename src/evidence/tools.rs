@@ -8,6 +8,43 @@ use serde_json::{Value, json};
 use super::capture::{self, ScreenTarget};
 use super::{Claim, EvidenceItem, ItemKind, Origin, Phase, TurnMarker};
 
+/// Evidence storage and command limits belonging to a single agent run.
+#[derive(Clone, Debug)]
+pub struct Context {
+    pub dir: PathBuf,
+    pub execution: super::exec::Execution,
+}
+
+/// Commands must use the same approval rules as an ordinary shell tool call.
+pub fn command_args(name: &str, args: &Value) -> Option<Value> {
+    if !matches!(name, CAPTURE | RUN) {
+        return None;
+    }
+    let command = [&args["command"], &args["during"]]
+        .into_iter()
+        .filter_map(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" && ");
+    (!command.is_empty()).then(|| json!({ "command": command }))
+}
+
+pub fn native_definitions() -> Vec<Value> {
+    definitions()
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["inputSchema"],
+                }
+            })
+        })
+        .collect()
+}
+
 pub const CAPTURE: &str = "evidence_capture";
 pub const ADD: &str = "evidence_add";
 pub const RUN: &str = "evidence_run";
@@ -122,18 +159,30 @@ pub fn definitions() -> Vec<Value> {
 /// Handle one evidence tool call: the text for the agent, or an error.
 pub fn call(name: &str, args: &Value) -> Result<String, String> {
     let conn = conn_dir().ok_or("Evidence is not available in this session.")?;
-    let marker = super::current_turn(&conn).ok_or(
-        "oxi has not started an evidence turn yet; try again after the user's next message.",
-    )?;
-    let turn_dir = super::turn_dir(&conn, &marker.turn);
-    std::fs::create_dir_all(&turn_dir).map_err(|e| e.to_string())?;
-    match name {
-        CAPTURE => capture_tool(args, &marker, &turn_dir),
-        ADD => add_tool(args, &marker, &turn_dir),
-        RUN => run_tool(args, &marker, &turn_dir),
-        BASE_CHECKOUT => base_checkout(&marker, &turn_dir),
-        SUBMIT => submit_tool(args, &conn, &marker, &turn_dir),
-        _ => Err(format!("Unknown evidence tool `{name}`.")),
+    Context {
+        dir: conn,
+        execution: Default::default(),
+    }
+    .call(name, args)
+}
+
+impl Context {
+    pub fn call(&self, name: &str, args: &Value) -> Result<String, String> {
+        self.execution.check_cancelled()?;
+        let conn = &self.dir;
+        let marker = super::current_turn(conn).ok_or(
+            "oxi has not started an evidence turn yet; try again after the user's next message.",
+        )?;
+        let turn_dir = super::turn_dir(conn, &marker.turn);
+        std::fs::create_dir_all(&turn_dir).map_err(|e| e.to_string())?;
+        match name {
+            CAPTURE => capture_tool(args, &marker, &turn_dir, &self.execution),
+            ADD => add_tool(args, &marker, &turn_dir, &self.execution),
+            RUN => run_tool(args, &marker, &turn_dir, &self.execution),
+            BASE_CHECKOUT => base_checkout(&marker, &turn_dir),
+            SUBMIT => submit_tool(args, conn, &marker, &turn_dir),
+            _ => Err(format!("Unknown evidence tool `{name}`.")),
+        }
     }
 }
 
@@ -186,7 +235,12 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn capture_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<String, String> {
+fn capture_tool(
+    args: &Value,
+    marker: &TurnMarker,
+    turn_dir: &Path,
+    execution: &super::exec::Execution,
+) -> Result<String, String> {
     let phase = phase_arg(args)?;
     let label = required(args, "label")?;
     let cwd = Path::new(&marker.cwd);
@@ -212,33 +266,42 @@ fn capture_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<St
         }
         let width = args["width"].as_u64().unwrap_or(1280).clamp(320, 3840) as u32;
         let height = args["height"].as_u64().unwrap_or(800).clamp(240, 4000) as u32;
-        capture::url(
+        capture::url_with_execution(
             url,
             &stem.with_extension("png"),
             width,
             height,
             wait_ms.unwrap_or(2000),
+            execution,
         )?
     } else if let Some(command) = str_arg(args, "command") {
         let output = required(args, "output")?;
-        let (captured, result) = capture::command_output(
+        let (captured, result) = capture::command_output_with_execution(
             command,
             output,
             cwd,
             Duration::from_secs(DEFAULT_RUN_SECS),
             &stem,
+            execution,
         )?;
         command_result = Some((command.to_string(), result));
         captured
     } else {
         if let Some(ms) = wait_ms {
-            std::thread::sleep(Duration::from_millis(ms.min(30_000)));
+            execution.wait(Duration::from_millis(ms.min(30_000)))?;
         }
         let target = match str_arg(args, "window") {
             Some(window) => ScreenTarget::Window(window),
             None => ScreenTarget::Screen,
         };
-        capture::screen(target, &stem, seconds, str_arg(args, "during"), cwd)?
+        capture::screen_with_execution(
+            target,
+            &stem,
+            seconds,
+            str_arg(args, "during"),
+            cwd,
+            execution,
+        )?
     };
     let mut item = new_item(
         id.clone(),
@@ -271,7 +334,12 @@ fn capture_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<St
     ))
 }
 
-fn add_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<String, String> {
+fn add_tool(
+    args: &Value,
+    marker: &TurnMarker,
+    turn_dir: &Path,
+    execution: &super::exec::Execution,
+) -> Result<String, String> {
     let phase = phase_arg(args)?;
     let label = required(args, "label")?;
     let path = Path::new(&marker.cwd).join(required(args, "path")?);
@@ -289,7 +357,7 @@ fn add_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<String
     let mut item = new_item(id.clone(), kind, phase, label, Origin::Agent, &marker.cwd);
     item.fresh = modified_ms >= marker.started_ms;
     item.preview = (kind == ItemKind::Video)
-        .then(|| capture::video_preview(&file))
+        .then(|| capture::video_preview_with_execution(&file, execution))
         .flatten()
         .map(|p| path_string(&p));
     item.file = Some(path_string(&file));
@@ -304,14 +372,19 @@ fn add_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<String
     })
 }
 
-fn run_tool(args: &Value, marker: &TurnMarker, turn_dir: &Path) -> Result<String, String> {
+fn run_tool(
+    args: &Value,
+    marker: &TurnMarker,
+    turn_dir: &Path,
+    execution: &super::exec::Execution,
+) -> Result<String, String> {
     let label = required(args, "label")?;
     let command = required(args, "command")?;
     let timeout = args["timeout_secs"]
         .as_u64()
         .unwrap_or(DEFAULT_RUN_SECS)
         .clamp(1, MAX_RUN_SECS);
-    let result = super::exec::run(
+    let result = execution.run(
         command,
         Path::new(&marker.cwd),
         Duration::from_secs(timeout),
@@ -459,6 +532,7 @@ mod tests {
             &json!({"label": "Unit tests", "command": "echo 3 passed"}),
             &marker,
             &turn_dir,
+            &Default::default(),
         )
         .unwrap();
         assert!(ok.starts_with("e1: \"Unit tests\" passed"), "{ok}");
@@ -466,6 +540,7 @@ mod tests {
             &json!({"label": "Lint", "command": "exit 2"}),
             &marker,
             &turn_dir,
+            &Default::default(),
         )
         .unwrap();
         assert!(failed.contains("failed (exit code 2)"), "{failed}");
@@ -474,6 +549,7 @@ mod tests {
             &json!({"phase": "after", "label": "Home", "path": "shot.png"}),
             &marker,
             &turn_dir,
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(added, "Added e3.");

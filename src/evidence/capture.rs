@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use super::ItemKind;
-use super::exec::{self, CmdResult};
+use super::exec::{CmdResult, Execution};
 
 /// Longest recording oxi makes (and the longest stretch a GIF preview keeps).
 pub const MAX_VIDEO_SECS: u64 = 30;
@@ -34,8 +34,13 @@ fn quiet(command: &mut Command) -> &mut Command {
         .stderr(Stdio::piped())
 }
 
-fn finish(c: Command, what: &str, timeout: Duration) -> Result<CmdResult, String> {
-    let result = exec::run_child(c, timeout)?;
+fn finish(
+    c: Command,
+    what: &str,
+    timeout: Duration,
+    execution: &Execution,
+) -> Result<CmdResult, String> {
+    let result = execution.run_child(c, timeout)?;
     if result.timed_out {
         return Err(format!("{what} timed out."));
     }
@@ -110,12 +115,24 @@ pub fn find_browser() -> Option<PathBuf> {
 }
 
 /// Screenshot `url` at a `width`×`height` viewport (rendered at 2× for sharpness).
+#[cfg(test)]
 pub fn url(
     url: &str,
     out: &Path,
     width: u32,
     height: u32,
     wait_ms: u64,
+) -> Result<Captured, String> {
+    url_with_execution(url, out, width, height, wait_ms, &Execution::default())
+}
+
+pub fn url_with_execution(
+    url: &str,
+    out: &Path,
+    width: u32,
+    height: u32,
+    wait_ms: u64,
+    execution: &Execution,
 ) -> Result<Captured, String> {
     let browser = find_browser().ok_or(
         "No Chrome, Chromium, Edge or Brave found for headless capture. Capture the page another way (a window capture of a visible browser, or a command that writes a screenshot) instead.",
@@ -136,7 +153,12 @@ pub fn url(
     .arg(format!("--screenshot={}", out.display()))
     .arg(url);
     quiet(&mut c);
-    let result = finish(c, "The headless browser", Duration::from_secs(90));
+    let result = finish(
+        c,
+        "The headless browser",
+        Duration::from_secs(90),
+        execution,
+    );
     let _ = std::fs::remove_dir_all(&profile);
     let result = result?;
     require_file(out, "The headless browser", &result)?;
@@ -165,23 +187,38 @@ pub enum ScreenTarget<'a> {
 
 /// Capture a window or the screen: an image, or a recording of `seconds` while `during` (a
 /// shell command run in `cwd`) drives the app.
-pub fn screen(
+pub fn screen_with_execution(
     target: ScreenTarget<'_>,
     out_stem: &Path,
     seconds: u64,
     during: Option<&str>,
     cwd: &Path,
+    execution: &Execution,
 ) -> Result<Captured, String> {
-    platform::screen(target, out_stem, seconds.min(MAX_VIDEO_SECS), during, cwd)
+    platform::screen(
+        target,
+        out_stem,
+        seconds.min(MAX_VIDEO_SECS),
+        during,
+        cwd,
+        execution,
+    )
 }
 
 /// Start `during` (if any) shortly after a recording began, so its first action is recorded.
-fn spawn_during(during: Option<&str>, cwd: &Path) -> Option<std::thread::JoinHandle<()>> {
+#[cfg(unix)]
+fn spawn_during(
+    during: Option<&str>,
+    cwd: &Path,
+    execution: &Execution,
+) -> Option<std::thread::JoinHandle<()>> {
     let command = during?.to_string();
     let cwd = cwd.to_path_buf();
+    let execution = execution.clone();
     Some(std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(700));
-        let _ = exec::run(&command, &cwd, Duration::from_secs(MAX_VIDEO_SECS + 30));
+        if execution.wait(Duration::from_millis(700)).is_ok() {
+            let _ = execution.run(&command, &cwd, Duration::from_secs(MAX_VIDEO_SECS + 30));
+        }
     }))
 }
 
@@ -194,7 +231,7 @@ mod platform {
     const MIN_H: f64 = 200.0;
 
     /// The window to capture, brought to the front first when it is only shown as a thumbnail.
-    fn front_window(query: &str) -> Result<mac::Window, String> {
+    fn front_window(query: &str, execution: &Execution) -> Result<mac::Window, String> {
         let missing = || {
             let names = mac::window_owners();
             format!(
@@ -218,8 +255,8 @@ mod platform {
         let mut activate = Command::new("osascript");
         activate.args(["-e", &script]);
         quiet(&mut activate);
-        let _ = exec::run_child(activate, Duration::from_secs(10));
-        std::thread::sleep(Duration::from_millis(900));
+        let _ = execution.run_child(activate, Duration::from_secs(10));
+        execution.wait(Duration::from_millis(900))?;
         let window = mac::find_window(query).ok_or_else(missing)?;
         if window.width >= MIN_W && window.height >= MIN_H {
             return Ok(window);
@@ -236,13 +273,14 @@ mod platform {
         seconds: u64,
         during: Option<&str>,
         cwd: &Path,
+        execution: &Execution,
     ) -> Result<Captured, String> {
         if !mac::screen_capture_allowed() {
             mac::request_screen_capture();
             return Err("oxi is not allowed to record the screen. Ask the user to allow oxi in System Settings > Privacy & Security > Screen & System Audio Recording (then restart oxi), or capture another way (url, or a command that writes the image).".into());
         }
         let window = match target {
-            ScreenTarget::Window(query) => Some(front_window(query)?),
+            ScreenTarget::Window(query) => Some(front_window(query, execution)?),
             ScreenTarget::Screen => None,
         };
         let source = match &window {
@@ -259,7 +297,7 @@ mod platform {
             };
             c.arg(&out);
             quiet(&mut c);
-            let result = finish(c, "screencapture", Duration::from_secs(30))?;
+            let result = finish(c, "screencapture", Duration::from_secs(30), execution)?;
             require_file(&out, "screencapture", &result)?;
             return Ok(Captured {
                 file: out,
@@ -279,15 +317,20 @@ mod platform {
         };
         c.arg(&out);
         quiet(&mut c);
-        let driver = spawn_during(during, cwd);
-        let result = finish(c, "screencapture", Duration::from_secs(seconds + 30));
+        let driver = spawn_during(during, cwd, execution);
+        let result = finish(
+            c,
+            "screencapture",
+            Duration::from_secs(seconds + 30),
+            execution,
+        );
         if let Some(driver) = driver {
             let _ = driver.join();
         }
         let result = result?;
         require_file(&out, "screencapture", &result)?;
         Ok(Captured {
-            preview: video_preview(&out),
+            preview: video_preview_with_execution(&out, execution),
             file: out,
             kind: ItemKind::Video,
             source: format!("{source} · {seconds}s recording"),
@@ -310,9 +353,12 @@ mod platform {
         seconds: u64,
         during: Option<&str>,
         cwd: &Path,
+        execution: &Execution,
     ) -> Result<Captured, String> {
-        if let ScreenTarget::Window(_) = target {
-            return Err("Window capture is only available on macOS for now. Use screen, url, or a command that writes the image.".into());
+        if let ScreenTarget::Window(query) = target {
+            return Err(format!(
+                "Cannot capture window \"{query}\": window capture is only available on macOS for now. Use screen, url, or a command that writes the image."
+            ));
         }
         let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
         if seconds == 0 {
@@ -329,7 +375,7 @@ mod platform {
                 return Err("No screenshot tool found (install grim on Wayland or ImageMagick's import on X11).".into());
             };
             quiet(&mut c);
-            let result = finish(c, "The screenshot tool", Duration::from_secs(30))?;
+            let result = finish(c, "The screenshot tool", Duration::from_secs(30), execution)?;
             require_file(&out, "The screenshot tool", &result)?;
             return Ok(Captured {
                 file: out,
@@ -351,15 +397,15 @@ mod platform {
             .args(["-i", &display, "-pix_fmt", "yuv420p"])
             .arg(&out);
         quiet(&mut c);
-        let driver = spawn_during(during, cwd);
-        let result = finish(c, "ffmpeg", Duration::from_secs(seconds + 30));
+        let driver = spawn_during(during, cwd, execution);
+        let result = finish(c, "ffmpeg", Duration::from_secs(seconds + 30), execution);
         if let Some(driver) = driver {
             let _ = driver.join();
         }
         let result = result?;
         require_file(&out, "ffmpeg", &result)?;
         Ok(Captured {
-            preview: video_preview(&out),
+            preview: video_preview_with_execution(&out, execution),
             file: out,
             kind: ItemKind::Video,
             source: format!("Screen · {seconds}s recording"),
@@ -372,19 +418,27 @@ mod platform {
     use super::*;
 
     pub fn screen(
-        _target: ScreenTarget<'_>,
+        target: ScreenTarget<'_>,
         _out_stem: &Path,
         _seconds: u64,
         _during: Option<&str>,
         _cwd: &Path,
+        execution: &Execution,
     ) -> Result<Captured, String> {
-        Err("Window and screen capture are not available on Windows yet. Use url, or a command that writes the image or video.".into())
+        let target = match target {
+            ScreenTarget::Window(query) => format!("Window \"{query}\""),
+            ScreenTarget::Screen => "Screen".into(),
+        };
+        Err(format!(
+            "{target} capture is not available on Windows yet. Use url, or a command that writes the image or video."
+        ))
     }
 }
 
 // ── Command output ──────────────────────────────────────────────────────────────────────────
 
 /// Run `command`, then take the image or video it wrote to `output` (relative to `cwd`).
+#[cfg(test)]
 pub fn command_output(
     command: &str,
     output: &str,
@@ -392,12 +446,30 @@ pub fn command_output(
     timeout: Duration,
     dest_stem: &Path,
 ) -> Result<(Captured, CmdResult), String> {
+    command_output_with_execution(
+        command,
+        output,
+        cwd,
+        timeout,
+        dest_stem,
+        &Execution::default(),
+    )
+}
+
+pub fn command_output_with_execution(
+    command: &str,
+    output: &str,
+    cwd: &Path,
+    timeout: Duration,
+    dest_stem: &Path,
+    execution: &Execution,
+) -> Result<(Captured, CmdResult), String> {
     let source = cwd.join(output);
     let kind = kind_of(&source).ok_or_else(|| {
         format!("`output` must be an image or video file (png, jpg, gif, webp, mp4, mov, webm), not {output}.")
     })?;
     let before = std::fs::metadata(&source).and_then(|m| m.modified()).ok();
-    let result = exec::run(command, cwd, timeout)?;
+    let result = execution.run(command, cwd, timeout)?;
     let written = std::fs::metadata(&source)
         .and_then(|m| m.modified())
         .ok()
@@ -413,7 +485,7 @@ pub fn command_output(
     }
     let file = copy_into(&source, dest_stem)?;
     let preview = (kind == ItemKind::Video)
-        .then(|| video_preview(&file))
+        .then(|| video_preview_with_execution(&file, execution))
         .flatten();
     Ok((
         Captured {
@@ -457,7 +529,7 @@ fn ffmpeg() -> Option<PathBuf> {
 }
 
 /// An animated GIF of the recording for the chat (ffmpeg), else a poster frame (Quick Look).
-pub fn video_preview(video: &Path) -> Option<PathBuf> {
+pub fn video_preview_with_execution(video: &Path, execution: &Execution) -> Option<PathBuf> {
     if let Some(ffmpeg) = ffmpeg() {
         let gif = video.with_extension("preview.gif");
         let mut c = Command::new(ffmpeg);
@@ -473,7 +545,11 @@ pub fn video_preview(video: &Path) -> Option<PathBuf> {
             ])
             .arg(&gif);
         quiet(&mut c);
-        if exec::run_child(c, Duration::from_secs(120)).is_ok_and(|r| r.passed()) && gif.is_file() {
+        if execution
+            .run_child(c, Duration::from_secs(120))
+            .is_ok_and(|r| r.passed())
+            && gif.is_file()
+        {
             return Some(gif);
         }
     }
@@ -483,7 +559,7 @@ pub fn video_preview(video: &Path) -> Option<PathBuf> {
         let mut c = Command::new("qlmanage");
         c.args(["-t", "-s", "1100", "-o"]).arg(dir).arg(video);
         quiet(&mut c);
-        let _ = exec::run_child(c, Duration::from_secs(30));
+        let _ = execution.run_child(c, Duration::from_secs(30));
         let poster = dir.join(format!("{}.png", video.file_name()?.to_string_lossy()));
         if poster.is_file() {
             return Some(poster);

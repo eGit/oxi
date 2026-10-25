@@ -269,6 +269,7 @@ pub async fn run_anthropic_loop(
     let thinking = thinking_config(model);
     let mut thinking_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     let mut overflow_retries = 0u32;
     loop {
@@ -600,6 +601,17 @@ pub async fn run_anthropic_loop(
             "role": "assistant",
             "content": text_out,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                openai_messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())

@@ -147,6 +147,18 @@ Also install Visual Studio Build Tools with the **Desktop development with C++**
 
 Also: chats saved per workspace, local Whisper voice dictation, web search without an API key (DuckDuckGo, Bing or your SearXNG), custom system prompts, `AGENTS.md` support, and five themes (Dark, Light, Midnight, Sublime, Sublime 4).
 
+**Evidence mode.** Click the camera in the composer or send `/evidence` to toggle it;
+`/evidence <task>` enables it and sends the task. ACP agents and API/local models that
+support tool calls can capture before/after images or recordings, run checks, and cite
+them in a report beneath their response. oxi records check results and flags missing or
+contradicted claims, requesting missing evidence at most twice. Commands use the usual
+shell approvals and, for API/local providers, the configured command timeout. Plan mode
+takes precedence. Capturing a URL needs a Chromium browser; screen/window capture depends
+on OS support and permissions. A model can produce captures without vision, but cannot
+inspect their contents unless images are supplied to a vision-capable model.
+Headless clients can set `evidence: true` or `false` on `prompt.send`; subsequent turns in
+that chat retain the choice until it is changed or the chat is reloaded.
+
 ## Models and providers
 
 Pick a provider in Settings or from the model picker in the composer.

@@ -567,7 +567,7 @@ impl OxiApp {
         }
     }
 
-    /// Round camera button for evidence mode (ACP agents): accent while on.
+    /// Round camera button for evidence mode: accent while on.
     fn render_evidence_toggle(&mut self, ui: &mut Ui) {
         let key = self.active_session_key();
         let on = self.run_state(key).is_some_and(|r| r.evidence_mode);
@@ -603,6 +603,14 @@ impl OxiApp {
         } else {
             "Evidence mode: the agent proves its changes with before/after screenshots or recordings and checks oxi runs itself"
         });
+        button.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                on,
+                "Evidence mode",
+            )
+        });
         if button.clicked() {
             let run = self.run_state_mut(key);
             run.evidence_mode = !run.evidence_mode;
@@ -632,8 +640,7 @@ impl OxiApp {
         if show_attach {
             budget -= ATTACH_DIAM + 6.0;
         }
-        let show_evidence =
-            self.conv.settings.active_config().is_acp() && budget >= 48.0 + ATTACH_DIAM + 6.0;
+        let show_evidence = budget >= 48.0 + ATTACH_DIAM + 6.0;
         if show_evidence {
             budget -= ATTACH_DIAM + 6.0;
         }

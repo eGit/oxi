@@ -396,7 +396,7 @@ pub struct SessionRunState {
     pub plan_mode: bool,
     /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
     pub last_turn_planned: bool,
-    /// Composer "Evidence" toggle for this chat (ACP agents): each turn proves its change with
+    /// Composer "Evidence" toggle for this chat: each turn proves its change with
     /// before/after captures and checks oxi makes itself.
     pub evidence_mode: bool,
     /// Provider/model the running turn bills against (the routed one under the Router), for

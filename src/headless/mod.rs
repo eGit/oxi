@@ -95,6 +95,7 @@ struct Prompt {
     text: String,
     attachments: Vec<UserAttachment>,
     plan: Option<bool>,
+    evidence: Option<bool>,
 }
 
 struct Chat {
@@ -103,6 +104,7 @@ struct Chat {
     run: Option<Run>,
     queued: VecDeque<Prompt>,
     plan_mode: bool,
+    evidence_mode: bool,
     pending_approval: Option<Value>,
     status: Option<String>,
     /// PTYs the agent opened; dropping one kills its command, so they live as long as it runs.
@@ -121,6 +123,7 @@ impl Chat {
             run: None,
             queued: VecDeque::new(),
             plan_mode: false,
+            evidence_mode: false,
             pending_approval: None,
             status: None,
             terminals: Vec::new(),
@@ -612,6 +615,7 @@ impl Server {
             "title": chat.session.title,
             "config": config_json(&config),
             "plan": chat.plan_mode,
+            "evidence": chat.evidence_mode,
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "approval": chat.pending_approval,
@@ -749,6 +753,7 @@ impl Server {
                 .map(|items| items.iter().filter_map(attachment_param).collect())
                 .unwrap_or_default(),
             plan: params["plan"].as_bool(),
+            evidence: params["evidence"].as_bool(),
         };
         if prompt.text.is_empty() && prompt.attachments.is_empty() {
             return Err("Nothing to send".into());
@@ -830,6 +835,9 @@ impl Server {
         if let Some(plan) = prompt.plan {
             chat.plan_mode = plan;
         }
+        if let Some(evidence) = prompt.evidence {
+            chat.evidence_mode = evidence;
+        }
         let cwd = PathBuf::from(chat.root.trim());
         let expanded = crate::app::mentions::expand_at_mentions(&prompt.text, &cwd);
         let wire_candidate = chat.session.wire_cache.take();
@@ -885,7 +893,7 @@ impl Server {
                 .chars_per_token
                 .unwrap_or(crate::agent::DEFAULT_CHARS_PER_TOKEN),
             plan_mode: chat.plan_mode,
-            evidence_mode: false,
+            evidence_mode: chat.evidence_mode,
             undo_journal,
         };
         let worker_tx = self.worker_channel(&id, run_id);
@@ -1452,6 +1460,7 @@ impl Server {
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "plan": chat.plan_mode,
+            "evidence": chat.evidence_mode,
         });
         if let Some((outcome, error)) = finished {
             params["outcome"] = json!(outcome);
@@ -1853,6 +1862,7 @@ fn message_json(message: &ChatMessage) -> Value {
         "role": "assistant",
         "streaming": message.streaming,
         "blocks": blocks,
+        "evidence": message.evidence,
         "route": message.route.as_deref().map(|route| json!({
             "provider": route.provider.slug(),
             "label": crate::app::composer::composer_provider_label(route.provider),
@@ -1900,6 +1910,25 @@ mod tests {
         assert_eq!(blocks[2]["title"], "ls");
         assert_eq!(blocks[2]["status"], "in_progress");
         assert_eq!(value["streaming"], true);
+    }
+
+    #[test]
+    fn evidence_reports_reach_headless_clients_with_their_claims() {
+        let mut reply = ChatMessage::streaming_assistant(None);
+        reply.evidence = Some(Box::new(crate::evidence::EvidenceReport {
+            turn: "turn".into(),
+            requested: true,
+            submitted: true,
+            summary: "Verified".into(),
+            claims: vec![crate::evidence::Claim {
+                text: "Check passed".into(),
+                evidence: vec!["e1".into()],
+            }],
+            ..Default::default()
+        }));
+        let value = message_json(&reply);
+        assert_eq!(value["evidence"]["summary"], "Verified");
+        assert_eq!(value["evidence"]["claims"][0]["evidence"], json!(["e1"]));
     }
 
     #[test]

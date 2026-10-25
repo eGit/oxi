@@ -185,19 +185,8 @@ pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     // Same names as oxi's own tools, so the approval settings mean the same thing for both.
     if let Some(name) = super::oxi_mcp::oxi_tool(tool) {
         // Evidence tools that run a shell command are approved like `bash` running it.
-        if crate::evidence::tools::NAMES.contains(&name) {
-            let input = &tool["rawInput"];
-            let command = [&input["command"], &input["during"]]
-                .into_iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" && ");
-            if !command.is_empty() {
-                return (
-                    "bash".to_string(),
-                    Some(serde_json::json!({ "command": command })),
-                );
-            }
+        if let Some(args) = crate::evidence::tools::command_args(name, &tool["rawInput"]) {
+            return ("bash".to_string(), Some(args));
         }
         return (name.to_string(), tool.get("rawInput").cloned());
     }
