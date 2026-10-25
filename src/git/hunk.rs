@@ -12,7 +12,7 @@ use git2::{IndexEntry, IndexTime, Repository};
 
 use super::{err, open_repo, repo_root};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BlockTarget {
     /// The file on disk (revert a working-tree or since-base change).
     WorkTree,
@@ -20,7 +20,7 @@ pub enum BlockTarget {
     Index,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BlockEdit {
     pub path: String,
     pub target: BlockTarget,
@@ -33,6 +33,13 @@ pub struct BlockEdit {
 }
 
 pub(super) fn apply_block(cwd: &str, edit: &BlockEdit) -> Result<(), String> {
+    if let Some(result) = super::remote::call::<Result<(), String>>(
+        cwd,
+        "apply_block",
+        serde_json::json!({ "edit": edit }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(cwd)?;
     match edit.target {
         BlockTarget::WorkTree => {
@@ -159,7 +166,7 @@ pub struct TextHunk {
 }
 
 /// What the editor's diff mode compares a file against (see [`diff_texts`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DiffBase {
     /// Working tree changes: the staged version (`HEAD`'s for a file not in the index).
     Index,
@@ -181,6 +188,13 @@ pub fn diff_texts(
     relative: &str,
     base: &DiffBase,
 ) -> Result<(String, Option<String>), String> {
+    if let Some(result) = super::remote::call::<Result<(String, Option<String>), String>>(
+        cwd,
+        "diff_texts",
+        serde_json::json!({ "relative": relative, "base": base }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(cwd)?;
     let head_tree = || repo.head().and_then(|head| head.peel_to_tree()).ok();
     match base {

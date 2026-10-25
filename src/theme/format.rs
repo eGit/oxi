@@ -423,6 +423,21 @@ pub fn format_relative_time(t: std::time::SystemTime) -> String {
 
 /// Short label for a workspace root path (last two path segments, e.g. `owner/repo`).
 pub fn workspace_sidebar_label(root_path: &str) -> String {
+    if let Some((host, path)) = crate::remote::split(root_path) {
+        let path = path.trim_end_matches('/');
+        let name = if path.ends_with("/oxi-general") {
+            "General"
+        } else {
+            path.rsplit('/')
+                .next()
+                .filter(|n| !n.is_empty())
+                .unwrap_or(path)
+        };
+        return format!("{name} · {host}");
+    }
+    if crate::app_dirs::is_general_chats_dir(root_path) {
+        return "General".to_string();
+    }
     let path = std::path::Path::new(root_path);
     let parts: Vec<&str> = path
         .components()

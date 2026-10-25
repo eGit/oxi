@@ -194,6 +194,9 @@ impl OxiApp {
             .retain(|root, _| roots.contains(root.as_str()));
         let mut paths = Vec::new();
         for workspace in &self.conv.workspaces {
+            if crate::remote::is_remote(&workspace.root_path) {
+                continue;
+            }
             let dir = self
                 .chat_watch
                 .dirs
@@ -221,6 +224,10 @@ impl OxiApp {
     /// of it has to wait.
     fn sync_workspace_from_disk(&mut self, wi: usize) -> bool {
         let root = self.conv.workspaces[wi].root_path.clone();
+        // A remote workspace's server announces its changes (see `remote`).
+        if crate::remote::is_remote(&root) {
+            return true;
+        }
         let Some(dir) = self.chat_watch.dirs.get(&root).cloned() else {
             return true;
         };
@@ -275,7 +282,7 @@ impl OxiApp {
 
     /// The chat is in use here: a turn is streaming or about to, it is being compacted, or its
     /// last prompt is being edited. Its file is this app's to write.
-    fn chat_is_busy(&self, key: SessionKey) -> bool {
+    pub(super) fn chat_is_busy(&self, key: SessionKey) -> bool {
         self.run_state(key)
             .is_some_and(|run| run.waiting_response || run.agent_rx.is_some())
             || self.compaction_active_for(key)
@@ -350,7 +357,7 @@ impl OxiApp {
     }
 
     /// Whether rows of workspace `wi` may move: nothing on screen holds one by index.
-    fn session_rows_can_shift(&self, wi: usize) -> bool {
+    pub(super) fn session_rows_can_shift(&self, wi: usize) -> bool {
         self.conv.confirm_prompt.is_none()
             && self
                 .conv
@@ -366,14 +373,14 @@ impl OxiApp {
     }
 
     /// List a chat another process created at the top of workspace `wi`.
-    fn insert_session_row(&mut self, wi: usize, session: Session) {
+    pub(super) fn insert_session_row(&mut self, wi: usize, session: Session) {
         self.conv.workspaces[wi].sessions.insert(0, session);
         self.conv.workspaces[wi].active += 1;
         self.shift_session_rows(wi, |si| Some(si + 1));
     }
 
     /// Drop a chat whose file another process deleted. Never the open one.
-    fn remove_session_row(&mut self, wi: usize, idx: usize) {
+    pub(super) fn remove_session_row(&mut self, wi: usize, idx: usize) {
         self.conv.workspaces[wi].sessions.remove(idx);
         if idx < self.conv.workspaces[wi].active {
             self.conv.workspaces[wi].active -= 1;
@@ -386,7 +393,7 @@ impl OxiApp {
     }
 
     /// Re-key per-chat state of workspace `wi` after its rows moved; `None` drops it.
-    fn shift_session_rows(&mut self, wi: usize, map: impl Fn(usize) -> Option<usize>) {
+    pub(super) fn shift_session_rows(&mut self, wi: usize, map: impl Fn(usize) -> Option<usize>) {
         self.flow.sessions = std::mem::take(&mut self.flow.sessions)
             .into_iter()
             .filter_map(|(mut key, state)| {

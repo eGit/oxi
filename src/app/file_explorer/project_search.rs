@@ -166,10 +166,10 @@ fn walk_files(root: &Path) -> impl Iterator<Item = PathBuf> {
 
 /// UTF-8 text of `path`, unless it is large or binary.
 fn read_text(path: &Path) -> Option<String> {
-    if std::fs::metadata(path).ok()?.len() > MAX_FILE_BYTES {
+    if crate::vfs::metadata(path).ok()?.len > MAX_FILE_BYTES {
         return None;
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::vfs::read(path).ok()?;
     if memchr::memchr(0, &bytes).is_some() {
         return None;
     }
@@ -264,6 +264,10 @@ fn run_text_search(
     cancel: &AtomicBool,
     sender: &Sender<SearchMsg>,
 ) {
+    if crate::vfs::is_remote(root) {
+        remote_text_search(root, key, cancel, sender);
+        return;
+    }
     let included = include_filter(&key.include);
     let mut found = 0;
     for path in walk_files(root) {
@@ -307,6 +311,101 @@ fn run_text_search(
     let _ = sender.send(SearchMsg::Done { truncated: false });
 }
 
+/// `fs.search` on a server: run the search on its files and return every hit at once.
+pub(crate) fn search_json(root: &Path, params: &serde_json::Value) -> serde_json::Value {
+    let key = SearchKey {
+        root: root.to_string_lossy().to_string(),
+        query: params["query"].as_str().unwrap_or_default().to_string(),
+        options: FindOptions {
+            regex: params["regex"].as_bool().unwrap_or(false),
+            case_sensitive: params["case_sensitive"].as_bool().unwrap_or(false),
+            whole_word: params["whole_word"].as_bool().unwrap_or(false),
+        },
+        include: params["include"].as_str().unwrap_or_default().to_string(),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    run_text_search(
+        root,
+        &key,
+        &HashMap::new(),
+        &AtomicBool::new(false),
+        &sender,
+    );
+    drop(sender);
+    let mut files = Vec::new();
+    let mut truncated = false;
+    for message in receiver {
+        match message {
+            SearchMsg::File(file) => files.push(serde_json::json!({
+                "display": file.display,
+                "hits": file.hits.iter().map(|hit| serde_json::json!([
+                    hit.range.start, hit.range.end, hit.line,
+                    hit.highlight.start, hit.highlight.end, hit.preview,
+                ])).collect::<Vec<_>>(),
+            })),
+            SearchMsg::Done { truncated: t } => truncated = t,
+        }
+    }
+    serde_json::json!({"files": files, "truncated": truncated})
+}
+
+/// A search of a remote workspace, run by its server.
+fn remote_text_search(
+    root: &Path,
+    key: &SearchKey,
+    cancel: &AtomicBool,
+    sender: &Sender<SearchMsg>,
+) {
+    let Some((host, path)) = crate::remote::split(&key.root) else {
+        return;
+    };
+    let params = serde_json::json!({
+        "root": path,
+        "query": key.query,
+        "regex": key.options.regex,
+        "case_sensitive": key.options.case_sensitive,
+        "whole_word": key.options.whole_word,
+        "include": key.include,
+    });
+    let result = crate::remote::client::call(host, "fs.search", params, Duration::from_secs(60));
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(result) = result else {
+        let _ = sender.send(SearchMsg::Done { truncated: false });
+        return;
+    };
+    let number = |v: &serde_json::Value| v.as_u64().unwrap_or(0) as usize;
+    for file in result["files"].as_array().into_iter().flatten() {
+        let display = file["display"].as_str().unwrap_or_default().to_string();
+        let hits = file["hits"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|hit| LineHit {
+                range: number(&hit[0])..number(&hit[1]),
+                line: number(&hit[2]),
+                highlight: number(&hit[3])..number(&hit[4]),
+                preview: hit[5].as_str().unwrap_or_default().to_string(),
+            })
+            .collect();
+        let path = root.join(&display);
+        if sender
+            .send(SearchMsg::File(FileHits {
+                path,
+                display,
+                hits,
+            }))
+            .is_err()
+        {
+            return;
+        }
+    }
+    let _ = sender.send(SearchMsg::Done {
+        truncated: result["truncated"].as_bool() == Some(true),
+    });
+}
+
 fn spawn_search(
     ctx: &egui::Context,
     work: impl FnOnce(&AtomicBool, &Sender<SearchMsg>) + Send + 'static,
@@ -327,7 +426,7 @@ fn spawn_search(
 impl OxiApp {
     fn canonical_workspace_root(&self) -> PathBuf {
         let root = &self.active_workspace().root_path;
-        std::fs::canonicalize(root).unwrap_or_else(|_| PathBuf::from(root))
+        crate::vfs::canonicalize(Path::new(root)).unwrap_or_else(|_| PathBuf::from(root))
     }
 
     /// Unsaved editor buffers by path, searched instead of their files on disk.
@@ -575,7 +674,7 @@ impl OxiApp {
                 continue;
             };
             if let Some((content, count)) = substitute(&content) {
-                match std::fs::write(&path, content) {
+                match crate::vfs::write(&path, content.as_bytes()) {
                     Ok(()) => {
                         replaced += count;
                         files += 1;

@@ -161,6 +161,7 @@ pub const ICON_UPLOAD: &str = "\u{f0aa}";
 pub const ICON_WEB_SEARCH: &str = "\u{f070f}";
 /// Globe — web fetch / URL tool pill (`nf-fa-globe`).
 pub const ICON_GLOBE: &str = "\u{f0ac}";
+pub const ICON_SERVER: &str = "\u{f233}";
 /// Git branch — current-branch line in the source-control panel (`nf-oct-git_branch`).
 pub const ICON_BRANCH: &str = "\u{f418}";
 /// Play triangle — start a local/remote model (`nf-fa-play`).

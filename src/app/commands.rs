@@ -25,6 +25,7 @@ pub(crate) enum AppAction {
     KeyboardShortcuts,
     Quit,
     OpenFolder,
+    ConnectRemote,
     ExportChat,
     AttachImage,
     ActivityLog,
@@ -34,6 +35,12 @@ pub(crate) enum AppAction {
     ReportIssue,
     ToggleWordWrap,
     ToggleMinimap,
+    NewGeneralChat,
+    ChatSplit,
+    WorktreeSplit,
+    FocusSplitPane,
+    ToggleSplitMirror,
+    CloseSplit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -266,8 +273,11 @@ fn build_menus() -> Vec<MenuSpec> {
             entries: vec![
                 c(keys("New Chat", cmd(), Key::N)),
                 c(keys("New Scratchpad", cmd_shift(), Key::N)),
+                c(run("New General Chat", NewGeneralChat)),
                 Separator,
                 c(run("Open Folder…", OpenFolder).palette("File: Open Folder as Workspace")),
+                c(run("Connect to Remote Host…", ConnectRemote)
+                    .palette("Remote: Open a Folder on an SSH Host")),
                 Separator,
                 editor(keys("Save", cmd(), Key::S)),
                 editor(keys("Close Tab", cmd(), Key::W).palette("File: Close Editor Tab")),
@@ -508,6 +518,12 @@ fn build_menus() -> Vec<MenuSpec> {
                 Separator,
                 c(keys("Stop Response", cmd(), Key::Period)),
                 Separator,
+                c(run("New Chat Side by Side", ChatSplit)),
+                c(run("New Work Tree Chat Side by Side", WorktreeSplit)),
+                c(run("Focus Other Split Pane", FocusSplitPane)),
+                c(run("Send to Both Split Panes", ToggleSplitMirror)),
+                c(run("Close Split View", CloseSplit)),
+                Separator,
                 c(run("Export as Markdown…", ExportChat)),
             ],
         },
@@ -707,6 +723,7 @@ impl OxiApp {
             }
             AppAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             AppAction::OpenFolder => self.open_workspace_folder(),
+            AppAction::ConnectRemote => self.open_remote_dialog(),
             AppAction::ExportChat => self.export_active_session_markdown(),
             AppAction::AttachImage => self.pick_image_attachment(),
             AppAction::ActivityLog => super::activity_window::toggle_activity_window(ctx),
@@ -726,6 +743,12 @@ impl OxiApp {
             }
             AppAction::ToggleWordWrap => self.toggle_word_wrap(),
             AppAction::ToggleMinimap => self.toggle_minimap(),
+            AppAction::NewGeneralChat => self.new_general_chat(),
+            AppAction::ChatSplit => self.new_chat_split(),
+            AppAction::WorktreeSplit => self.start_worktree_split(),
+            AppAction::FocusSplitPane => self.focus_split_partner(),
+            AppAction::ToggleSplitMirror => self.toggle_split_mirror(),
+            AppAction::CloseSplit => self.close_split(),
         }
     }
 

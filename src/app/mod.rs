@@ -25,6 +25,7 @@ mod drafts;
 mod eframe_app;
 mod evidence_card;
 mod file_explorer;
+pub(crate) use file_explorer::{search_json, workspace_file_list};
 mod focus_mode;
 mod fork;
 mod frame_stats;
@@ -38,11 +39,13 @@ pub(crate) mod mentions;
 mod menu_bar;
 mod notify;
 mod queue;
+mod remote;
 mod review;
 mod selection_to_chat;
 pub(crate) mod sessions;
 mod settings_ui;
 mod sidebar;
+mod split_view;
 mod state;
 mod status_bar;
 mod streaming;
@@ -107,6 +110,8 @@ pub struct OxiApp {
     drafts: drafts::DraftStore,
     /// Set while Distraction Free mode hides the panels, with the ones it hid.
     distraction_free: Option<focus_mode::PanelsBefore>,
+    /// Connections to the hosts of remote workspaces (see [`remote`]).
+    pub(crate) remote: remote::RemoteState,
 }
 
 impl OxiApp {
@@ -166,7 +171,9 @@ impl OxiApp {
             sidebar_folded: entry.folded,
             pinned: entry.pinned.clone(),
             folded_groups: entry.folded_groups.clone(),
-            worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
+            worktree: (!crate::remote::is_remote(&entry.root_path))
+                .then(|| crate::git::worktree::info(std::path::Path::new(&entry.root_path)))
+                .flatten(),
         };
         let mut workspaces: Vec<Workspace> = settings
             .workspaces
@@ -246,6 +253,8 @@ impl OxiApp {
                 diff_view: state::DiffViewState::default(),
                 transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
+                split: None,
+                pending_split: None,
                 chores: Vec::new(),
                 git_ui: state::GitUiState {
                     open: git_open,
@@ -300,7 +309,9 @@ impl OxiApp {
             drafts: Default::default(),
             distraction_free: None,
             context_overhead_cache: Default::default(),
+            remote: Default::default(),
         };
+        app.connect_remote_workspaces();
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
         app.restore_drafts();
@@ -355,6 +366,9 @@ impl OxiApp {
     /// Send an approval decision for the active session's pending tool call and clear it.
     pub(crate) fn respond_to_approval(&mut self, decision: crate::agent::ApprovalDecision) {
         let key = self.active_session_key();
+        if self.is_remote_key(key) {
+            self.remote_respond_to_approval(key, &decision);
+        }
         if let Some(run) = self.flow.sessions.get_mut(&key) {
             if let Some(tx) = &run.approval_tx {
                 let _ = tx.send(decision);
@@ -433,11 +447,6 @@ impl OxiApp {
     pub(crate) fn active_session(&self) -> &Session {
         let w = self.active_workspace();
         &w.sessions[w.active]
-    }
-
-    pub(crate) fn session_mut(&mut self, idx: usize) -> &mut Session {
-        let w = self.conv.active_workspace;
-        &mut self.conv.workspaces[w].sessions[idx]
     }
 
     pub(crate) fn session_mut_by_key(&mut self, key: SessionKey) -> &mut Session {
@@ -628,6 +637,10 @@ impl OxiApp {
         if skip_disk_sessions {
             return vec![Self::blank_session("New chat")];
         }
+        if crate::remote::is_remote(root_path) {
+            // The server lists them once connected.
+            return remote::placeholder_sessions();
+        }
         let sessions = session_store::load_workspace_sessions(root_path);
         if sessions.is_empty() {
             vec![Self::blank_session("New chat")]
@@ -647,7 +660,9 @@ impl OxiApp {
 
         // Existing chats must retain the selection across restarts, not just while this process
         // is alive. Brand-new empty chats remain in memory until their first message as before.
-        if self.session_by_key(key).session_file.is_some() {
+        if self.is_remote_key(key) {
+            self.remote_save_session(key);
+        } else if self.session_by_key(key).session_file.is_some() {
             let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
             if let Err(error) =
                 session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
@@ -711,7 +726,7 @@ impl OxiApp {
         session.wire_cache = None;
     }
 
-    fn restore_active_session_config(&mut self) {
+    pub(crate) fn restore_active_session_config(&mut self) {
         let config = self.ensure_session_config(self.active_session_key());
         config.apply_to_settings(&mut self.conv.settings);
         let key = self.active_session_key();
@@ -765,27 +780,32 @@ impl OxiApp {
     }
 
     pub(crate) fn ensure_active_session_loaded(&mut self) {
+        self.ensure_session_loaded(self.active_session_key());
+    }
+
+    pub(crate) fn ensure_session_loaded(&mut self, key: SessionKey) {
         if self.conn.no_session {
             return;
         }
 
-        let active = self.active_workspace().active;
-        let active_key = self.active_session_key();
-
         if self
-            .run_state(active_key)
+            .run_state(key)
             .is_some_and(|state| state.waiting_response)
         {
             return;
         }
 
         let session_file = {
-            let session = &self.active_workspace().sessions[active];
+            let session = self.session_by_key(key);
             if session.session_file.is_none() || session.messages_loaded {
                 return;
             }
             session.session_file.clone()
         };
+        if self.is_remote_key(key) {
+            self.remote_load_session(key);
+            return;
+        }
 
         // Stat before reading, so a write racing the read is noticed on the next disk check.
         let disk_mtime = session_file
@@ -795,7 +815,7 @@ impl OxiApp {
             && let Some((messages, wire)) =
                 session_store::load_session_messages_with_wire(&session_file)
         {
-            let session = self.session_mut(active);
+            let session = self.session_mut_by_key(key);
             session.disk_mtime = disk_mtime;
             session.messages = messages.messages;
             session.config = messages.config;

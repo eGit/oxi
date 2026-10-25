@@ -8,7 +8,8 @@ use crate::model::WireCache;
 ///
 /// `input_tokens` counts only the uncached remainder; the full prompt size is
 /// `input + cache_read + cache_creation`.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,

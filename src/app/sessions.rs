@@ -157,6 +157,11 @@ impl OxiApp {
             .unwrap_or(folder)
             .to_string_lossy()
             .to_string();
+        self.open_workspace_path(path);
+    }
+
+    /// Show workspace `path` in the sidebar (adding it when new) and make it active.
+    pub(crate) fn open_workspace_path(&mut self, path: String) {
         if let Some(i) = self
             .conv
             .workspaces
@@ -167,7 +172,9 @@ impl OxiApp {
             return;
         }
         let sessions = Self::initial_workspace_sessions(&path, self.conn.no_session);
-        let worktree = crate::git::worktree::info(std::path::Path::new(&path));
+        let worktree = (!crate::remote::is_remote(&path))
+            .then(|| crate::git::worktree::info(std::path::Path::new(&path)))
+            .flatten();
         self.conv.workspaces.push(Workspace {
             root_path: path,
             sessions,
@@ -180,6 +187,31 @@ impl OxiApp {
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.drop_scratch_workspace();
         self.sync_workspaces_to_settings();
+        self.connect_remote_workspaces();
+    }
+
+    /// Start a chat that isn't about any project. It runs in a folder of its own
+    /// ([`crate::app_dirs::general_chats_dir`]), shown as "General" in the sidebar.
+    pub(crate) fn new_general_chat(&mut self) {
+        let dir = crate::app_dirs::general_chats_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.notify_composer(format!("Could not create {}: {e}", dir.display()));
+            return;
+        }
+        let path = dir.to_string_lossy().to_string();
+        self.open_workspace_path(path.clone());
+        if self.active_workspace().root_path != path {
+            // Switching was blocked, e.g. by an unsaved file.
+            return;
+        }
+        let session = self.active_session();
+        if session.messages.is_empty() && session.session_file.is_none() {
+            // Reuse the blank chat the workspace opened with.
+            self.reveal_chat_view();
+            self.conv.composer.focus_next_frame = true;
+        } else {
+            self.new_chat();
+        }
     }
 
     /// Drops the hidden scratch workspace once a real one exists again. It stays (hidden) when
@@ -350,7 +382,9 @@ impl OxiApp {
         }
         self.active_workspace_mut().sessions[idx].title = title;
         let root_path = self.active_workspace().root_path.clone();
-        if let Err(e) = session_store::save_session_messages(
+        if self.is_remote_key(key) {
+            self.remote_save_session(key);
+        } else if let Err(e) = session_store::save_session_messages(
             &root_path,
             &mut self.active_workspace_mut().sessions[idx],
         ) {
@@ -439,7 +473,10 @@ impl OxiApp {
         });
         self.acp.close(&acp_key);
 
-        if let Some(session_file) = session_file {
+        if let Some(session_file) = session_file.clone().filter(|f| crate::remote::is_remote(f)) {
+            let root = self.active_workspace().root_path.clone();
+            self.remote_delete_chat(&root, &session_file);
+        } else if let Some(session_file) = session_file {
             if deleting_current_backend_session {
                 self.flow.current_backend_session_file = None;
             }

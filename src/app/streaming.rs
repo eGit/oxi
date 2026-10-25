@@ -19,7 +19,11 @@ impl OxiApp {
         if self.conv.composer.editing_last_prompt.is_some() {
             self.submit_edited_last_prompt();
         } else {
+            let mirror = self.split_mirror_payload();
             self.send_message_opts(false);
+            if let Some(payload) = mirror {
+                self.send_to_split_partner(payload);
+            }
         }
     }
 
@@ -423,14 +427,22 @@ impl OxiApp {
 
         // Expand @path mentions into attached file/folder context for the agent.
         let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
-        let expanded = super::mentions::expand_at_mentions(&text, &cwd);
+        let remote = self.is_remote_key(key);
+        // A remote chat's files are on its host, whose server expands the mentions.
+        let expanded = if remote {
+            text.clone()
+        } else {
+            super::mentions::expand_at_mentions(&text, &cwd)
+        };
         self.run_state_mut(key).last_user_prompt = Some(text.clone());
         // The previous cache remains only a candidate for this run. Removing it before the
         // initial save prevents a crash from persisting an advanced transcript with stale wire.
         let wire_candidate = self.session_mut_by_key(key).wire_cache.take();
         self.materialize_prompt(key, &expanded, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-        if let Err(e) =
+        if remote {
+            // The server saves the chat when the turn starts.
+        } else if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
@@ -547,6 +559,9 @@ impl OxiApp {
         key: SessionKey,
         wire_candidate: Option<crate::model::WireCache>,
     ) -> Result<(), String> {
+        if self.is_remote_key(key) {
+            return self.start_remote_turn(key);
+        }
         let cwd = PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
         let chat = {
             let s = self.session_mut_by_key(key);
@@ -757,7 +772,10 @@ impl OxiApp {
         // Do not force the transcript back to the bottom when streaming ends. The user may
         // have scrolled up to read earlier content while the response was being generated.
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-        if let Err(e) =
+        if self.is_remote_key(key) {
+            // Saved by the server; take its version of the reply.
+            self.remote_reconcile(key);
+        } else if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));

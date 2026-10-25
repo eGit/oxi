@@ -2,8 +2,6 @@
 //! card sends the turn's diff to another ACP agent in the same chat, and "Apply fixes with
 //! Claude" under that review hands the findings back to the agent that made the changes.
 
-use std::path::Path;
-
 use eframe::egui::Ui;
 
 use super::{OxiApp, SessionKey};
@@ -80,7 +78,7 @@ impl OxiApp {
             return;
         }
         let diff = match crate::git::checkpoint::patch(
-            Path::new(&changes.repo),
+            &self.turn_repo(&changes.repo),
             &changes.before,
             &changes.after,
             REVIEW_DIFF_BYTES,

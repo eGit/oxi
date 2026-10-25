@@ -14,8 +14,14 @@ impl OxiApp {
         const FS_WORKSPACE: f32 = FS_SMALL;
         let mut sidebar_changed = false;
         let is_main = self.conv.workspaces[wi].worktree.is_none();
+        // Work trees need a repository; the general chats folder never is one.
+        let can_worktree = is_main
+            && !crate::app_dirs::is_general_chats_dir(&self.conv.workspaces[wi].root_path)
+            && !self.is_remote_workspace(wi);
+        let remote_status = self.remote_status(wi);
         let active_si = self.conv.workspaces[wi].active;
         let n_sessions = self.conv.workspaces[wi].sessions.len();
+        let split_partner = self.split_partner_peek();
         let root_label = match &self.conv.workspaces[wi].worktree {
             Some(info) if parent.is_some() => info.branch.clone(),
             Some(info) => crate::app::worktrees::worktree_label(info),
@@ -38,9 +44,11 @@ impl OxiApp {
                 .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
         }
         // Leading glyph: folder open/closed at rest, fold chevron on hover.
+        let remote = self.is_remote_workspace(wi);
         let glyph = match (row_hovered || parent.is_some(), folded) {
             (true, true) => ICON_CHEVRON_RIGHT,
             (true, false) => ICON_ANGLE_DOWN,
+            (false, _) if remote => ICON_SERVER,
             (false, true) => ICON_FOLDER,
             (false, false) => ICON_FOLDER_OPEN,
         };
@@ -54,29 +62,58 @@ impl OxiApp {
         let label_rect = egui::Rect::from_min_max(
             egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
             egui::pos2(
-                rect.right() - PLUS_W * if is_main { 2.0 } else { 1.0 } - 2.0,
+                rect.right() - PLUS_W * if can_worktree { 2.0 } else { 1.0 } - 2.0,
                 rect.bottom(),
             ),
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&root_label)
-                            .size(FS_WORKSPACE)
-                            .color(c_text())
-                            .strong(),
-                    )
-                    .truncate()
-                    .halign(Align::LEFT)
-                    .selectable(false),
+                // A remote workspace: its folder name, then the host in muted type.
+                let mut job = egui::text::LayoutJob::default();
+                let (name, host) = match root_label.split_once(" · ") {
+                    Some((name, host)) if remote => (name, Some(host)),
+                    _ => (root_label.as_str(), None),
+                };
+                RichText::new(name)
+                    .size(FS_WORKSPACE)
+                    .color(if remote_status.is_some() {
+                        c_text_faint()
+                    } else {
+                        c_text()
+                    })
+                    .strong()
+                    .append_to(
+                        &mut job,
+                        ui.style(),
+                        egui::FontSelection::Default,
+                        Align::Center,
+                    );
+                if let Some(host) = host {
+                    RichText::new(format!("  {host}"))
+                        .size(FS_TINY)
+                        .color(c_text_faint())
+                        .append_to(
+                            &mut job,
+                            ui.style(),
+                            egui::FontSelection::Default,
+                            Align::Center,
+                        );
+                }
+                let label = ui.add(
+                    egui::Label::new(job)
+                        .truncate()
+                        .halign(Align::LEFT)
+                        .selectable(false),
                 );
+                if let Some(status) = &remote_status {
+                    label.on_hover_text(format!("{status}\nClick the folder row to retry now."));
+                }
             });
         });
         crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
         let mut worktree_clicked = false;
         let mut worktree_hovered = false;
-        if is_main {
+        if can_worktree {
             let action_rect = egui::Rect::from_min_max(
                 egui::pos2(rect.right() - PLUS_W * 2.0 - 2.0, rect.top()),
                 egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
@@ -138,6 +175,9 @@ impl OxiApp {
             self.new_chat();
             sidebar_changed = true;
         } else if response.clicked() && !plus_hovered && !worktree_hovered {
+            if remote_status.is_some() {
+                self.retry_remote(wi);
+            }
             self.conv.workspaces[wi].sidebar_folded = !folded;
             if let Some(pi) = parent {
                 self.conv.workspaces[pi].sidebar_folded = false;
@@ -148,6 +188,7 @@ impl OxiApp {
         let worktree = self.conv.workspaces[wi].worktree.clone();
         response.context_menu(|ui| {
             match &worktree {
+                None if !can_worktree => {}
                 None => {
                     if ui
                         .button("New chat in a work tree")
@@ -157,6 +198,17 @@ impl OxiApp {
                         .clicked()
                     {
                         self.start_worktree_chat(wi);
+                        ui.close();
+                    }
+                    if wi == self.conv.active_workspace
+                        && ui
+                            .button("New work tree chat side by side")
+                            .on_hover_text(
+                                "Open a work tree chat next to the current chat, e.g. to give the same task to a second agent",
+                            )
+                            .clicked()
+                    {
+                        self.start_worktree_split();
                         ui.close();
                     }
                 }
@@ -295,7 +347,8 @@ impl OxiApp {
                     // rename field's focus or an open context menu while scrolling.
                     let row_id = egui::Id::new(("sidebar_session_row", wi, si));
                     ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
-                        let selected = wi == self.conv.active_workspace && si == active_si;
+                        let selected = (wi == self.conv.active_workspace && si == active_si)
+                            || split_partner == Some(self.session_key(wi, si));
                         let running = self.session_row_is_running(wi, si);
                         let has_error = !running && self.session_row_has_error(wi, si);
                         let key = self.session_key(wi, si);
@@ -399,9 +452,22 @@ impl OxiApp {
                             }
                         } else {
                             if response.clicked() {
-                                self.select_session_in_workspace(wi, si);
+                                if split_partner == Some(self.session_key(wi, si)) {
+                                    self.focus_split_partner();
+                                } else {
+                                    self.select_session_in_workspace(wi, si);
+                                }
                             }
                             response.context_menu(|ui| {
+                                let row_key = self.session_key(wi, si);
+                                if row_key != self.active_session_key()
+                                    && ui
+                                        .button("Open in split view")
+                                        .on_hover_text("Show this chat next to the current one")
+                                        .clicked()
+                                {
+                                    self.open_split_with(row_key);
+                                }
                                 if let Some(file) =
                                     self.conv.workspaces[wi].sessions[si].session_file.clone()
                                 {

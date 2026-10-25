@@ -206,7 +206,8 @@ pub(super) fn display_path(root: &Path, path: &Path) -> String {
         return relative.display().to_string();
     }
     // Documents may hold the canonical path (`/private/var/...` on macOS) of a symlinked root.
-    if let Ok(canonical_root) = root.canonicalize()
+    if !crate::vfs::is_remote(root)
+        && let Ok(canonical_root) = root.canonicalize()
         && let Ok(relative) = path.strip_prefix(&canonical_root)
     {
         return relative.display().to_string();
@@ -284,7 +285,7 @@ struct IgnoreRule {
 
 impl GitIgnore {
     pub(super) fn load(root: &Path) -> Self {
-        Self::parse(&std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default())
+        Self::parse(&crate::vfs::read_to_string(&root.join(".gitignore")).unwrap_or_default())
     }
 
     pub(super) fn parse(text: &str) -> Self {

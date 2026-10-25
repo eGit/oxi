@@ -1,6 +1,5 @@
 mod dedupe;
 mod format;
-#[cfg(test)]
 pub(crate) use format::chat_message_to_json_entries;
 mod io;
 mod paths;

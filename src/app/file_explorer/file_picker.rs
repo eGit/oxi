@@ -68,8 +68,27 @@ struct RankKey {
     origin: Option<(PathBuf, u64)>,
 }
 
+/// Paths relative to `root` of its non-ignored files, sorted: what Cmd/Ctrl+P lists. A remote
+/// server answers `fs.walk` with this.
+pub(crate) fn workspace_file_list(root: &Path) -> Vec<String> {
+    walk_workspace_files(root)
+        .into_iter()
+        .map(|file| file.display)
+        .collect()
+}
+
 /// Every non-ignored file under `root`, sorted by relative path.
 fn walk_workspace_files(root: &Path) -> Vec<PickerFile> {
+    if crate::vfs::is_remote(root) {
+        return crate::vfs::walk_files(root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|display| PickerFile {
+                path: root.join(&display),
+                display,
+            })
+            .collect();
+    }
     let ignored = GitIgnore::load(root);
     let mut files: Vec<PickerFile> = WalkDir::new(root)
         .follow_links(false)

@@ -11,6 +11,10 @@ impl OxiApp {
     }
 
     pub(crate) fn stop_agent_run(&mut self, key: SessionKey) {
+        // The server stops it and sends the end of the turn like for any other turn.
+        if self.is_remote_key(key) && self.remote_cancel(key) {
+            return;
+        }
         self.invalidate_wire_cache(key);
         if let Some(state) = self.flow.sessions.get_mut(&key) {
             state.clear_agent();
@@ -27,7 +31,8 @@ impl OxiApp {
         }
 
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-        if let Err(e) =
+        if self.is_remote_key(key) {
+        } else if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));

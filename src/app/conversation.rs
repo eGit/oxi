@@ -209,14 +209,16 @@ impl OxiApp {
                     .strong(),
             );
             ui.add_space(5.0);
-            let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
-            ui.label(
-                RichText::new(format!(
-                    "Ask anything about {workspace}, or start from one of these."
-                ))
-                .size(FS_BODY)
-                .color(c_text_muted()),
-            );
+            let root = &self.active_workspace().root_path;
+            let general = crate::app_dirs::is_general_chats_dir(root);
+            let subtitle = if general {
+                "A general chat, not about any project. Files it writes land in ~/oxi-general."
+                    .to_string()
+            } else {
+                let workspace = workspace_sidebar_label(root);
+                format!("Ask anything about {workspace}, or start from one of these.")
+            };
+            ui.label(RichText::new(subtitle).size(FS_BODY).color(c_text_muted()));
             ui.add_space(if compact { 12.0 } else { 18.0 });
 
             // Sending would fail right away without credentials: say so up front, with the fix
@@ -267,6 +269,10 @@ impl OxiApp {
                 ui.add_space(if compact { 12.0 } else { 18.0 });
             }
 
+            // The suggestions are all about a project.
+            if general {
+                return;
+            }
             ui.label(
                 RichText::new("Try one of these")
                     .size(FS_TINY)

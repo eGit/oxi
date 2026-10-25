@@ -418,10 +418,10 @@ impl OxiApp {
         line: Option<usize>,
     ) -> bool {
         let path = PathBuf::from(&self.active_workspace().root_path).join(relative);
-        if !path.is_file() || super::MediaKind::from_path(&path).is_some() {
+        if !crate::vfs::is_file(&path) || super::MediaKind::from_path(&path).is_some() {
             return false;
         }
-        let Ok(wanted) = std::fs::canonicalize(&path) else {
+        let Ok(wanted) = crate::vfs::canonicalize(&path) else {
             return false;
         };
         self.open_editor_file_only(path);

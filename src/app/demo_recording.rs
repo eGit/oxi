@@ -135,6 +135,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         review_ui_polish(rec);
         return;
     }
+    if std::env::var_os("OXI_SPLIT_REVIEW").is_some() {
+        review_split_view(rec);
+        return;
+    }
     if std::env::var_os("OXI_WORKTREE_REVIEW").is_some() {
         review_worktree_sidebar(rec);
         return;
@@ -172,6 +176,11 @@ fn run_gallery(rec: &mut Recorder<'_>) {
 
     if std::env::var_os("OXI_SELECTION_REVIEW").is_some() {
         review_selection_flicker(rec);
+        return;
+    }
+
+    if let Ok(root) = std::env::var("OXI_REMOTE_REVIEW") {
+        review_remote_workspace(rec, &root);
         return;
     }
 
@@ -3190,6 +3199,91 @@ fn review_acp_ui(rec: &mut Recorder<'_>) {
 }
 
 /// Real sidebar rendering with linked checkouts, in the isolated gallery process.
+/// Split view: two chats side by side, "Send to both", swapping focus by clicking the other
+/// pane, and a general chat.
+fn review_split_view(rec: &mut Recorder<'_>) {
+    rec.harness.set_size(egui::vec2(1500.0, 900.0));
+    rec.harness.run_steps(4);
+    let chats = rec.app().active_workspace().sessions.len();
+    println!("SPLIT chats in workspace: {chats}");
+    {
+        let app = rec.app();
+        // The newest seeded chat next to the blank one `setup` opened.
+        let partner = app.session_key(app.conv.active_workspace, 1);
+        app.ensure_session_loaded(partner);
+        app.open_split_with(partner);
+    }
+    rec.harness.run_steps(6);
+    rec.still("split-view");
+    rec.app().toggle_split_mirror();
+    rec.harness.run_steps(3);
+    rec.still("split-mirror");
+    // "Send to both": one prompt lands in both chats.
+    let count = |rec: &mut Recorder<'_>, key| {
+        rec.app()
+            .session_by_key(key)
+            .messages
+            .iter()
+            .filter(|m| m.role == crate::model::MsgRole::User)
+            .count()
+    };
+    let active = rec.app().active_session_key();
+    let partner = rec.app().split_partner_key().unwrap();
+    let before = (count(rec, active), count(rec, partner));
+    rec.app().conv.composer.input = "Summarize the README".into();
+    rec.app().send_message();
+    rec.harness.run_steps(4);
+    let after = (count(rec, active), count(rec, partner));
+    println!("SPLIT mirror user messages {before:?} -> {after:?}");
+    assert_eq!(
+        after,
+        (before.0 + 1, before.1 + 1),
+        "the prompt went to both chats"
+    );
+    assert_eq!(rec.app().active_session_key(), active);
+    assert!(rec.app().conv.composer.input.is_empty());
+    rec.still("split-mirror-sent");
+    for key in [active, partner] {
+        if let Some(run) = rec.app().flow.sessions.get_mut(&key) {
+            run.clear_agent();
+            run.waiting_response = false;
+        }
+    }
+    rec.harness.run_steps(3);
+    // Click the unfocused (right) pane: it becomes the active chat, the left one the preview.
+    let before = rec.app().active_session_key();
+    let click = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // On the transcript itself, not just the footer.
+    let pos = egui::pos2(1150.0, 400.0);
+    rec.harness.hover_at(pos);
+    rec.harness.step();
+    rec.harness.event(click(pos, true));
+    rec.harness.step();
+    rec.harness.event(click(pos, false));
+    rec.harness.run_steps(6);
+    let after = rec.app().active_session_key();
+    println!("SPLIT focus {before:?} -> {after:?}");
+    assert_ne!(before, after, "clicking the other pane focuses it");
+    rec.still("split-focus-swapped");
+    rec.harness.set_size(egui::vec2(900.0, 700.0));
+    rec.harness.run_steps(4);
+    rec.still("split-narrow");
+    rec.harness.set_size(egui::vec2(1500.0, 900.0));
+    rec.app().close_split();
+    rec.app().new_general_chat();
+    rec.harness.run_steps(6);
+    println!(
+        "SPLIT general root: {}",
+        rec.app().active_workspace().root_path
+    );
+    rec.still("general-chat");
+}
+
 fn review_worktree_sidebar(rec: &mut Recorder) {
     use super::state::Workspace;
     let root = rec.project.to_string_lossy().into_owned();
@@ -3681,4 +3775,217 @@ fn review_composer_typing(rec: &mut Recorder<'_>) {
             println!("COMPOSER GPU stable: {theme}, scale {scale}");
         }
     }
+}
+
+/// A remote workspace against a real host: `OXI_REMOTE_REVIEW=ssh://host/path` (the host runs
+/// `oxi server`). Lists its chats, runs two agent turns there and deletes the chat again.
+fn review_remote_workspace(rec: &mut Recorder<'_>, root: &str) {
+    let wait_for =
+        |rec: &mut Recorder<'_>, what: &str, secs: u64, done: &dyn Fn(&mut OxiApp) -> bool| {
+            let started = Instant::now();
+            while !done(rec.app()) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(secs),
+                    "timed out waiting for {what}"
+                );
+                rec.harness.step();
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            println!("REMOTE {what} after {:?}", started.elapsed());
+        };
+    rec.harness.set_size(egui::vec2(1400.0, 860.0));
+    rec.app().open_remote_dialog();
+    rec.harness.run_steps(3);
+    rec.still("remote-dialog");
+    rec.app().remote.dialog = None;
+    rec.app().open_workspace_path(root.to_string());
+    let host = crate::remote::host_of(root).unwrap().to_string();
+    rec.harness.run_steps(2);
+    rec.still("remote-connecting");
+    let started = Instant::now();
+    while rec.app().remote.state(&host) != Some(crate::remote::client::ConnState::Connected) {
+        let state = rec.app().remote.state(&host);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no connection: {state:?}"
+        );
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    rec.harness.run_steps(20);
+    let chats = rec.app().active_workspace().sessions.len();
+    println!("REMOTE chats listed: {chats}");
+    rec.still("remote-listed");
+
+    // File panels can be verified even while the host's agent quota is exhausted.
+    if std::env::var_os("OXI_REMOTE_PANELS_ONLY").is_some() {
+        review_remote_panels(rec, root);
+        return;
+    }
+
+    let provider = std::env::var("OXI_REMOTE_REVIEW_PROVIDER")
+        .map(|slug| serde_json::from_value::<LlmProviderKind>(json!(slug)).expect("provider slug"))
+        .unwrap_or(LlmProviderKind::ClaudeCodeAcp);
+    rec.app().new_chat();
+    rec.app().set_active_session_provider(provider);
+    rec.app().conv.composer.input = "Reply with exactly the word pong and nothing else.".into();
+    rec.app().send_message();
+    rec.harness.run_steps(2);
+    rec.still("remote-turn-running");
+    let key = rec.app().active_session_key();
+    wait_for(rec, "turn", 180, &|app| {
+        !app.run_state(key).is_some_and(|r| r.waiting_response)
+    });
+    rec.harness.run_steps(20);
+    rec.still("remote-turn-done");
+    let app = rec.app();
+    let session = app.session_by_key(key);
+    let answer = crate::model::last_answer(&session.messages)
+        .unwrap_or("")
+        .to_string();
+    println!(
+        "REMOTE file {:?} answer {answer:?} error {:?}",
+        session.session_file,
+        app.run_state(key).and_then(|r| r.stream_error.clone())
+    );
+    assert!(
+        session
+            .session_file
+            .as_deref()
+            .is_some_and(crate::remote::is_remote)
+    );
+    assert!(answer.to_lowercase().contains("pong"), "answer: {answer}");
+
+    // A follow-up uses the same chat: the transcripts agree, so no history goes along.
+    rec.app().conv.composer.input = "And now reply with exactly: ping".into();
+    rec.app().send_message();
+    wait_for(rec, "second turn", 180, &|app| {
+        !app.run_state(key).is_some_and(|r| r.waiting_response)
+    });
+    rec.harness.run_steps(20);
+    rec.still("remote-second-turn");
+    let answer = crate::model::last_answer(&rec.app().session_by_key(key).messages)
+        .unwrap_or("")
+        .to_string();
+    println!("REMOTE second answer {answer:?}");
+    assert!(answer.to_lowercase().contains("ping"), "answer: {answer}");
+
+    review_remote_panels(rec, root);
+
+    let si = key.session_idx;
+    rec.app().reveal_chat_view();
+    rec.app().delete_session(si);
+    rec.harness.run_steps(20);
+    std::thread::sleep(Duration::from_millis(500));
+    rec.harness.run_steps(5);
+}
+
+/// The editor side of a remote workspace: explorer, a file opened and saved, Cmd+P, Find in
+/// Files, the Git panel and a terminal, all on the host. `root` holds a git repository with a
+/// committed `README.md` that has one uncommitted line, and `src/main.rs`.
+fn review_remote_panels(rec: &mut Recorder<'_>, root: &str) {
+    let step_for = |rec: &mut Recorder<'_>, secs: f32| {
+        let until = Instant::now() + Duration::from_secs_f32(secs);
+        while Instant::now() < until {
+            rec.harness.step();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    };
+    let root_path = PathBuf::from(root);
+    {
+        let app = rec.app();
+        app.conv.explorer.expanded.insert(root_path.join("src"));
+        app.conv.explorer.cache.invalidate();
+        app.conv.sidebar.open = true;
+        app.conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
+        app.open_editor_file(root_path.join("README.md"));
+        app.conv.git_ui.open = true;
+        app.request(crate::git::GitOp::Refresh);
+    }
+    step_for(rec, 3.0);
+    let app = rec.app();
+    let doc = app
+        .conv
+        .editor
+        .active_document()
+        .map(|d| (d.path.clone(), d.content.clone()));
+    println!("REMOTE editor {doc:?} error {:?}", app.conv.editor.error);
+    assert!(app.conv.editor.error.is_none());
+    let (opened_path, content) = doc.expect("remote README opened in the editor");
+    assert_eq!(opened_path, root_path.join("README.md"));
+    assert!(content.contains("Hello from the mac mini."));
+    println!(
+        "REMOTE git repo {} branch {:?} unstaged {:?} error {:?}",
+        app.conv.git.repo,
+        app.conv.git.branch,
+        app.conv
+            .git
+            .unstaged
+            .iter()
+            .map(|e| (&e.path, e.status))
+            .collect::<Vec<_>>(),
+        app.conv.git.error
+    );
+    assert!(app.conv.git.repo, "remote Git repository was detected");
+    assert!(app.conv.git.error.is_none());
+    assert_eq!(app.conv.git.branch, "main");
+    assert!(app.conv.git.unstaged.iter().any(|e| e.path == "README.md"));
+    rec.still("remote-editor-git");
+
+    // Edit and save: the file on the host changes.
+    {
+        let app = rec.app();
+        if let Some(document) = app.conv.editor.active_document_mut() {
+            document.content.push_str("Saved from the app.\n");
+            document.dirty = true;
+            document.content_revision += 1;
+        }
+        let ctx = rec.harness.ctx.clone();
+        rec.app().save_editor_file(&ctx);
+    }
+    println!("REMOTE save error {:?}", rec.app().conv.editor.error);
+    let (host, path) = crate::remote::split(root).unwrap();
+    let on_host = std::process::Command::new("ssh")
+        .args([host, &format!("tail -n 1 '{path}/README.md'")])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("REMOTE README last line on host: {on_host:?}");
+    assert_eq!(on_host, "Saved from the app.");
+
+    rec.app().open_file_picker();
+    step_for(rec, 2.0);
+    rec.still("remote-file-picker");
+    rec.app().cancel_file_picker();
+    rec.app().show_project_search();
+    rec.app().conv.project_search.query = "remote".into();
+    step_for(rec, 2.5);
+    let (files, hits) = rec.app().conv.project_search.total_hits();
+    println!("REMOTE search: {hits} hits in {files} files");
+    assert!(
+        files >= 2 && hits >= 2,
+        "search found both remote fixture files"
+    );
+    rec.still("remote-search");
+
+    rec.app().conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
+    rec.app().conv.terminal_panel.open = true;
+    step_for(rec, 4.0);
+    assert!(
+        rec.app().terminals.first().is_some_and(|t| t.is_alive()),
+        "remote terminal started"
+    );
+    if let Some(terminal) = rec.app().terminals.first_mut() {
+        terminal.type_text("pwd; git status --short\r");
+    }
+    step_for(rec, 2.0);
+    rec.still("remote-terminal");
+    let app = rec.app();
+    app.conv.terminal_panel.open = false;
+    app.conv.git_ui.open = false;
+    app.terminals.clear();
+    // Leave the folder as it was.
+    let _ = std::process::Command::new("ssh")
+        .args([host, &format!("cd '{path}' && git checkout -q README.md && printf '\\nAn uncommitted line.\\n' >> README.md")])
+        .status();
 }

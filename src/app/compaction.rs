@@ -264,7 +264,9 @@ impl OxiApp {
                 // Invalidate before saving so restart cannot resurrect the un-compacted cache.
                 self.invalidate_wire_cache(key);
                 let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-                if let Err(e) = crate::session_store::save_session_messages(
+                if self.is_remote_key(key) {
+                    self.remote_save_session(key);
+                } else if let Err(e) = crate::session_store::save_session_messages(
                     &root_path,
                     self.session_mut_by_key(key),
                 ) {

@@ -64,21 +64,16 @@ impl OxiApp {
             name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']);
         let result = match operation {
             FileOperation::NewFile(parent) if !invalid_name => {
-                let path = parent.join(name);
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(path)
-                    .map(|_| ())
+                crate::vfs::create_new_file(&parent.join(name))
             }
             FileOperation::NewFolder(parent) if !invalid_name => {
-                std::fs::create_dir(parent.join(name))
+                crate::vfs::create_dir(&parent.join(name))
             }
             FileOperation::Rename(path) if !invalid_name => {
                 let destination = path.parent().unwrap_or(Path::new(".")).join(name);
                 let renames_workspace_root =
                     path.as_path() == Path::new(&self.active_workspace().root_path);
-                let result = std::fs::rename(&path, &destination);
+                let result = crate::vfs::rename(&path, &destination);
                 if result.is_ok() {
                     if renames_workspace_root {
                         self.active_workspace_mut().root_path = destination.display().to_string();
@@ -123,10 +118,10 @@ impl OxiApp {
                         Some("Save or close the modified file before deleting it.".into());
                     return;
                 }
-                let result = if path.is_dir() {
-                    std::fs::remove_dir(&path)
+                let result = if crate::vfs::is_dir(&path) {
+                    crate::vfs::remove_dir(&path)
                 } else {
-                    std::fs::remove_file(&path)
+                    crate::vfs::remove_file(&path)
                 };
                 if result.is_ok() {
                     self.remove_editor_path(&path);

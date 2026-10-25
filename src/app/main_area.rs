@@ -116,50 +116,9 @@ impl OxiApp {
                             return;
                         }
 
-                        let style = (*ui.style()).clone();
-                        let column_center_w =
-                            crate::theme::chat_column_center_width(ui.available_width(), &style);
-
-                        const COMPOSER_GAP: f32 = 8.0;
-                        let composer_overlay_h =
-                            (self.conv.composer.measured_full_h + COMPOSER_GAP).max(88.0);
-                        let conversation_h = ui.available_height().max(48.0);
-                        let chat_rect = ui.max_rect();
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), conversation_h),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                self.render_conversation(
-                                    ui,
-                                    column_center_w,
-                                    conversation_h,
-                                    composer_overlay_h,
-                                );
-                            },
-                        );
-
-                        // Soft scrim so transcript text doesn't compete with the input.
-                        // If TextEdit changes height while rendering, `render_composer` asks
-                        // egui for a second layout pass in the same frame. That keeps this
-                        // previous measurement safe for hard newlines, wrapping, deletion,
-                        // sending, attachments, and notices without predicting individual keys.
-                        let composer_h = self.conv.composer.measured_full_h.max(80.0);
-                        let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
-                        let scrim_top = chat_rect.bottom() - scrim_h;
-                        let scrim_rect = egui::Rect::from_min_max(
-                            egui::pos2(chat_rect.left(), scrim_top),
-                            egui::pos2(chat_rect.right(), chat_rect.bottom()),
-                        );
-                        paint_composer_scrim(ui, scrim_rect);
-
-                        let composer_top = chat_rect.bottom() - composer_h;
-                        let composer_rect = egui::Rect::from_min_size(
-                            egui::pos2(chat_rect.left(), composer_top),
-                            egui::vec2(chat_rect.width(), composer_h),
-                        );
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(composer_rect), |ui| {
-                            self.render_composer(ui, column_center_w);
-                        });
+                        if !self.render_split_chat(ui) {
+                            self.render_chat_column(ui);
+                        }
                     });
                 ui.expand_to_include_rect(ui.max_rect());
             }
@@ -189,6 +148,47 @@ impl OxiApp {
                     },
                 );
             }
+        });
+    }
+
+    /// The active chat's transcript with the composer floating over its bottom edge.
+    pub(super) fn render_chat_column(&mut self, ui: &mut Ui) {
+        let style = (*ui.style()).clone();
+        let column_center_w = crate::theme::chat_column_center_width(ui.available_width(), &style);
+
+        const COMPOSER_GAP: f32 = 8.0;
+        let composer_overlay_h = (self.conv.composer.measured_full_h + COMPOSER_GAP).max(88.0);
+        let conversation_h = ui.available_height().max(48.0);
+        let chat_rect = ui.max_rect();
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), conversation_h),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                self.render_conversation(ui, column_center_w, conversation_h, composer_overlay_h);
+            },
+        );
+
+        // Soft scrim so transcript text doesn't compete with the input.
+        // If TextEdit changes height while rendering, `render_composer` asks
+        // egui for a second layout pass in the same frame. That keeps this
+        // previous measurement safe for hard newlines, wrapping, deletion,
+        // sending, attachments, and notices without predicting individual keys.
+        let composer_h = self.conv.composer.measured_full_h.max(80.0);
+        let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
+        let scrim_top = chat_rect.bottom() - scrim_h;
+        let scrim_rect = egui::Rect::from_min_max(
+            egui::pos2(chat_rect.left(), scrim_top),
+            egui::pos2(chat_rect.right(), chat_rect.bottom()),
+        );
+        paint_composer_scrim(ui, scrim_rect);
+
+        let composer_top = chat_rect.bottom() - composer_h;
+        let composer_rect = egui::Rect::from_min_size(
+            egui::pos2(chat_rect.left(), composer_top),
+            egui::vec2(chat_rect.width(), composer_h),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(composer_rect), |ui| {
+            self.render_composer(ui, column_center_w);
         });
     }
 
