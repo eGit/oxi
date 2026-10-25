@@ -238,6 +238,8 @@ fn acp_end_to_end_applies_model() {
         allowed_tools: Vec::new(),
         cancel,
         plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -490,6 +492,7 @@ fn acp_metadata_diff_and_valid_long_args_survive_session_roundtrip() {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     };
     message.finish_streaming();
     let entries = crate::session_store::chat_message_to_json_entries(&message);
@@ -904,6 +907,8 @@ fn acp_live_features() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode,
+        evidence_policy: Default::default(),
+        evidence_base: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -1021,6 +1026,8 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
     };
     rt.block_on(mgr.prompt(prompt)).unwrap();
     assert_eq!(texts(&ev_rx), "Building in the background.");
@@ -1186,6 +1193,118 @@ for line in sys.stdin:
 "#;
 
 #[tokio::test]
+async fn evidence_activated_while_acp_is_running_checks_only_changed_workspaces() {
+    const ADAPTER: &str = r#"
+import json,sys,time
+from pathlib import Path
+root=Path(__file__).parent
+change=sys.argv[1]=='change'
+count=0
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)),flush=True)
+for line in sys.stdin:
+    m=json.loads(line)
+    method=m.get('method')
+    if method=='initialize':
+        send(dict(id=m['id'],result=dict(protocolVersion=1,agentCapabilities={})))
+    elif method=='session/new':
+        send(dict(id=m['id'],result=dict(sessionId='live-evidence')))
+    elif method=='session/prompt':
+        count+=1
+        with (root/'prompts').open('a') as log:
+            log.write(json.dumps(m['params'])+'\n')
+        if count==1:
+            if change:
+                (root/'work'/'code.txt').write_text('after')
+            send(dict(method='session/update',params=dict(sessionId='live-evidence',update=dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='ready-to-finish')))))
+            deadline=time.monotonic()+10
+            while not (root/'continue').exists() and time.monotonic()<deadline:
+                time.sleep(.01)
+        send(dict(id=m['id'],result=dict(stopReason='end_turn')))
+    elif 'id' in m:
+        send(dict(id=m['id'],result={}))
+"#;
+    for change in [false, true] {
+        let root =
+            std::env::temp_dir().join(format!("oxi-acp-live-evidence-{}", rand::random::<u64>()));
+        let cwd = root.join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("code.txt"), "before").unwrap();
+        let script = root.join("adapter.py");
+        std::fs::write(&script, ADAPTER).unwrap();
+        let mgr = AcpManager::spawn();
+        let worker = mgr.clone();
+        let (tx, rx) = channel();
+        let (_atx, arx) = channel();
+        let mode: crate::evidence::Mode = false.into();
+        let key = format!("live-evidence-{}", rand::random::<u64>());
+        let req = AcpPrompt {
+            session_key: key.clone(),
+            cwd: cwd.clone(),
+            command_line: format!(
+                "{} -u {} {}",
+                install::shell_quote(&crate::agent::test_python_executable()),
+                install::shell_quote(&script),
+                if change { "change" } else { "explain" }
+            ),
+            env: vec![],
+            model: String::new(),
+            effort: String::new(),
+            mcp_servers: vec![],
+            text: "Answer the task".into(),
+            history: String::new(),
+            missed: String::new(),
+            images: vec![],
+            resources: vec![],
+            event_tx: tx,
+            approval_rx: arx,
+            approval_policy: ApprovalPolicy::disabled(),
+            bash_allowlist: vec![],
+            allowed_tools: vec![],
+            cancel: Arc::new(AtomicBool::new(false)),
+            plan_mode: false,
+            evidence_policy: crate::evidence::Policy {
+                mode: mode.clone(),
+                ..Default::default()
+            },
+            evidence_base: None,
+        };
+        let handle = tokio::spawn(async move { worker.prompt(req).await });
+        let mut events = vec![];
+        tokio::time::timeout(Duration::from_secs(15),async {
+            loop {
+                while let Ok(event)=rx.try_recv() {
+                    let ready=matches!(&event,AgentEvent::TextDelta(text) if text.contains("ready-to-finish"));
+                    events.push(event);
+                    if ready {return;}
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        mode.set(true);
+        std::fs::write(root.join("continue"), "go").unwrap();
+        tokio::time::timeout(Duration::from_secs(15), handle)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        events.extend(rx.try_iter());
+        let prompts = std::fs::read_to_string(root.join("prompts")).unwrap();
+        assert_eq!(prompts.lines().count(), if change { 3 } else { 1 });
+        assert!(!prompts.lines().next().unwrap().contains("[Evidence mode]"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e,AgentEvent::Evidence(report) if report.requested))
+                .count(),
+            usize::from(change)
+        );
+        mgr.close(&key);
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[tokio::test]
 async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
     let dir = std::env::temp_dir().join(format!("oxi-acp-import-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1261,6 +1380,8 @@ async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
     };
     tokio::time::timeout(
         Duration::from_secs(5),

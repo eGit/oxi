@@ -30,11 +30,13 @@ fn all_enabled() -> ToolEnv {
         mcp: None,
         undo_journal: None,
         subagent: None,
+        evidence: None,
     }
 }
 
 mod agent_tools;
 mod definitions_and_diff;
+mod evidence;
 mod file_tools;
 mod path_and_shell_safety;
 mod routing_and_undo;

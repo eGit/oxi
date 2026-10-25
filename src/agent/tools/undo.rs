@@ -122,6 +122,13 @@ impl TurnUndoJournal {
         });
     }
 
+    /// Repository root and tree of the snapshot taken before the turn.
+    pub fn checkpoint_base(&self) -> Option<(PathBuf, String)> {
+        self.checkpoint
+            .as_ref()
+            .map(|c| (c.repo.clone(), c.before.clone()))
+    }
+
     /// Record the snapshot taken after the turn; returns the turn's changes when the work tree
     /// differs from before.
     pub fn set_checkpoint_after(&mut self, tree: String) -> Option<crate::model::TurnChanges> {

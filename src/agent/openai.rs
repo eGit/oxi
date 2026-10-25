@@ -83,13 +83,13 @@ async fn run_chat_loop_at(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let mut context_char_budget = ctx.context_char_budget;
-    let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     // Reasoning the model streamed before each tool round, keyed by the round's first tool call
     // id: `(field it arrived in, text)`. Replayed only within this run, so the persisted wire
     // history stays plain Chat Completions.
     let mut reasoning_by_call: HashMap<String, (&'static str, String)> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     let mut overflow_retries = 0u32;
     // A round whose "final answer" was really a tool call written out as text (the server's
@@ -105,6 +105,12 @@ async fn run_chat_loop_at(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        let tools = super::dispatch::tools_for_round(tools, env);
+        let tools_chars = tools
+            .iter()
+            .map(|t| t.to_string().len())
+            .sum::<usize>()
+            .max(ctx.tools_chars);
         // Keep the accumulating history under the context ceiling as tool rounds pile up, so a
         // long multi-round run can't overflow the window mid-flight. A no-op until it's needed.
         crate::agent::history::trim_wire_history_to_budget(
@@ -453,6 +459,17 @@ async fn run_chat_loop_at(
             "role": "assistant",
             "content": assistant_text,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())
@@ -908,6 +925,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1003,6 +1021,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1071,6 +1090,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1164,6 +1184,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "read hello.txt"})];
         let tools = vec![json!({
@@ -1291,6 +1312,7 @@ mod integration_tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "make an app"})];
         let tools = vec![json!({

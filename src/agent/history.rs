@@ -477,6 +477,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -492,6 +493,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -524,6 +526,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let flat = flatten_assistant(&msg);
         // Both the leading command context and the final result survive; the middle is dropped.

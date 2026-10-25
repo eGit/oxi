@@ -12,6 +12,7 @@ mod app_dirs;
 mod code_nav;
 mod compute;
 mod desktop_entry;
+mod evidence;
 pub mod fsutil;
 mod git;
 mod headless;

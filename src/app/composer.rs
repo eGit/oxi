@@ -567,6 +567,59 @@ impl OxiApp {
         }
     }
 
+    /// Round camera button for evidence mode: accent while on.
+    fn render_evidence_toggle(&mut self, ui: &mut Ui) {
+        let key = self.active_session_key();
+        let on = self
+            .run_state(key)
+            .is_some_and(|r| r.evidence_mode.enabled());
+        let look = if on {
+            crate::ui::chrome::IconButtonLook {
+                fill: c_pill_selected_bg(),
+                hover_fill: c_pill_selected_bg(),
+                stroke: c_pill_selected_border(),
+                hover_stroke: c_accent(),
+                rounding: CornerRadius::same((ATTACH_DIAM * 0.5) as u8),
+                glyph: c_accent(),
+            }
+        } else {
+            crate::ui::chrome::IconButtonLook {
+                fill: Color32::TRANSPARENT,
+                hover_fill: c_row_hover(),
+                stroke: Color32::TRANSPARENT,
+                hover_stroke: c_border(),
+                rounding: CornerRadius::same((ATTACH_DIAM * 0.5) as u8),
+                glyph: c_text_muted(),
+            }
+        };
+        let button = crate::ui::chrome::icon_button_core(
+            ui,
+            ICON_CAMERA,
+            egui::vec2(ATTACH_DIAM, ATTACH_DIAM),
+            14.0,
+            on,
+            &look,
+        )
+        .on_hover_text(if on {
+            "Evidence mode is on: oxi checks at the end when changes need proof. You can toggle it while the agent works; valid existing evidence is reused. Click (or send /evidence) to turn it off."
+        } else {
+            "Evidence mode: verify changes when needed, including the current response. Informational replies and changes already covered by valid evidence need no repeat verification."
+        });
+        button.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                on,
+                "Evidence mode",
+            )
+        });
+        if button.clicked() {
+            let run = self.run_state_mut(key);
+            run.evidence_mode.toggle();
+            self.conv.composer.focus_next_frame = true;
+        }
+    }
+
     fn render_action_controls(
         &mut self,
         ui: &mut Ui,
@@ -587,6 +640,10 @@ impl OxiApp {
         }
         let show_attach = budget >= 48.0 + ATTACH_DIAM + 6.0;
         if show_attach {
+            budget -= ATTACH_DIAM + 6.0;
+        }
+        let show_evidence = budget >= 48.0 + ATTACH_DIAM + 6.0;
+        if show_evidence {
             budget -= ATTACH_DIAM + 6.0;
         }
         let show_plan =
@@ -702,6 +759,9 @@ impl OxiApp {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 if show_attach {
                     self.render_attach_button(ui);
+                }
+                if show_evidence {
+                    self.render_evidence_toggle(ui);
                 }
                 self.render_model_selector(ui);
                 let show_hint = composer_focused && self.active_session().messages.is_empty();

@@ -244,9 +244,15 @@ impl OxiApp {
         }
         // A turn run from an editor (the headless daemon) a moment ago must not be overwritten.
         self.reload_session_if_changed(key);
-        if self
-            .run_state(key)
-            .is_some_and(|state| state.waiting_response)
+        let live_evidence_toggle = !has_attachments
+            && matches!(
+                super::compaction::parse_slash_command(&text),
+                Some(super::compaction::SlashCommand::Evidence(None))
+            );
+        if !live_evidence_toggle
+            && self
+                .run_state(key)
+                .is_some_and(|state| state.waiting_response)
         {
             self.push_input_history(&text);
             self.conv.composer.history_index = None;
@@ -284,6 +290,29 @@ impl OxiApp {
                         run.plan_mode = true;
                         text.clear();
                         self.save_settings_quietly();
+                    }
+                }
+            }
+            Some(super::compaction::SlashCommand::Evidence(task)) => {
+                let run = self.run_state_mut(key);
+                match task {
+                    Some(task) => {
+                        run.evidence_mode.set(true);
+                        text = task;
+                    }
+                    None => {
+                        run.evidence_mode.toggle();
+                        let on = run.evidence_mode.enabled();
+                        self.push_input_history(&text);
+                        self.conv.composer.history_index = None;
+                        self.conv.composer.history_draft.clear();
+                        self.conv.composer.input.clear();
+                        self.notify_composer(if on {
+                            "Evidence mode on: changes are checked at the end when proof is needed, including the current response."
+                        } else {
+                            "Evidence mode off."
+                        });
+                        return;
                     }
                 }
             }
@@ -568,6 +597,7 @@ impl OxiApp {
         ));
         self.run_state_mut(key).undo_journal = Some(undo_journal.clone());
         let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
+        let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
         let request = AgentRunRequest {
             settings,
@@ -582,6 +612,7 @@ impl OxiApp {
             wire_candidate,
             chars_per_token,
             plan_mode,
+            evidence_mode,
             undo_journal,
         };
         let _join = spawn_agent_run(&self.agent_executor, request, tx);

@@ -19,16 +19,21 @@ pub(super) const SCRATCHPAD: &str = "scratchpad";
 const TOOL_NAMES: [&str; 3] = [TOOL_NAME, SCRATCHPAD_READ, SCRATCHPAD];
 
 /// The ACP `McpServer` entry that launches this server from the running oxi binary.
-pub(super) fn acp_entry() -> Option<Value> {
+/// `evidence_dir`: the connection's evidence folder, which turns on the evidence tools.
+pub(super) fn acp_entry(evidence_dir: Option<&std::path::Path>) -> Option<Value> {
     let exe = std::env::current_exe().ok()?;
     // Test binaries live in `target/<profile>/deps/`; the app binary sits one level up.
     #[cfg(test)]
     let exe = exe.parent()?.parent()?.join("oxi");
+    let env: Vec<Value> = evidence_dir
+        .map(|dir| json!({ "name": crate::evidence::DIR_ENV, "value": dir.to_string_lossy() }))
+        .into_iter()
+        .collect();
     Some(json!({
         "name": SERVER_NAME,
         "command": exe.to_string_lossy(),
         "args": [SUBCOMMAND],
-        "env": [],
+        "env": env,
     }))
 }
 
@@ -52,13 +57,16 @@ pub(super) fn names_todo_tool(s: &str) -> bool {
 pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
     let s = s.trim();
     // Claude: `mcp__oxi__todo_write`; Codex and others: `oxi.todo_write`, `oxi/todo_write`, ...
-    TOOL_NAMES.into_iter().find(|tool| {
-        s.strip_suffix(tool)
-            .and_then(|rest| rest.strip_suffix(['_', '.', '/', ':']))
-            .map(|rest| rest.trim_end_matches('_'))
-            .and_then(|server| server.strip_suffix(SERVER_NAME))
-            .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with(['_', '.', '/', ':']))
-    })
+    TOOL_NAMES
+        .into_iter()
+        .chain(crate::evidence::tools::NAMES)
+        .find(|tool| {
+            s.strip_suffix(tool)
+                .and_then(|rest| rest.strip_suffix(['_', '.', '/', ':']))
+                .map(|rest| rest.trim_end_matches('_'))
+                .and_then(|server| server.strip_suffix(SERVER_NAME))
+                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with(['_', '.', '/', ':']))
+        })
 }
 
 /// The user's Settings > Agent switch for the scratchpad tool. Read straight from
@@ -124,6 +132,21 @@ fn call_scratchpad(name: &str, args: &Value) -> Result<String, String> {
     ))
 }
 
+fn instructions() -> String {
+    let mut text = String::from(
+        "oxi shows the todo_write checklist live above the user's composer. \
+        Use it for any task with 3+ steps or when you lay out a plan.",
+    );
+    if scratchpad_enabled() {
+        text.push_str(" scratchpad_read and scratchpad reach the user's global notes in oxi.");
+    }
+    if crate::evidence::tools::conn_dir().is_some() {
+        text.push(' ');
+        text.push_str(crate::evidence::tools::INSTRUCTIONS);
+    }
+    text
+}
+
 /// Serve MCP over stdin/stdout until the agent closes the pipe.
 pub fn run_stdio() -> i32 {
     let stdin = std::io::stdin();
@@ -150,14 +173,7 @@ fn handle(msg: &Value) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
-            "instructions": if scratchpad_enabled() {
-                "oxi shows the todo_write checklist live above the user's composer. \
-                Use it for any task with 3+ steps or when you lay out a plan. \
-                scratchpad_read and scratchpad reach the user's global notes in oxi."
-            } else {
-                "oxi shows the todo_write checklist live above the user's composer. \
-                Use it for any task with 3+ steps or when you lay out a plan."
-            },
+            "instructions": instructions(),
         }),
         "ping" => json!({}),
         "tools/list" => {
@@ -169,6 +185,9 @@ fn handle(msg: &Value) -> Option<Value> {
             })];
             if scratchpad_enabled() {
                 tools.extend(scratchpad_tools());
+            }
+            if crate::evidence::tools::conn_dir().is_some() {
+                tools.extend(crate::evidence::tools::definitions());
             }
             json!({ "tools": tools })
         }
@@ -191,6 +210,19 @@ fn handle(msg: &Value) -> Option<Value> {
                 Ok(text) => (text, false),
                 Err(e) => (e, true),
             };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        }
+        "tools/call"
+            if msg["params"]["name"]
+                .as_str()
+                .is_some_and(|name| crate::evidence::tools::NAMES.contains(&name)) =>
+        {
+            let name = msg["params"]["name"].as_str().unwrap_or_default();
+            let (text, is_error) =
+                match crate::evidence::tools::call(name, &msg["params"]["arguments"]) {
+                    Ok(text) => (text, false),
+                    Err(e) => (e, true),
+                };
             json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
         }
         method => {

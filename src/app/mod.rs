@@ -23,6 +23,7 @@ mod conversation;
 mod demo_recording;
 mod drafts;
 mod eframe_app;
+mod evidence_card;
 mod file_explorer;
 mod focus_mode;
 mod fork;

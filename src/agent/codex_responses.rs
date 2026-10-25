@@ -496,11 +496,10 @@ pub async fn run_codex_responses_loop(
     let gate = &mut *ctx.gate;
     let effort_override = ctx.effort_override;
     let context_char_budget = ctx.context_char_budget;
-    let tools_chars = ctx.tools_chars;
     let url = resolve_codex_post_url(base_url);
-    let rtools = responses_tools(tools);
     let mut reasoning_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -510,6 +509,13 @@ pub async fn run_codex_responses_loop(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        let tools = super::dispatch::tools_for_round(tools, env);
+        let tools_chars = tools
+            .iter()
+            .map(|t| t.to_string().len())
+            .sum::<usize>()
+            .max(ctx.tools_chars);
+        let rtools = responses_tools(&tools);
         // Trim the canonical history under the context ceiling before splitting it, so a long
         // multi-round run can't overflow the window mid-flight. A no-op until it's needed.
         crate::agent::history::trim_wire_history_to_budget(
@@ -794,6 +800,17 @@ pub async fn run_codex_responses_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())
@@ -919,6 +936,7 @@ mod tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

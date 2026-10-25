@@ -13,6 +13,7 @@ fn answer(size: usize) -> ChatMessage {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     }
 }
 
@@ -28,6 +29,7 @@ fn user(text: &str) -> ChatMessage {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     }
 }
 

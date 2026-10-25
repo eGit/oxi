@@ -65,6 +65,7 @@ fn check_stream(thinking: &str) {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     };
     let first_line = thinking.lines().next().unwrap();
     let thinking_y = text_ys(&ctx, &mut frame, &msg, first_line)[0];

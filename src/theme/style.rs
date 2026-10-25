@@ -171,6 +171,8 @@ pub const ICON_HEART: &str = "\u{f004}";
 pub const ICON_SEARCH: &str = "\u{f002}";
 /// Activity log (status bar) — nf-md-pulse.
 pub const ICON_ACTIVITY: &str = "\u{f0430}";
+/// Evidence mode toggle, captures — nf-fa-camera.
+pub const ICON_CAMERA: &str = "\u{f030}";
 /// Plan mode toggle — nf-md-map_outline.
 pub const ICON_PLAN: &str = "\u{f0982}";
 /// Agent checklist (`todo_write`) — nf-md-format_list_checks.
