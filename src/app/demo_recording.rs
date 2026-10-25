@@ -170,6 +170,11 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         return;
     }
 
+    if std::env::var_os("OXI_SELECTION_REVIEW").is_some() {
+        review_selection_flicker(rec);
+        return;
+    }
+
     let gallery = true;
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
@@ -2848,6 +2853,128 @@ fn review_evidence_ui(rec: &mut Recorder<'_>) {
         "the toggle must not be queued as a new task"
     );
     rec.finish_turn();
+}
+
+/// Escape over an editor selection, and a right-press inside a transcript selection, must not
+/// paint the selection differently for a frame (`OXI_SELECTION_REVIEW=1`).
+fn review_selection_flicker(rec: &mut Recorder<'_>) {
+    use egui::PointerButton::{Primary, Secondary};
+    let button = |pos, button, pressed| Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let differing = |a: &image::RgbaImage, b: &image::RgbaImage| {
+        a.pixels().zip(b.pixels()).filter(|(x, y)| x != y).count()
+    };
+    let selection = |rec: &mut Recorder<'_>| {
+        rec.harness
+            .ctx
+            .plugin::<egui::text_selection::LabelSelectionState>()
+            .lock()
+            .has_selection()
+    };
+
+    {
+        let app = rec.app();
+        let reply = "Retries now back off between attempts, starting at a hundred milliseconds \
+                     and doubling each time up to the configured cap. Every attempt is logged \
+                     with its delay so a slow endpoint shows up in the output, and the final \
+                     error keeps the last response body for debugging. That is the whole \
+                     selection story for this review.";
+        let messages = &mut app.active_session_mut().messages;
+        messages.push(message(MsgRole::User, "Add retries to fetch", vec![]));
+        messages.push(message(
+            MsgRole::Assistant,
+            "",
+            vec![AssistantBlock::Answer(reply.into())],
+        ));
+    }
+    rec.harness.run_steps(6);
+    let rect = rec
+        .harness
+        .query_all_by_label_contains("Retries now back off")
+        .map(|node| {
+            let r = node.rect();
+            egui::Rect::from_min_max(
+                (r.min.to_vec2() / SCALE).to_pos2(),
+                (r.max.to_vec2() / SCALE).to_pos2(),
+            )
+        })
+        .next()
+        .expect("reply on screen");
+    let from = rect.left_top() + egui::vec2(3.0, 4.0);
+    let to = rect.right_bottom() - egui::vec2(3.0, 4.0);
+    rec.harness.event(Event::PointerMoved(from));
+    rec.harness.run_steps(2);
+    rec.harness.event(button(from, Primary, true));
+    rec.harness.step();
+    for i in 1..=8 {
+        rec.harness
+            .event(Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+        rec.harness.step();
+    }
+    rec.harness.event(button(to, Primary, false));
+    rec.harness.run_steps(2);
+    assert!(selection(rec), "the reply is selected");
+    let middle = rect.center();
+    rec.harness.event(Event::PointerMoved(middle));
+    rec.harness.run_steps(3);
+    let before = rec.harness.render().unwrap();
+    // kittest never calls `raw_input_hook`; route the press through it as eframe does.
+    let hooked = |rec: &mut Recorder<'_>, event| {
+        let ctx = rec.harness.ctx.clone();
+        let mut input = std::mem::take(rec.harness.input_mut());
+        input.events.push(event);
+        eframe::App::raw_input_hook(rec.app(), &ctx, &mut input);
+        *rec.harness.input_mut() = input;
+        rec.harness.step();
+    };
+    hooked(rec, button(middle, Secondary, true));
+    let pressed = rec.harness.render().unwrap();
+    let changed = differing(&before, &pressed);
+    println!("CHECK right-press inside a chat selection repaints {changed} pixels");
+    hooked(rec, button(middle, Secondary, false));
+    rec.harness.run_steps(2);
+    let menu = rec.app().conv.transcript.message_menu.is_some();
+    let held = rec.app().conv.transcript.held_selection.is_some();
+    println!(
+        "CHECK the message menu opens with Copy selection: {}",
+        menu && held
+    );
+    rec.still("chat-selection-menu");
+    assert_eq!(changed, 0, "chat selection flickers on right-press");
+    assert!(menu && held, "message menu with the held selection");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(2);
+
+    let project = rec.project.clone();
+    rec.app()
+        .open_editor_file(std::fs::canonicalize(project.join("stats.py")).unwrap());
+    rec.harness.run_steps(4);
+    {
+        let app = rec.app();
+        let document = app.conv.editor.active_document().unwrap();
+        let path = document.path.clone();
+        let at = document.content.find("ordered = sorted").unwrap();
+        app.conv.editor.navigation_target = Some((path, at..at + 40));
+        app.conv.editor.focus_editor_next_frame = true;
+    }
+    rec.harness.run_steps(4);
+    let before = rec.harness.render().unwrap();
+    rec.harness.key_press(egui::Key::Escape);
+    let escaped = rec.harness.render().unwrap();
+    rec.harness.step();
+    let after = rec.harness.render().unwrap();
+    let flicker = differing(&before, &escaped);
+    let settled = differing(&before, &after);
+    println!("CHECK Escape over an editor selection repaints {flicker} then {settled} pixels");
+    assert_eq!(
+        (flicker, settled),
+        (0, 0),
+        "editor selection flickers on Escape"
+    );
 }
 
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed

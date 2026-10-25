@@ -153,8 +153,6 @@ pub struct EditorState {
     pub focus_find_next_frame: bool,
     /// Return keyboard focus to the editor on its next render (definition/history jumps).
     pub focus_editor_next_frame: bool,
-    /// Collapse the active editor selection to its primary caret on the next render.
-    pub clear_editor_selection_next_frame: bool,
     /// Document opened explicitly from GitPanel. Only this document receives full-row Git
     /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
     pub git_full_highlight_path: Option<PathBuf>,
@@ -745,6 +743,13 @@ pub struct TranscriptState {
     pub held_selection: Option<egui::text_selection::LabelSelectionState>,
     /// "Copy selection" was chosen: copy the held selection on the next frame.
     pub copy_held_selection: bool,
+    /// Where last frame's transcript was visible, for routing right-clicks in `raw_input_hook`.
+    pub viewport: Option<(egui::LayerId, egui::Rect)>,
+    /// A right-press over a selected transcript was kept from egui (its labels would start a
+    /// new selection on it); the matching release is kept back too.
+    pub swallowing_secondary: bool,
+    /// The swallowed right-click's position, for this frame's `detect_message_menu`.
+    pub secondary_click: Option<egui::Pos2>,
     /// The Cmd/Ctrl+F bar over the transcript, while open.
     pub find: Option<super::conversation::find::ChatFind>,
 }
@@ -766,6 +771,9 @@ impl Default for TranscriptState {
             message_menu: None,
             held_selection: None,
             copy_held_selection: false,
+            viewport: None,
+            swallowing_secondary: false,
+            secondary_click: None,
             find: None,
         }
     }

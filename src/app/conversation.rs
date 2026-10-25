@@ -770,6 +770,11 @@ impl OxiApp {
                 }
             });
 
+        self.conv.transcript.viewport = Some((
+            ui.layer_id(),
+            scroll_output.inner_rect.intersect(ui.clip_rect()),
+        ));
+
         // ScrollArea clamps to the new bottom after painting. Resizing or streaming can
         // reflow the transcript substantially, so present the pass using that final offset
         // instead of flashing one frame at the previous width's scroll position.

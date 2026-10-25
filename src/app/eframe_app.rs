@@ -14,6 +14,7 @@ impl eframe::App for OxiApp {
         #[cfg(target_os = "macos")]
         self.take_menu_actions();
         self.replay_queued_actions(ctx, raw_input);
+        self.route_transcript_right_click(ctx, raw_input);
         if self.conv.settings_page.open
             || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
         {
@@ -571,21 +572,15 @@ impl OxiApp {
             && !self.confirm_prompt_open()
             && self.conv.editor.active_document().is_some()
         {
-            // Escape in the editor collapses any selection to its primary caret while keeping
-            // keyboard focus in the editing surface. With several selections it first goes back
-            // to the primary one, like Sublime (egui has already dropped focus on Escape, so
-            // the editor's own key handling never sees it).
+            // Escape in the editor closes the completion list, then drops the extra selections
+            // and keeps the primary one, like Sublime. Focus stays in (or returns to) the
+            // editing surface.
             if let Some(document) = self.conv.editor.active_document_mut()
-                && (!document.view.extra.is_empty() || document.view.completion.is_some())
+                && document.view.completion.take().is_none()
             {
-                // First the completion list, then the extra selections.
-                if document.view.completion.take().is_none() {
-                    document.view.extra.clear();
-                }
-                self.conv.editor.focus_editor_next_frame = true;
-            } else {
-                self.conv.editor.clear_editor_selection_next_frame = true;
+                document.view.extra.clear();
             }
+            self.conv.editor.focus_editor_next_frame = true;
         } else if escape && !self.conv.terminal_panel.open && !self.confirm_prompt_open() {
             self.focus_active_view_next_frame();
         }
