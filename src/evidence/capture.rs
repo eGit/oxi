@@ -425,6 +425,7 @@ mod platform {
         _cwd: &Path,
         execution: &Execution,
     ) -> Result<Captured, String> {
+        execution.check_cancelled()?;
         let target = match target {
             ScreenTarget::Window(query) => format!("Window \"{query}\""),
             ScreenTarget::Screen => "Screen".into(),
@@ -438,7 +439,7 @@ mod platform {
 // ── Command output ──────────────────────────────────────────────────────────────────────────
 
 /// Run `command`, then take the image or video it wrote to `output` (relative to `cwd`).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn command_output(
     command: &str,
     output: &str,
