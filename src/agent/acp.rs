@@ -223,6 +223,12 @@ pub struct AcpPrompt {
     pub cancel: Arc<AtomicBool>,
     /// Plan mode: ask for a plan and refuse every permission request that could change things.
     pub plan_mode: bool,
+    /// Evidence mode: ask the agent to prove the change (see [`crate::evidence`]) and follow up
+    /// when the proof is incomplete.
+    pub evidence_mode: bool,
+    /// Repository root and snapshot tree of the work tree as the turn starts, for
+    /// `evidence_base_checkout`.
+    pub evidence_base: Option<(PathBuf, String)>,
 }
 
 /// Prepended to the user's message in plan mode. ACP agents run their own tools, so oxi can't
@@ -544,6 +550,8 @@ struct ConnHandles {
     alive: Arc<AtomicBool>,
     /// When the agent was last used, for stopping idle ones (see [`reaper`]).
     activity: Arc<reaper::Activity>,
+    /// Shared with oxi's MCP server in this session: where its evidence tools file captures.
+    evidence_dir: PathBuf,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
@@ -816,7 +824,9 @@ async fn spawn_conn(
 
     let caps = &init["agentCapabilities"];
     let mut mcp = mcp_servers::to_acp(&mcp_servers, caps);
-    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), oxi_mcp::acp_entry()) {
+    let evidence_dir = crate::evidence::new_conn_dir();
+    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), oxi_mcp::acp_entry(Some(&evidence_dir)))
+    {
         list.push(todo);
     }
     let resumed = match sessions::lookup(session_key, command_line, cwd) {
@@ -912,6 +922,7 @@ async fn spawn_conn(
         held,
         alive: alive.clone(),
         activity,
+        evidence_dir,
     };
     handles.held.arm();
     Ok(Conn {
@@ -1210,6 +1221,8 @@ async fn run_prompt(
         mut allowed_tools,
         cancel,
         plan_mode,
+        evidence_mode,
+        evidence_base,
         ..
     } = req;
 
@@ -1219,6 +1232,22 @@ async fn run_prompt(
         let _ = reply.send(Ok(()));
         return;
     }
+    let evidence_turn = format!("t{}", crate::evidence::now_ms());
+    let evidence_ready = crate::evidence::begin_turn(
+        &handles.evidence_dir,
+        &crate::evidence::TurnMarker {
+            turn: evidence_turn.clone(),
+            started_ms: crate::evidence::now_ms(),
+            cwd: cwd.to_string_lossy().into_owned(),
+            repo: evidence_base
+                .as_ref()
+                .map(|(repo, _)| repo.to_string_lossy().into_owned()),
+            base_tree: evidence_base.map(|(_, tree)| tree),
+        },
+    )
+    .inspect_err(|e| log::warn!("evidence: could not start the turn: {e}"))
+    .is_ok();
+    let evidence_mode = evidence_mode && evidence_ready && !plan_mode;
     // Sent anyway, the agent would fail the turn with an opaque error or drop the images.
     if !images.is_empty() && !handles.images {
         let _ = reply.send(Err(format!(
@@ -1268,6 +1297,8 @@ async fn run_prompt(
         .await;
     let text = if plan_mode && !slash_command && !native_plan {
         format!("{ACP_PLAN_MODE_PREFIX}\n\n{text}")
+    } else if evidence_mode && !slash_command {
+        format!("{}\n\n{text}", crate::evidence::PROMPT_PREFIX)
     } else {
         text
     };
@@ -1278,59 +1309,98 @@ async fn run_prompt(
     } else {
         with_missed(&missed, &text)
     };
-    let prompt_params = json!({
-        "sessionId": handles.session_id,
-        "prompt": build_prompt_blocks(&text, &images, &resource_blocks(&resources, handles.embedded_context)),
-    });
-    let id = handles.next_id.fetch_add(1, Ordering::SeqCst);
-    let (rtx, mut rrx) = oneshot::channel::<Result<Value, String>>();
-    handles.pending.lock().await.insert(id, rtx);
-    let send = write_line(
-        &handles.stdin,
-        &json!({"jsonrpc":"2.0","id":id,"method":"session/prompt","params":prompt_params}),
-    )
-    .await;
-    if let Err(e) = send {
-        *handles.prompt_ctx.lock().await = None;
-        let _ = reply.send(Err(e));
-        return;
-    }
-
+    let mut prompt_blocks = build_prompt_blocks(
+        &text,
+        &images,
+        &resource_blocks(&resources, handles.embedded_context),
+    );
     let mut auto_approve = false;
-    let mut cancel_sent = false;
+    let mut followups = 0;
     let result: Result<Value, String> = loop {
-        tokio::select! {
-            biased;
-            r = &mut rrx => {
-                break r.unwrap_or_else(|_| Err("ACP connection closed".to_string()));
-            }
-            maybe = perm_rx.recv() => {
-                if let Some(pr) = maybe {
-                    handle_permission(
-                        &handles.stdin,
-                        event_tx.clone(),
-                        &mut approval_rx,
-                        approval_policy,
-                        &mut bash_allowlist,
-                        &mut allowed_tools,
-                        plan_mode,
-                        &cancel,
-                        &mut auto_approve,
-                        pr,
-                    )
-                    .await;
+        let prompt_params = json!({
+            "sessionId": handles.session_id,
+            "prompt": prompt_blocks,
+        });
+        let id = handles.next_id.fetch_add(1, Ordering::SeqCst);
+        let (rtx, mut rrx) = oneshot::channel::<Result<Value, String>>();
+        handles.pending.lock().await.insert(id, rtx);
+        let send = write_line(
+            &handles.stdin,
+            &json!({"jsonrpc":"2.0","id":id,"method":"session/prompt","params":prompt_params}),
+        )
+        .await;
+        if let Err(e) = send {
+            *handles.prompt_ctx.lock().await = None;
+            let _ = reply.send(Err(e));
+            return;
+        }
+
+        let mut cancel_sent = false;
+        let result: Result<Value, String> = loop {
+            tokio::select! {
+                biased;
+                r = &mut rrx => {
+                    break r.unwrap_or_else(|_| Err("ACP connection closed".to_string()));
+                }
+                maybe = perm_rx.recv() => {
+                    if let Some(pr) = maybe {
+                        handle_permission(
+                            &handles.stdin,
+                            event_tx.clone(),
+                            &mut approval_rx,
+                            approval_policy,
+                            &mut bash_allowlist,
+                            &mut allowed_tools,
+                            plan_mode,
+                            &cancel,
+                            &mut auto_approve,
+                            pr,
+                        )
+                        .await;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(150)) => {
+                    if !cancel_sent && cancel.load(Ordering::SeqCst) {
+                        cancel_sent = true;
+                        let _ = write_line(
+                            &handles.stdin,
+                            &json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": handles.session_id}}),
+                        ).await;
+                    }
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(150)) => {
-                if !cancel_sent && cancel.load(Ordering::SeqCst) {
-                    cancel_sent = true;
-                    let _ = write_line(
-                        &handles.stdin,
-                        &json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": handles.session_id}}),
-                    ).await;
+        };
+        // Evidence mode: a turn that finished with its proof incomplete is sent back to the agent,
+        // a bounded number of times, inside the same reply.
+        let finished = result
+            .as_ref()
+            .is_ok_and(|res| res["stopReason"].as_str() == Some("end_turn"));
+        if evidence_mode
+            && finished
+            && followups < crate::evidence::MAX_FOLLOWUPS
+            && !cancel.load(Ordering::SeqCst)
+        {
+            let report = crate::evidence::collect(&handles.evidence_dir, &evidence_turn, true);
+            let problems = report.problems();
+            if !problems.is_empty() {
+                followups += 1;
+                if let Ok(res) = &result
+                    && let Some(usage) = prompt_usage(&res["usage"])
+                {
+                    let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
                 }
+                let _ = event_tx.send(AgentEvent::TextDelta(format!(
+                    "\n\n*oxi asked the agent for the missing evidence ({}).*\n\n",
+                    problems.len()
+                )));
+                prompt_blocks = json!([{
+                    "type": "text",
+                    "text": crate::evidence::followup_prompt(&problems),
+                }]);
+                continue;
             }
         }
+        break result;
     };
     *handles.prompt_ctx.lock().await = None;
     handles.activity.touch();
@@ -1347,6 +1417,12 @@ async fn run_prompt(
         }
         if let Some(usage) = prompt_usage(&res["usage"]) {
             let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
+        }
+    }
+    if evidence_ready {
+        let report = crate::evidence::collect(&handles.evidence_dir, &evidence_turn, evidence_mode);
+        if evidence_mode || !report.is_empty() {
+            let _ = event_tx.send(AgentEvent::Evidence(Box::new(report)));
         }
     }
     let _ = reply.send(result.map(|_| ()));

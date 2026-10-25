@@ -324,6 +324,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 

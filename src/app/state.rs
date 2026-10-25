@@ -396,6 +396,9 @@ pub struct SessionRunState {
     pub plan_mode: bool,
     /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
     pub last_turn_planned: bool,
+    /// Composer "Evidence" toggle for this chat (ACP agents): each turn proves its change with
+    /// before/after captures and checks oxi makes itself.
+    pub evidence_mode: bool,
     /// Provider/model the running turn bills against (the routed one under the Router), for
     /// the usage ledger.
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
@@ -406,7 +409,7 @@ pub struct SessionRunState {
 impl SessionRunState {
     /// Per-chat composer modes that must survive idle-state pruning.
     pub fn keeps_chat_modes(&self) -> bool {
-        self.plan_mode || self.last_turn_planned || !self.queued.is_empty()
+        self.plan_mode || self.evidence_mode || self.last_turn_planned || !self.queued.is_empty()
     }
 
     pub fn clear_agent(&mut self) {
@@ -732,6 +735,7 @@ pub struct TranscriptState {
     pub rendered: std::collections::HashSet<(usize, usize, usize)>,
     /// File lists and view state of "N files changed" cards under agent turns.
     pub turn_changes: super::turn_changes::TurnChangesCache,
+    pub evidence: super::evidence_card::EvidenceCardCache,
     /// Right-click menu of a transcript message (fork, copy).
     pub message_menu: Option<super::fork::MessageMenu>,
     /// The transcript's text selection as it was when a right-click began. egui collapses a
@@ -756,6 +760,7 @@ impl Default for TranscriptState {
             tool_detail: Default::default(),
             rendered: Default::default(),
             turn_changes: Default::default(),
+            evidence: Default::default(),
             message_menu: None,
             held_selection: None,
             copy_held_selection: false,

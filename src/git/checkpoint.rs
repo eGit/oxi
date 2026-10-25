@@ -115,6 +115,22 @@ pub fn patch(repo: &Path, before: &str, after: &str, max_bytes: usize) -> Result
     Ok(out)
 }
 
+/// Write the files of snapshot `tree` into `dest`, a plain folder without git metadata. The
+/// repository's index and work tree are left alone.
+pub fn checkout_to(repo: &Path, tree: &str, dest: &Path) -> Result<(), String> {
+    let repo = open_repo(&repo.to_string_lossy())?;
+    let tree = find_tree(&repo, tree)?;
+    std::fs::create_dir_all(dest).map_err(err)?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout
+        .target_dir(dest)
+        .force()
+        .recreate_missing(true)
+        .update_index(false);
+    repo.checkout_tree(tree.as_object(), Some(&mut checkout))
+        .map_err(err)
+}
+
 /// Put back the `before` state of every path the turn changed (`before` → `after`), or only
 /// `only` when given. Refused when one of those paths no longer matches `after`, so later edits
 /// (yours or a later turn's) are never overwritten.

@@ -214,6 +214,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
@@ -240,6 +241,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let mut messages = vec![user.clone(), assistant.clone(), user, assistant];
 
@@ -262,6 +264,7 @@ mod tests {
                 worked_duration: None,
                 route: None,
                 changes: None,
+                evidence: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -274,6 +277,7 @@ mod tests {
                 worked_duration: None,
                 route: None,
                 changes: None,
+                evidence: None,
             },
             ChatMessage {
                 role: MsgRole::User,
@@ -286,6 +290,7 @@ mod tests {
                 worked_duration: None,
                 route: None,
                 changes: None,
+                evidence: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -298,6 +303,7 @@ mod tests {
                 worked_duration: None,
                 route: None,
                 changes: None,
+                evidence: None,
             },
         ];
 
@@ -427,6 +433,7 @@ mod tests {
                     worked_duration: None,
                     route: None,
                     changes: None,
+                    evidence: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -453,6 +460,7 @@ mod tests {
                     worked_duration: None,
                     route: None,
                     changes: None,
+                    evidence: None,
                 },
             ],
             session_file: None,
@@ -495,6 +503,7 @@ mod tests {
                     worked_duration: None,
                     route: None,
                     changes: None,
+                    evidence: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -507,6 +516,7 @@ mod tests {
                     worked_duration: Some(Duration::from_secs(67)),
                     route: None,
                     changes: None,
+                    evidence: None,
                 },
             ],
             session_file: None,

@@ -51,6 +51,11 @@ pub fn chat_message_to_json_entries(message: &ChatMessage) -> Vec<Value> {
             {
                 entry["changes"] = json!(changes);
             }
+            if let Some(entry) = entries.first_mut()
+                && let Some(evidence) = &message.evidence
+            {
+                entry["evidence"] = json!(evidence);
+            }
             entries
         }
     }
@@ -208,6 +213,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&message);
         let restored = crate::hydrate::messages_from_get_messages(&json!({"messages": entries}));
@@ -273,6 +279,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -295,6 +302,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries[0]["role"], "user");
@@ -323,6 +331,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -348,6 +357,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -379,6 +389,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 2); // assistant + toolResult
@@ -410,6 +421,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let result = &entries[1];
@@ -439,6 +451,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let content = entries[0]["content"].as_array().unwrap();

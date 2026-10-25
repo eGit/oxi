@@ -238,6 +238,8 @@ fn acp_end_to_end_applies_model() {
         allowed_tools: Vec::new(),
         cancel,
         plan_mode: false,
+        evidence_mode: false,
+        evidence_base: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -490,6 +492,7 @@ fn acp_metadata_diff_and_valid_long_args_survive_session_roundtrip() {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     };
     message.finish_streaming();
     let entries = crate::session_store::chat_message_to_json_entries(&message);
@@ -904,6 +907,8 @@ fn acp_live_features() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode,
+        evidence_mode: false,
+        evidence_base: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -1021,6 +1026,8 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
+        evidence_mode: false,
+        evidence_base: None,
     };
     rt.block_on(mgr.prompt(prompt)).unwrap();
     assert_eq!(texts(&ev_rx), "Building in the background.");
@@ -1261,6 +1268,8 @@ async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
         plan_mode: false,
+        evidence_mode: false,
+        evidence_base: None,
     };
     tokio::time::timeout(
         Duration::from_secs(5),

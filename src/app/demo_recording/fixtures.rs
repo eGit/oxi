@@ -211,6 +211,7 @@ pub(super) fn message(role: MsgRole, text: &str, blocks: Vec<AssistantBlock>) ->
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     }
 }
 

@@ -85,6 +85,8 @@ pub struct AgentRunRequest {
     pub chars_per_token: f32,
     /// Plan mode: read-only tools only, and the model is asked for a plan instead of changes.
     pub plan_mode: bool,
+    /// Evidence mode (ACP agents): the change is to be proven with oxi's evidence tools.
+    pub evidence_mode: bool,
     pub undo_journal: UndoJournal,
 }
 
@@ -132,6 +134,7 @@ fn spawn_agent_attempt(
             wire_candidate,
             chars_per_token,
             plan_mode,
+            evidence_mode,
             undo_journal,
         } = request;
 
@@ -145,6 +148,10 @@ fn spawn_agent_attempt(
             // The agent edits files with its own tools, so the turn is made reversible by
             // snapshotting the work tree around it (git repositories only).
             checkpoint_before_acp_turn(&cwd, &undo_journal).await;
+            let evidence_base = undo_journal
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .checkpoint_base();
             let outcome = run_acp_turn(
                 &cfg,
                 settings.mcp_servers.clone(),
@@ -162,6 +169,8 @@ fn spawn_agent_attempt(
                 settings.allowed_tools_for(&cwd),
                 &cancel,
                 plan_mode,
+                evidence_mode,
+                evidence_base,
             )
             .await;
             if let AgentOutcome::Failed { error } = &outcome
@@ -443,6 +452,8 @@ async fn run_acp_turn(
     allowed_tools: Vec<String>,
     cancel: &Arc<AtomicBool>,
     plan_mode: bool,
+    evidence_mode: bool,
+    evidence_base: Option<(PathBuf, String)>,
 ) -> AgentOutcome {
     let last_user_idx = chat_for_history
         .iter()
@@ -502,6 +513,8 @@ async fn run_acp_turn(
         allowed_tools,
         cancel: cancel.clone(),
         plan_mode,
+        evidence_mode,
+        evidence_base,
     };
 
     match acp.prompt(req).await {

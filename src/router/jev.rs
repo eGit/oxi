@@ -435,6 +435,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let mut i = input("はい、お願いします");
         i.previous_tier = Some(Tier::Heavy);

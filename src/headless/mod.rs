@@ -885,6 +885,7 @@ impl Server {
                 .chars_per_token
                 .unwrap_or(crate::agent::DEFAULT_CHARS_PER_TOKEN),
             plan_mode: chat.plan_mode,
+            evidence_mode: false,
             undo_journal,
         };
         let worker_tx = self.worker_channel(&id, run_id);
@@ -1133,6 +1134,11 @@ impl Server {
             AgentEvent::TurnChanges(changes) => {
                 if let Some(m) = chat.last_assistant_mut() {
                     m.changes = Some(changes);
+                }
+            }
+            AgentEvent::Evidence(report) => {
+                if let Some(m) = chat.last_assistant_mut() {
+                    m.evidence = Some(report);
                 }
             }
             AgentEvent::Finished(outcome) => {

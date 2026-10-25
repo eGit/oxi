@@ -50,6 +50,8 @@ pub(crate) enum SlashCommand {
     Compact,
     /// `/plan` toggles plan mode; `/plan <task>` turns it on and sends the task.
     Plan(Option<String>),
+    /// `/evidence` toggles evidence mode; `/evidence <task>` turns it on and sends the task.
+    Evidence(Option<String>),
 }
 
 /// Recognize an exact, argument-free `/new` or `/compact`, or `/plan` with an optional task.
@@ -60,7 +62,13 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
         "/new" => return Some(SlashCommand::New),
         "/compact" => return Some(SlashCommand::Compact),
         "/plan" => return Some(SlashCommand::Plan(None)),
+        "/evidence" => return Some(SlashCommand::Evidence(None)),
         _ => {}
+    }
+    if let Some(task) = text.strip_prefix("/evidence") {
+        return task
+            .starts_with(char::is_whitespace)
+            .then(|| SlashCommand::Evidence(Some(task.trim().to_string())));
     }
     let task = text.strip_prefix("/plan")?;
     task.starts_with(char::is_whitespace)
@@ -249,6 +257,7 @@ impl OxiApp {
                             worked_duration: None,
                             route: None,
                             changes: None,
+                            evidence: None,
                         },
                     );
                 }
@@ -298,6 +307,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -313,6 +323,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -341,6 +352,15 @@ mod tests {
             Some(SlashCommand::Plan(Some("add a cache\nfor sessions".into())))
         );
         assert_eq!(parse_slash_command("/planner"), None);
+        assert_eq!(
+            parse_slash_command("/evidence"),
+            Some(SlashCommand::Evidence(None))
+        );
+        assert_eq!(
+            parse_slash_command("/evidence fix the login page"),
+            Some(SlashCommand::Evidence(Some("fix the login page".into())))
+        );
+        assert_eq!(parse_slash_command("/evidenced"), None);
     }
 
     #[test]

@@ -55,6 +55,7 @@ fn user(text: &str) -> ChatMessage {
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     }
 }
 
@@ -242,6 +243,7 @@ async fn run_case(
             wire_candidate: None,
             chars_per_token: 4.0,
             plan_mode: plan,
+            evidence_mode: false,
             undo_journal: Arc::new(std::sync::Mutex::new(Default::default())),
         },
         tx,

@@ -569,6 +569,12 @@ impl OxiApp {
                                         Some((changes, m.route.as_deref().map(|r| r.provider)))
                                     })
                                     .collect();
+                                let evidence: Vec<crate::evidence::EvidenceReport> = messages
+                                    [start..end]
+                                    .iter()
+                                    .filter(|m| !m.streaming)
+                                    .filter_map(|m| m.evidence.as_deref().cloned())
+                                    .collect();
                                 let review_followup = (end == message_count
                                     && messages[start].role == MsgRole::Assistant)
                                     .then(|| super::review::review_followup(messages, start))
@@ -602,6 +608,16 @@ impl OxiApp {
                                         |ui| {
                                             for (changes, author) in &turn_changes {
                                                 self.render_turn_changes(ui, changes, *author);
+                                            }
+                                        },
+                                    );
+                                }
+                                if !evidence.is_empty() {
+                                    ui.scope_builder(
+                                        egui::UiBuilder::new().id(unit_id.with("evidence")),
+                                        |ui| {
+                                            for report in &evidence {
+                                                self.render_evidence(ui, report);
                                             }
                                         },
                                     );

@@ -164,6 +164,11 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         return;
     }
 
+    if std::env::var_os("OXI_EVIDENCE_REVIEW").is_some() {
+        review_evidence_ui(rec);
+        return;
+    }
+
     let gallery = true;
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
@@ -2653,6 +2658,110 @@ impl Recorder<'_> {
     }
 }
 
+/// Stills of an evidence-mode turn: real before/after captures (headless Chrome), a check and
+/// the agent's claims in the evidence card (`OXI_EVIDENCE_REVIEW=1`).
+fn review_evidence_ui(rec: &mut Recorder<'_>) {
+    use crate::evidence::{Claim, EvidenceItem, EvidenceReport, ItemKind, Origin, Phase};
+    rec.harness.run_steps(4);
+    let dir = rec.project.join(".evidence-review");
+    std::fs::create_dir_all(&dir).unwrap();
+    let page = |error: &str| {
+        format!(
+            "<html><body style=\"font-family:-apple-system,sans-serif;background:#fafaf7;margin:0;padding:48px\">\
+             <h2 style=\"margin:0 0 20px\">Sign in</h2>\
+             <input placeholder=\"Email\" value=\"ana@example.com\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:8px\">\
+             <input type=password value=\"hunter2\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid {};border-radius:8px\">{}\
+             <button style=\"padding:10px 20px;border:0;border-radius:8px;background:#e26a2c;color:white\">Sign in</button></body></html>",
+            if error.is_empty() { "#ccc" } else { "#d33" },
+            error
+        )
+    };
+    let shoot = |name: &str, html: String| {
+        let file = dir.join(format!("{name}.html"));
+        std::fs::write(&file, html).unwrap();
+        let out = dir.join(format!("{name}.png"));
+        crate::evidence::capture::url(&format!("file://{}", file.display()), &out, 640, 360, 500)
+            .expect("headless Chrome capture")
+            .file
+    };
+    let before = shoot("before", page(""));
+    let after = shoot(
+        "after",
+        page(
+            "<p style=\"color:#d33;margin:0 0 12px;font-size:14px\">Wrong password. Try again or reset it.</p>",
+        ),
+    );
+    let item = |id: &str, kind, phase, label: &str, file: Option<&Path>| EvidenceItem {
+        id: id.into(),
+        kind,
+        phase,
+        label: label.into(),
+        origin: Origin::Oxi,
+        file: file.map(|f| f.to_string_lossy().into_owned()),
+        preview: None,
+        fresh: false,
+        source: "Chrome headless · http://localhost:5173/login".into(),
+        command: None,
+        cwd: Some(rec.project.to_string_lossy().into_owned()),
+        exit_code: None,
+        timed_out: false,
+        output: String::new(),
+        duration_ms: 0,
+    };
+    let mut check = item("e3", ItemKind::Check, Phase::Check, "Unit tests", None);
+    check.command = Some("npm test -- login".into());
+    check.exit_code = Some(0);
+    check.duration_ms = 4_210;
+    check.output = "PASS src/login.test.ts\n  ✓ shows an inline error on a wrong password (41 ms)\n\nTests: 1 passed, 1 total".into();
+    let report = EvidenceReport {
+        turn: "review".into(),
+        requested: true,
+        submitted: true,
+        summary: "A wrong password now shows an inline error under the field instead of failing silently.".into(),
+        items: vec![
+            item("e1", ItemKind::Image, Phase::Before, "Login page, wrong password", Some(&before)),
+            item("e2", ItemKind::Image, Phase::After, "Login page, wrong password", Some(&after)),
+            check,
+        ],
+        claims: vec![
+            Claim {
+                text: "A wrong password shows an inline error".into(),
+                evidence: vec!["e2".into(), "e3".into()],
+            },
+            Claim {
+                text: "Nothing else on the page changed".into(),
+                evidence: vec![],
+            },
+        ],
+    };
+    {
+        let app = rec.app();
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        let key = app.active_session_key();
+        app.run_state_mut(key).evidence_mode = true;
+        app.conv.sidebar.open = false;
+    }
+    rec.begin_turn("Show an error when the password is wrong");
+    rec.send(AgentEvent::TextDelta(
+        "Done. The login form now shows an inline error when the password is wrong.".into(),
+    ));
+    rec.send(AgentEvent::Evidence(Box::new(report)));
+    rec.finish_turn();
+    // Image decoding runs on loader threads; let it land.
+    for _ in 0..30 {
+        rec.harness.run_steps(2);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    rec.harness.run_steps(4);
+    rec.still("evidence-card");
+    rec.harness.set_size(egui::vec2(560.0, 900.0));
+    for _ in 0..10 {
+        rec.harness.run_steps(2);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    rec.still("evidence-card-narrow");
+}
+
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed
 /// tool, and the finished turn unfolded (`OXI_STREAM_REVIEW=1`; `OXI_TOOL_DETAIL=minimal` or
 /// `expanded` renders the same turn in that tool-detail mode).
@@ -3221,6 +3330,7 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         });
         app.conv.composer.pending_images = (0..12)
             .map(|i| ("image/png".to_string(), png(800, 600, (i * 20) as u8)))

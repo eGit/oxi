@@ -287,6 +287,29 @@ impl OxiApp {
                     }
                 }
             }
+            Some(super::compaction::SlashCommand::Evidence(task)) => {
+                let run = self.run_state_mut(key);
+                match task {
+                    Some(task) => {
+                        run.evidence_mode = true;
+                        text = task;
+                    }
+                    None => {
+                        run.evidence_mode = !run.evidence_mode;
+                        let on = run.evidence_mode;
+                        self.push_input_history(&text);
+                        self.conv.composer.history_index = None;
+                        self.conv.composer.history_draft.clear();
+                        self.conv.composer.input.clear();
+                        self.notify_composer(if on {
+                            "Evidence mode on: the agent proves its changes with before/after captures and checks."
+                        } else {
+                            "Evidence mode off."
+                        });
+                        return;
+                    }
+                }
+            }
             Some(cmd)
                 if !has_attachments
                     && (cmd == super::compaction::SlashCommand::New
@@ -568,6 +591,7 @@ impl OxiApp {
         ));
         self.run_state_mut(key).undo_journal = Some(undo_journal.clone());
         let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
+        let evidence_mode = self.run_state(key).is_some_and(|r| r.evidence_mode);
         self.run_state_mut(key).last_turn_planned = plan_mode;
         let request = AgentRunRequest {
             settings,
@@ -582,6 +606,7 @@ impl OxiApp {
             wire_candidate,
             chars_per_token,
             plan_mode,
+            evidence_mode,
             undo_journal,
         };
         let _join = spawn_agent_run(&self.agent_executor, request, tx);

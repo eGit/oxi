@@ -207,6 +207,8 @@ pub struct ChatMessage {
     pub route: Option<Box<RouteNote>>,
     /// Assistant only: what the turn changed in the workspace, when a snapshot was possible.
     pub changes: Option<Box<TurnChanges>>,
+    /// Assistant only: before/after captures, checks and claims the turn proved.
+    pub evidence: Option<Box<crate::evidence::EvidenceReport>>,
 }
 
 impl ChatMessage {
@@ -241,6 +243,7 @@ impl ChatMessage {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -257,6 +260,7 @@ impl ChatMessage {
             worked_duration: None,
             route,
             changes: None,
+            evidence: None,
         }
     }
 
