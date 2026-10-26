@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-10-26
+
+### Added
+- **Remote:** Connect to and work with SSH-hosted oxi workspaces, including remote chats, file access, Git operations, search, and terminals with managed macOS server setup.
+- **Chat:** Open side-by-side conversations with mirrored prompts and worktree splits for parallel work.
+- **Evidence:** Enable evidence mode per chat to have the agent capture before/after screenshots, run checks, and submit claims for verification of its actions.
+- **Settings:** Search across all settings and provider options from a gear icon in the status bar; settings now save only when changed.
+
+### Fixed
+- **Editor:** Stop selection from flickering when pressing Escape or right-clicking in the chat transcript.
+- **Remote:** Handle Windows path separators correctly in remote workspaces.
+- **Platform:** Fix macOS server helpers to work correctly on all platforms.
+
+
 ## [1.25.0] - 2026-10-24
 
 ### Added
@@ -1205,7 +1219,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.25.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.26.0...HEAD
+[1.26.0]: https://github.com/maziluiosif/oxi/compare/v1.25.0...v1.26.0
 [1.25.0]: https://github.com/maziluiosif/oxi/compare/v1.24.0...v1.25.0
 [1.24.0]: https://github.com/maziluiosif/oxi/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/maziluiosif/oxi/compare/v1.22.0...v1.23.0
