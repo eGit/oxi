@@ -202,7 +202,8 @@ impl OxiApp {
     fn workspaces_at(&self, host: &str, path: &str) -> Vec<usize> {
         (0..self.conv.workspaces.len())
             .filter(|&wi| {
-                crate::remote::split(&self.conv.workspaces[wi].root_path) == Some((host, path))
+                crate::remote::split(&self.conv.workspaces[wi].root_path)
+                    .is_some_and(|(h, p)| h == host && p == path)
             })
             .collect()
     }
@@ -672,7 +673,7 @@ impl OxiApp {
         let Some(client) = self.remote.connected(host) else {
             return;
         };
-        let (pending, rx) = client.attach(&root_path, chat);
+        let (pending, rx) = client.attach(&root_path, &chat);
         self.remote.loading.insert(file.clone());
         self.remote.asked.push((Asked::Load { file, rx }, pending));
     }
@@ -1020,12 +1021,9 @@ impl OxiApp {
         self.remote.dialog = None;
         let root = crate::remote::location(host, path);
         self.open_workspace_path(root);
-        if let Some(wi) = self
-            .conv
-            .workspaces
-            .iter()
-            .position(|w| crate::remote::split(&w.root_path) == Some((host, path)))
-        {
+        if let Some(wi) = self.conv.workspaces.iter().position(|w| {
+            crate::remote::split(&w.root_path).is_some_and(|(h, p)| h == host && p == path)
+        }) {
             self.remote_list_chats(wi);
         }
     }

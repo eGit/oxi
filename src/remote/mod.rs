@@ -10,10 +10,13 @@ pub mod client;
 pub mod protocol;
 pub mod service;
 
+use std::borrow::Cow;
+
 const SCHEME: &str = "ssh://";
 
 /// `(host, path on the host)` of a remote workspace root or chat file.
-pub fn split(location: &str) -> Option<(&str, &str)> {
+/// On Windows, paths rebuilt with `Path::join` use backslashes; send forward slashes to SSH.
+pub fn split(location: &str) -> Option<(&str, Cow<'_, str>)> {
     // `Path` keeps the double slash, but code that rebuilds a path from its components
     // collapses it.
     let rest = location
@@ -21,6 +24,13 @@ pub fn split(location: &str) -> Option<(&str, &str)> {
         .or_else(|| location.strip_prefix("ssh:/"))?;
     let slash = rest.find('/')?;
     let (host, path) = rest.split_at(slash);
+    let path = Cow::Borrowed(path);
+    #[cfg(windows)]
+    let path = if path.contains('\\') {
+        Cow::Owned(path.replace('\\', "/"))
+    } else {
+        path
+    };
     (!host.is_empty()).then_some((host, path))
 }
 
@@ -33,8 +43,8 @@ pub fn host_of(location: &str) -> Option<&str> {
 }
 
 /// The path on the host; a local location is returned as is.
-pub fn path_of(location: &str) -> &str {
-    split(location).map_or(location, |(_, path)| path)
+pub fn path_of(location: &str) -> Cow<'_, str> {
+    split(location).map_or(Cow::Borrowed(location), |(_, path)| path)
 }
 
 pub fn location(host: &str, path: &str) -> String {
@@ -75,21 +85,43 @@ pub fn ssh_config_hosts() -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn assert_split(location: &str, expected: Option<(&str, &str)>) {
+        let parts = split(location);
+        assert_eq!(
+            parts.as_ref().map(|(host, path)| (*host, path.as_ref())),
+            expected
+        );
+    }
+
     #[test]
     fn locations_split_into_host_and_path() {
         let root = location("mini", "/Users/me/p");
         assert_eq!(root, "ssh://mini/Users/me/p");
-        assert_eq!(split(&root), Some(("mini", "/Users/me/p")));
+        assert_split(&root, Some(("mini", "/Users/me/p")));
         assert_eq!(path_of(&root), "/Users/me/p");
         assert_eq!(path_of("/local/p"), "/local/p");
         assert!(!is_remote("/local/p"));
-        assert_eq!(split("ssh:///x"), None);
-        assert_eq!(split("ssh:/mini/a/b"), Some(("mini", "/a/b")));
+        assert_split("ssh:///x", None);
+        assert_split("ssh:/mini/a/b", Some(("mini", "/a/b")));
         let joined = std::path::Path::new(&root).join("src");
-        assert_eq!(
-            split(joined.to_str().unwrap()),
-            Some(("mini", "/Users/me/p/src"))
+        assert_split(joined.to_str().unwrap(), Some(("mini", "/Users/me/p/src")));
+        assert_eq!(path_of(joined.to_str().unwrap()), "/Users/me/p/src");
+        assert_split("ssh://hostonly", None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_separators_are_normalized_without_changing_local_paths() {
+        assert_split(
+            r"ssh://mini/Users/me/my project\src\main.rs",
+            Some(("mini", "/Users/me/my project/src/main.rs")),
         );
-        assert_eq!(split("ssh://hostonly"), None);
+        assert_eq!(path_of(r"C:\Users\me\project"), r"C:\Users\me\project");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_unix_filenames_keep_literal_backslashes() {
+        assert_split(r"ssh://mini/home/me/a\b", Some(("mini", r"/home/me/a\b")));
     }
 }

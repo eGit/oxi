@@ -787,7 +787,8 @@ mod tests {
             (Some(2), Some("rewound"))
         );
 
-        let file = format!("{root}/notes.txt");
+        // Canonical Windows paths use the verbatim prefix, which requires native separators.
+        let file = PathBuf::from(&root).join("notes.txt");
         let written = app.request("fs.write", json!({"path": file, "data": "aGk="}));
         assert_eq!(written["len"], 2);
         assert_eq!(
@@ -795,7 +796,7 @@ mod tests {
             "aGk="
         );
         assert_eq!(app.request("fs.stat", json!({"path": file}))["file"], true);
-        let missing = format!("{root}/missing.txt");
+        let missing = PathBuf::from(&root).join("missing.txt");
         assert_eq!(
             app.request("fs.stat", json!({"path": missing}))["exists"],
             false
@@ -806,7 +807,7 @@ mod tests {
         );
         app.request(
             "fs.op",
-            json!({"path": format!("{root}/dir"), "op": "create_dir"}),
+            json!({"path": PathBuf::from(&root).join("dir"), "op": "create_dir"}),
         );
         let listing = app.request("fs.list", json!({"path": root, "files": true}));
         let names: Vec<&str> = listing["entries"]
