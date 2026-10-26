@@ -77,8 +77,12 @@ impl OxiApp {
         let cfg = self.conv.settings.provider(kind).clone();
         let key = self.active_session_key();
         let acp_session_key = self.acp_session_key(key);
-        let cwd =
-            std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
+        // A remote chat's agent runs on its host; the one warmed here only lists the models.
+        let cwd = if self.is_remote_key(key) {
+            dirs::home_dir().unwrap_or_default()
+        } else {
+            std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim())
+        };
         let env = cfg.acp_env();
         let command_line = cfg.effective_acp_command();
         let mcp_servers = self.conv.settings.mcp_servers.clone();
@@ -127,6 +131,10 @@ impl OxiApp {
             return;
         }
         let key = self.active_session_key();
+        // A remote chat's agent runs on its host.
+        if self.is_remote_key(key) {
+            return;
+        }
         // A new chat is warmed as soon as it opens (`new_chat_needs_acp_warm`).
         if self.session_by_key(key).messages.is_empty()
             || self.run_state(key).is_some_and(|r| r.agent_rx.is_some())

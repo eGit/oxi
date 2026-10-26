@@ -121,6 +121,27 @@ impl TerminalSession {
     ) -> Result<Self, String> {
         #[cfg(not(windows))]
         let _ = windows_terminal;
+        // A remote workspace's terminal is a login shell on its host, in its folder.
+        if let Some((host, path)) = crate::remote::split(cwd) {
+            let quoted = format!("'{}'", path.replace('\'', "'\\''"));
+            let mut cmd = CommandBuilder::new("ssh");
+            for arg in ["-t", "-o", "ServerAliveInterval=15", "--", host] {
+                cmd.arg(arg);
+            }
+            cmd.arg(format!(
+                "cd {quoted} 2>/dev/null; exec \"${{SHELL:-/bin/sh}}\" -l"
+            ));
+            if let Some(home) = crate::app_dirs::home_dir() {
+                cmd.cwd(home);
+            }
+            for (key, value) in crate::shell_env::vars() {
+                if key == "PATH" || key == "SSH_AUTH_SOCK" {
+                    cmd.env(key, value);
+                }
+            }
+            cmd.env("TERM", "xterm-256color");
+            return Self::spawn_builder(ctx, cmd, rows, cols, None);
+        }
         let cwd = shell_cwd(cwd);
         #[cfg(windows)]
         let mut cmd = match windows_terminal {

@@ -155,12 +155,16 @@ impl OxiApp {
     }
 }
 
-/// A checkbox with its explanation underneath, aligned with the label.
+/// A toggle with its explanation underneath, aligned with the label.
 fn check(ui: &mut Ui, value: &mut bool, label: &str, help: &str) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        ui.checkbox(value, RichText::new(label).size(FS_SMALL).color(c_text()));
-        let indent = ui.spacing().icon_width + ui.spacing().icon_spacing;
+        crate::ui::chrome::toggle(
+            ui,
+            value,
+            RichText::new(label).size(FS_SMALL).color(c_text()),
+        );
+        let indent = crate::ui::chrome::TOGGLE_W + crate::ui::chrome::TOGGLE_GAP;
         ui.horizontal(|ui| {
             ui.add_space(indent);
             ui.label(RichText::new(help).size(FS_TINY).color(c_text_faint()));

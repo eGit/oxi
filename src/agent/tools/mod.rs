@@ -43,6 +43,12 @@ pub fn tool_side_effect(name: &str) -> ToolSideEffect {
         }
         // Type-checkers run project build scripts (build.rs, npx), so treat them like bash.
         "bash" | "diagnostics" => ToolSideEffect::Shell,
+        // Even command-free evidence tools stay serialized: they allocate ids and write reports.
+        "evidence_capture"
+        | "evidence_run"
+        | "evidence_add"
+        | "evidence_base_checkout"
+        | "evidence_submit" => ToolSideEffect::UnknownExternal,
         _ => ToolSideEffect::UnknownExternal,
     }
 }
@@ -58,7 +64,7 @@ mod file_ops;
 mod paths;
 mod scratchpad;
 mod shell_search;
-pub(crate) use shell_search::{isolate_process_group, terminate_child_tree};
+pub(crate) use shell_search::{isolate_process_group, sanitize_bash_env, terminate_child_tree};
 mod todo;
 mod undo;
 mod web;
@@ -78,6 +84,8 @@ pub use undo::TurnUndoJournal;
 /// [`ALL_TOOL_NAMES`]) plus any tool-specific settings such as the SearXNG endpoint.
 #[derive(Clone, Debug)]
 pub struct ToolEnv {
+    /// Explicit per-run evidence context; unavailable to completions and research sub-agents.
+    pub evidence: Option<crate::evidence::tools::Context>,
     pub enabled: Vec<bool>,
     pub web_search_url: String,
     /// Which zero-config search backend to prefer when `web_search_url` is empty (i.e. not
@@ -133,6 +141,44 @@ fn run_tool_inner(
     env: &ToolEnv,
     on_output: Option<ToolOutputCallback>,
 ) -> ToolResult {
+    if crate::evidence::tools::NAMES.contains(&name) {
+        let result = env
+            .evidence
+            .as_ref()
+            .ok_or_else(|| "Evidence is not enabled for this run.".to_string())
+            .and_then(|context| {
+                if let Some(command) = crate::evidence::tools::command_args(name, args) {
+                    let enabled = ALL_TOOL_NAMES
+                        .iter()
+                        .position(|name| *name == "bash")
+                        .is_some_and(|i| env.enabled.get(i).copied().unwrap_or(false));
+                    if !enabled {
+                        return Err(
+                            "Shell commands are disabled in settings, including evidence commands."
+                                .into(),
+                        );
+                    }
+                    shell_search::validate_bash_command(
+                        command["command"].as_str().unwrap_or_default(),
+                    )?;
+                    if let Some(journal) = &env.undo_journal {
+                        journal.lock().unwrap_or_else(|e| e.into_inner()).mark_non_reversible(
+                            "Evidence commands can change files outside the built-in undo journal.",
+                        );
+                    }
+                }
+                context.call(name, args)
+            });
+        let is_error = result.is_err();
+        let output = result.unwrap_or_else(|error| error);
+        let (output, full_output_path) = file_ops::maybe_spill_truncated(output);
+        return ToolResult {
+            output,
+            is_error,
+            diff: None,
+            full_output_path,
+        };
+    }
     if crate::agent::mcp::McpManager::is_mcp_tool(name) {
         if let Some(journal) = &env.undo_journal {
             journal.lock().unwrap_or_else(|e| e.into_inner()).mark_non_reversible(

@@ -14,6 +14,7 @@ impl eframe::App for OxiApp {
         #[cfg(target_os = "macos")]
         self.take_menu_actions();
         self.replay_queued_actions(ctx, raw_input);
+        self.route_transcript_right_click(ctx, raw_input);
         if self.conv.settings_page.open
             || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
         {
@@ -61,6 +62,7 @@ impl eframe::App for OxiApp {
         self.handle_editor_tab_keys(ctx);
         self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
+        self.drain_remote(ctx);
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
@@ -182,6 +184,7 @@ impl eframe::App for OxiApp {
 
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
+        self.render_remote_dialog(ui.ctx());
         self.render_editor_prompt(ui.ctx());
         crate::ui::image_viewer::show(ui.ctx());
         crate::ui::text_attachment::show(
@@ -443,8 +446,16 @@ impl OxiApp {
         if command_palette && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_file_picker_with(">");
         }
-        if open_settings && !self.conv.settings_page.open {
-            self.open_settings_page();
+        if open_settings {
+            self.toggle_settings_page();
+        }
+        if self.conv.settings_page.open && self.conv.settings_page.exit_prompt.is_none() {
+            if save_file && self.settings_dirty() {
+                self.save_settings_page();
+            }
+            if find_file {
+                self.conv.settings_page.focus_search = true;
+            }
         }
         if open_scratchpad && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_scratchpad();
@@ -550,6 +561,9 @@ impl OxiApp {
             if self.conv.settings_page.exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".
                 self.conv.settings_page.exit_prompt = None;
+            } else if !self.conv.settings_page.search.is_empty() {
+                // First Escape clears a settings search; the next one leaves.
+                self.conv.settings_page.search.clear();
             } else if self.settings_dirty() {
                 self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
             } else {
@@ -560,21 +574,15 @@ impl OxiApp {
             && !self.confirm_prompt_open()
             && self.conv.editor.active_document().is_some()
         {
-            // Escape in the editor collapses any selection to its primary caret while keeping
-            // keyboard focus in the editing surface. With several selections it first goes back
-            // to the primary one, like Sublime (egui has already dropped focus on Escape, so
-            // the editor's own key handling never sees it).
+            // Escape in the editor closes the completion list, then drops the extra selections
+            // and keeps the primary one, like Sublime. Focus stays in (or returns to) the
+            // editing surface.
             if let Some(document) = self.conv.editor.active_document_mut()
-                && (!document.view.extra.is_empty() || document.view.completion.is_some())
+                && document.view.completion.take().is_none()
             {
-                // First the completion list, then the extra selections.
-                if document.view.completion.take().is_none() {
-                    document.view.extra.clear();
-                }
-                self.conv.editor.focus_editor_next_frame = true;
-            } else {
-                self.conv.editor.clear_editor_selection_next_frame = true;
+                document.view.extra.clear();
             }
+            self.conv.editor.focus_editor_next_frame = true;
         } else if escape && !self.conv.terminal_panel.open && !self.confirm_prompt_open() {
             self.focus_active_view_next_frame();
         }

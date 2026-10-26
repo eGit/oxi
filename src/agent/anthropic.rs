@@ -261,14 +261,13 @@ pub async fn run_anthropic_loop(
     let max_rounds = ctx.max_rounds;
     let effort_override = ctx.effort_override;
     let mut context_char_budget = ctx.context_char_budget;
-    let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
-    let anthropic_tools = to_anthropic_tools(tools_openai);
     let cache_control = Some(json!({ "type": "ephemeral" }));
     let thinking = thinking_config(model);
     let mut thinking_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
+    let mut evidence_followups = 0;
     let mut stream_retries = 0u32;
     let mut overflow_retries = 0u32;
     loop {
@@ -279,6 +278,13 @@ pub async fn run_anthropic_loop(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        let tools = super::dispatch::tools_for_round(tools_openai, env);
+        let tools_chars = tools
+            .iter()
+            .map(|t| t.to_string().len())
+            .sum::<usize>()
+            .max(ctx.tools_chars);
+        let anthropic_tools = to_anthropic_tools(&tools);
         // Trim the canonical history under the context ceiling before translating it, so a long
         // multi-round run can't overflow the window mid-flight. A no-op until it's needed.
         let trimmed = crate::agent::history::trim_wire_history_to_budget(
@@ -600,6 +606,17 @@ pub async fn run_anthropic_loop(
             "role": "assistant",
             "content": text_out,
         }));
+        if (max_rounds == 0 || round < max_rounds)
+            && super::dispatch::evidence_followup(
+                env,
+                tx,
+                cancel,
+                openai_messages,
+                &mut evidence_followups,
+            )
+        {
+            continue;
+        }
         break;
     }
     Ok(())

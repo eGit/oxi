@@ -119,6 +119,7 @@ fn setup(
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         },
     }
 }
@@ -132,6 +133,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
     }
     if std::env::var_os("OXI_POLISH_REVIEW").is_some() {
         review_ui_polish(rec);
+        return;
+    }
+    if std::env::var_os("OXI_SPLIT_REVIEW").is_some() {
+        review_split_view(rec);
         return;
     }
     if std::env::var_os("OXI_WORKTREE_REVIEW").is_some() {
@@ -161,6 +166,21 @@ fn run_gallery(rec: &mut Recorder<'_>) {
 
     if std::env::var_os("OXI_STREAM_REVIEW").is_some() {
         review_streaming_ui(rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_EVIDENCE_REVIEW").is_some() {
+        review_evidence_ui(rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_SELECTION_REVIEW").is_some() {
+        review_selection_flicker(rec);
+        return;
+    }
+
+    if let Ok(root) = std::env::var("OXI_REMOTE_REVIEW") {
+        review_remote_workspace(rec, &root);
         return;
     }
 
@@ -212,6 +232,38 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 rec.still("settings-agent-mcp");
             }
         }
+        // Settings search: the result list, then a hit's card scrolled to and flashing.
+        rec.app().conv.settings_page.search = "awake".into();
+        rec.harness.run_steps(3);
+        rec.still("settings-search");
+        {
+            let app = rec.app();
+            app.conv.settings_page.search.clear();
+            app.conv.settings_page.tab = SettingsTab::Agent;
+        }
+        crate::ui::chrome::request_settings_reveal(&rec.harness.ctx, "Approvals");
+        rec.harness.run_steps(4);
+        rec.still("settings-search-reveal");
+        // A pending change shows the save bar.
+        rec.app().conv.settings.editor.minimap = !rec.app().conv.settings.editor.minimap;
+        rec.app().conv.settings_page.tab = SettingsTab::Editor;
+        rec.harness.run_steps(3);
+        rec.still("settings-unsaved");
+        // A long save error truncates before the buttons instead of running under them.
+        rec.app().conv.settings_page.save_error = Some(
+            "Could not save settings: Could not save credentials to the OS keychain: access to \
+             this item is restricted by the system policy for this application"
+                .into(),
+        );
+        rec.harness.run_steps(3);
+        rec.still("settings-save-error");
+        rec.app().conv.settings_page.save_error = None;
+        // Search into a provider form: "API key" opens the form and flashes Connection.
+        rec.app().conv.settings_page.search = "api key".into();
+        rec.harness.run_steps(3);
+        rec.still("settings-search-provider");
+        rec.app().conv.settings_page.search.clear();
+        rec.app().conv.settings.editor.minimap = !rec.app().conv.settings.editor.minimap;
         rec.app()
             .conv
             .settings
@@ -2621,6 +2673,319 @@ impl Recorder<'_> {
     }
 }
 
+/// Stills of an evidence-mode turn: real before/after captures (headless Chrome), a check and
+/// the agent's claims in the evidence card (`OXI_EVIDENCE_REVIEW=1`).
+fn review_evidence_ui(rec: &mut Recorder<'_>) {
+    use crate::evidence::{Claim, EvidenceItem, EvidenceReport, ItemKind, Origin, Phase};
+    fn click_toggle(rec: &mut Recorder<'_>) {
+        let at = rec.label_center("Evidence mode").unwrap();
+        rec.harness.event(Event::PointerMoved(at));
+        rec.harness.run_steps(2);
+        for pressed in [true, false] {
+            rec.harness.event(Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.run_steps(2);
+        }
+    }
+    rec.harness.run_steps(4);
+    let dir = rec.project.join(".evidence-review");
+    std::fs::create_dir_all(&dir).unwrap();
+    let page = |error: &str| {
+        format!(
+            "<html><body style=\"font-family:-apple-system,sans-serif;background:#fafaf7;margin:0;padding:48px\">\
+             <h2 style=\"margin:0 0 20px\">Sign in</h2>\
+             <input placeholder=\"Email\" value=\"ana@example.com\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:8px\">\
+             <input type=password value=\"hunter2\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid {};border-radius:8px\">{}\
+             <button style=\"padding:10px 20px;border:0;border-radius:8px;background:#e26a2c;color:white\">Sign in</button></body></html>",
+            if error.is_empty() { "#ccc" } else { "#d33" },
+            error
+        )
+    };
+    let shoot = |name: &str, html: String| {
+        let file = dir.join(format!("{name}.html"));
+        std::fs::write(&file, html).unwrap();
+        let out = dir.join(format!("{name}.png"));
+        crate::evidence::capture::url(&format!("file://{}", file.display()), &out, 640, 360, 500)
+            .expect("headless Chrome capture")
+            .file
+    };
+    let before = shoot("before", page(""));
+    let after = shoot(
+        "after",
+        page(
+            "<p style=\"color:#d33;margin:0 0 12px;font-size:14px\">Wrong password. Try again or reset it.</p>",
+        ),
+    );
+    let item = |id: &str, kind, phase, label: &str, file: Option<&Path>| EvidenceItem {
+        workspace: None,
+        id: id.into(),
+        kind,
+        phase,
+        label: label.into(),
+        origin: Origin::Oxi,
+        file: file.map(|f| f.to_string_lossy().into_owned()),
+        preview: None,
+        fresh: false,
+        source: "Chrome headless · http://localhost:5173/login".into(),
+        command: None,
+        cwd: Some(rec.project.to_string_lossy().into_owned()),
+        exit_code: None,
+        timed_out: false,
+        output: String::new(),
+        duration_ms: 0,
+    };
+    let mut check = item("e3", ItemKind::Check, Phase::Check, "Unit tests", None);
+    check.command = Some("npm test -- login".into());
+    check.exit_code = Some(0);
+    check.duration_ms = 4_210;
+    check.output = "PASS src/login.test.ts\n  ✓ shows an inline error on a wrong password (41 ms)\n\nTests: 1 passed, 1 total".into();
+    let report = EvidenceReport {
+        stale: false,
+        workspace: None,
+        turn: "review".into(),
+        requested: true,
+        submitted: true,
+        summary: "A wrong password now shows an inline error under the field instead of failing silently.".into(),
+        items: vec![
+            item("e1", ItemKind::Image, Phase::Before, "Login page, wrong password", Some(&before)),
+            item("e2", ItemKind::Image, Phase::After, "Login page, wrong password", Some(&after)),
+            check,
+        ],
+        claims: vec![
+            Claim {
+                text: "A wrong password shows an inline error".into(),
+                evidence: vec!["e2".into(), "e3".into()],
+            },
+            Claim {
+                text: "Nothing else on the page changed".into(),
+                evidence: vec![],
+            },
+        ],
+    };
+    {
+        let app = rec.app();
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        let key = app.active_session_key();
+        app.run_state_mut(key).evidence_mode.set(true);
+        app.conv.sidebar.open = false;
+    }
+    rec.begin_turn("Show an error when the password is wrong");
+    rec.send(AgentEvent::TextDelta(
+        "Done. The login form now shows an inline error when the password is wrong.".into(),
+    ));
+    rec.send(AgentEvent::Evidence(Box::new(report)));
+    rec.finish_turn();
+    // Image decoding runs on loader threads; let it land.
+    for _ in 0..30 {
+        rec.harness.run_steps(2);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    rec.harness.run_steps(4);
+    rec.still("evidence-card");
+    rec.harness.set_size(egui::vec2(560.0, 900.0));
+    for _ in 0..10 {
+        rec.harness.run_steps(2);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    rec.still("evidence-card-narrow");
+    for provider in [LlmProviderKind::OpenAi, LlmProviderKind::Ollama] {
+        rec.app().set_active_session_provider(provider);
+        for scale in [1.0, 1.5, 2.0] {
+            rec.harness.set_pixels_per_point(scale);
+            rec.harness.run_steps(4);
+            for width in [1240.0, 560.0, 430.0] {
+                rec.harness.set_size(egui::vec2(width, 900.0));
+                rec.harness.run_steps(6);
+                let rendered = rec.harness.render().unwrap();
+                assert_eq!(
+                    rendered.dimensions(),
+                    ((width * scale) as u32, (900.0 * scale) as u32)
+                );
+                assert!(rec.harness.query_by_label("Evidence mode").is_some());
+                assert!(rec.harness.query_by_label("Send message").is_some());
+                rec.still(&format!("evidence-{provider:?}-{width}-{scale}"));
+            }
+        }
+        for enabled in [false, true] {
+            click_toggle(rec);
+            let key = rec.app().active_session_key();
+            assert_eq!(
+                rec.app().run_state(key).unwrap().evidence_mode.enabled(),
+                enabled
+            );
+        }
+    }
+    rec.app()
+        .set_active_session_provider(LlmProviderKind::OpenAi);
+    rec.harness.set_pixels_per_point(1.0);
+    rec.harness.run_steps(4);
+    rec.harness.set_size(egui::vec2(1240.0, 900.0));
+    {
+        let report = rec
+            .app()
+            .active_session_mut()
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.evidence.as_deref_mut())
+            .unwrap();
+        report.stale = true;
+    }
+    rec.harness.run_steps(5);
+    assert!(rec.harness.query_by_label("The workspace changed after this evidence was produced. Fresh verification is needed.").is_some());
+    rec.still("evidence-stale");
+    let key = rec.app().active_session_key();
+    rec.app().run_state_mut(key).evidence_mode.set(false);
+    let running_mode = rec.app().run_state(key).unwrap().evidence_mode.clone();
+    rec.begin_turn("Explain how Evidence chooses whether verification is needed");
+    rec.send(AgentEvent::TextDelta("Informational replies need no automatic verification. Enabling Evidence during an edit applies at the end of that response.".into()));
+    rec.harness.run_steps(6);
+    assert!(rec.harness.query_by_label("Stop generation").is_some());
+    click_toggle(rec);
+    assert!(
+        running_mode.enabled(),
+        "the in-flight response must see the composer toggle immediately"
+    );
+    rec.still("evidence-enabled-during-response");
+    rec.app().conv.composer.input = "/evidence".into();
+    rec.app().send_message();
+    assert!(
+        !running_mode.enabled(),
+        "a bare /evidence must toggle the running turn immediately"
+    );
+    assert!(
+        rec.app().run_state(key).unwrap().queued.is_empty(),
+        "the toggle must not be queued as a new task"
+    );
+    rec.finish_turn();
+}
+
+/// Escape over an editor selection, and a right-press inside a transcript selection, must not
+/// paint the selection differently for a frame (`OXI_SELECTION_REVIEW=1`).
+fn review_selection_flicker(rec: &mut Recorder<'_>) {
+    use egui::PointerButton::{Primary, Secondary};
+    let button = |pos, button, pressed| Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let differing = |a: &image::RgbaImage, b: &image::RgbaImage| {
+        a.pixels().zip(b.pixels()).filter(|(x, y)| x != y).count()
+    };
+    let selection = |rec: &mut Recorder<'_>| {
+        rec.harness
+            .ctx
+            .plugin::<egui::text_selection::LabelSelectionState>()
+            .lock()
+            .has_selection()
+    };
+
+    {
+        let app = rec.app();
+        let reply = "Retries now back off between attempts, starting at a hundred milliseconds \
+                     and doubling each time up to the configured cap. Every attempt is logged \
+                     with its delay so a slow endpoint shows up in the output, and the final \
+                     error keeps the last response body for debugging. That is the whole \
+                     selection story for this review.";
+        let messages = &mut app.active_session_mut().messages;
+        messages.push(message(MsgRole::User, "Add retries to fetch", vec![]));
+        messages.push(message(
+            MsgRole::Assistant,
+            "",
+            vec![AssistantBlock::Answer(reply.into())],
+        ));
+    }
+    rec.harness.run_steps(6);
+    let rect = rec
+        .harness
+        .query_all_by_label_contains("Retries now back off")
+        .map(|node| {
+            let r = node.rect();
+            egui::Rect::from_min_max(
+                (r.min.to_vec2() / SCALE).to_pos2(),
+                (r.max.to_vec2() / SCALE).to_pos2(),
+            )
+        })
+        .next()
+        .expect("reply on screen");
+    let from = rect.left_top() + egui::vec2(3.0, 4.0);
+    let to = rect.right_bottom() - egui::vec2(3.0, 4.0);
+    rec.harness.event(Event::PointerMoved(from));
+    rec.harness.run_steps(2);
+    rec.harness.event(button(from, Primary, true));
+    rec.harness.step();
+    for i in 1..=8 {
+        rec.harness
+            .event(Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+        rec.harness.step();
+    }
+    rec.harness.event(button(to, Primary, false));
+    rec.harness.run_steps(2);
+    assert!(selection(rec), "the reply is selected");
+    let middle = rect.center();
+    rec.harness.event(Event::PointerMoved(middle));
+    rec.harness.run_steps(3);
+    let before = rec.harness.render().unwrap();
+    // kittest never calls `raw_input_hook`; route the press through it as eframe does.
+    let hooked = |rec: &mut Recorder<'_>, event| {
+        let ctx = rec.harness.ctx.clone();
+        let mut input = std::mem::take(rec.harness.input_mut());
+        input.events.push(event);
+        eframe::App::raw_input_hook(rec.app(), &ctx, &mut input);
+        *rec.harness.input_mut() = input;
+        rec.harness.step();
+    };
+    hooked(rec, button(middle, Secondary, true));
+    let pressed = rec.harness.render().unwrap();
+    let changed = differing(&before, &pressed);
+    println!("CHECK right-press inside a chat selection repaints {changed} pixels");
+    hooked(rec, button(middle, Secondary, false));
+    rec.harness.run_steps(2);
+    let menu = rec.app().conv.transcript.message_menu.is_some();
+    let held = rec.app().conv.transcript.held_selection.is_some();
+    println!(
+        "CHECK the message menu opens with Copy selection: {}",
+        menu && held
+    );
+    rec.still("chat-selection-menu");
+    assert_eq!(changed, 0, "chat selection flickers on right-press");
+    assert!(menu && held, "message menu with the held selection");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(2);
+
+    let project = rec.project.clone();
+    rec.app()
+        .open_editor_file(std::fs::canonicalize(project.join("stats.py")).unwrap());
+    rec.harness.run_steps(4);
+    {
+        let app = rec.app();
+        let document = app.conv.editor.active_document().unwrap();
+        let path = document.path.clone();
+        let at = document.content.find("ordered = sorted").unwrap();
+        app.conv.editor.navigation_target = Some((path, at..at + 40));
+        app.conv.editor.focus_editor_next_frame = true;
+    }
+    rec.harness.run_steps(4);
+    let before = rec.harness.render().unwrap();
+    rec.harness.key_press(egui::Key::Escape);
+    let escaped = rec.harness.render().unwrap();
+    rec.harness.step();
+    let after = rec.harness.render().unwrap();
+    let flicker = differing(&before, &escaped);
+    let settled = differing(&before, &after);
+    println!("CHECK Escape over an editor selection repaints {flicker} then {settled} pixels");
+    assert_eq!(
+        (flicker, settled),
+        (0, 0),
+        "editor selection flickers on Escape"
+    );
+}
+
 /// Stills of a turn while it streams: live thinking, a running command, an explore run, a failed
 /// tool, and the finished turn unfolded (`OXI_STREAM_REVIEW=1`; `OXI_TOOL_DETAIL=minimal` or
 /// `expanded` renders the same turn in that tool-detail mode).
@@ -2834,6 +3199,91 @@ fn review_acp_ui(rec: &mut Recorder<'_>) {
 }
 
 /// Real sidebar rendering with linked checkouts, in the isolated gallery process.
+/// Split view: two chats side by side, "Send to both", swapping focus by clicking the other
+/// pane, and a general chat.
+fn review_split_view(rec: &mut Recorder<'_>) {
+    rec.harness.set_size(egui::vec2(1500.0, 900.0));
+    rec.harness.run_steps(4);
+    let chats = rec.app().active_workspace().sessions.len();
+    println!("SPLIT chats in workspace: {chats}");
+    {
+        let app = rec.app();
+        // The newest seeded chat next to the blank one `setup` opened.
+        let partner = app.session_key(app.conv.active_workspace, 1);
+        app.ensure_session_loaded(partner);
+        app.open_split_with(partner);
+    }
+    rec.harness.run_steps(6);
+    rec.still("split-view");
+    rec.app().toggle_split_mirror();
+    rec.harness.run_steps(3);
+    rec.still("split-mirror");
+    // "Send to both": one prompt lands in both chats.
+    let count = |rec: &mut Recorder<'_>, key| {
+        rec.app()
+            .session_by_key(key)
+            .messages
+            .iter()
+            .filter(|m| m.role == crate::model::MsgRole::User)
+            .count()
+    };
+    let active = rec.app().active_session_key();
+    let partner = rec.app().split_partner_key().unwrap();
+    let before = (count(rec, active), count(rec, partner));
+    rec.app().conv.composer.input = "Summarize the README".into();
+    rec.app().send_message();
+    rec.harness.run_steps(4);
+    let after = (count(rec, active), count(rec, partner));
+    println!("SPLIT mirror user messages {before:?} -> {after:?}");
+    assert_eq!(
+        after,
+        (before.0 + 1, before.1 + 1),
+        "the prompt went to both chats"
+    );
+    assert_eq!(rec.app().active_session_key(), active);
+    assert!(rec.app().conv.composer.input.is_empty());
+    rec.still("split-mirror-sent");
+    for key in [active, partner] {
+        if let Some(run) = rec.app().flow.sessions.get_mut(&key) {
+            run.clear_agent();
+            run.waiting_response = false;
+        }
+    }
+    rec.harness.run_steps(3);
+    // Click the unfocused (right) pane: it becomes the active chat, the left one the preview.
+    let before = rec.app().active_session_key();
+    let click = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // On the transcript itself, not just the footer.
+    let pos = egui::pos2(1150.0, 400.0);
+    rec.harness.hover_at(pos);
+    rec.harness.step();
+    rec.harness.event(click(pos, true));
+    rec.harness.step();
+    rec.harness.event(click(pos, false));
+    rec.harness.run_steps(6);
+    let after = rec.app().active_session_key();
+    println!("SPLIT focus {before:?} -> {after:?}");
+    assert_ne!(before, after, "clicking the other pane focuses it");
+    rec.still("split-focus-swapped");
+    rec.harness.set_size(egui::vec2(900.0, 700.0));
+    rec.harness.run_steps(4);
+    rec.still("split-narrow");
+    rec.harness.set_size(egui::vec2(1500.0, 900.0));
+    rec.app().close_split();
+    rec.app().new_general_chat();
+    rec.harness.run_steps(6);
+    println!(
+        "SPLIT general root: {}",
+        rec.app().active_workspace().root_path
+    );
+    rec.still("general-chat");
+}
+
 fn review_worktree_sidebar(rec: &mut Recorder) {
     use super::state::Workspace;
     let root = rec.project.to_string_lossy().into_owned();
@@ -3189,6 +3639,7 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         });
         app.conv.composer.pending_images = (0..12)
             .map(|i| ("image/png".to_string(), png(800, 600, (i * 20) as u8)))
@@ -3324,4 +3775,217 @@ fn review_composer_typing(rec: &mut Recorder<'_>) {
             println!("COMPOSER GPU stable: {theme}, scale {scale}");
         }
     }
+}
+
+/// A remote workspace against a real host: `OXI_REMOTE_REVIEW=ssh://host/path` (the host runs
+/// `oxi server`). Lists its chats, runs two agent turns there and deletes the chat again.
+fn review_remote_workspace(rec: &mut Recorder<'_>, root: &str) {
+    let wait_for =
+        |rec: &mut Recorder<'_>, what: &str, secs: u64, done: &dyn Fn(&mut OxiApp) -> bool| {
+            let started = Instant::now();
+            while !done(rec.app()) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(secs),
+                    "timed out waiting for {what}"
+                );
+                rec.harness.step();
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            println!("REMOTE {what} after {:?}", started.elapsed());
+        };
+    rec.harness.set_size(egui::vec2(1400.0, 860.0));
+    rec.app().open_remote_dialog();
+    rec.harness.run_steps(3);
+    rec.still("remote-dialog");
+    rec.app().remote.dialog = None;
+    rec.app().open_workspace_path(root.to_string());
+    let host = crate::remote::host_of(root).unwrap().to_string();
+    rec.harness.run_steps(2);
+    rec.still("remote-connecting");
+    let started = Instant::now();
+    while rec.app().remote.state(&host) != Some(crate::remote::client::ConnState::Connected) {
+        let state = rec.app().remote.state(&host);
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no connection: {state:?}"
+        );
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    rec.harness.run_steps(20);
+    let chats = rec.app().active_workspace().sessions.len();
+    println!("REMOTE chats listed: {chats}");
+    rec.still("remote-listed");
+
+    // File panels can be verified even while the host's agent quota is exhausted.
+    if std::env::var_os("OXI_REMOTE_PANELS_ONLY").is_some() {
+        review_remote_panels(rec, root);
+        return;
+    }
+
+    let provider = std::env::var("OXI_REMOTE_REVIEW_PROVIDER")
+        .map(|slug| serde_json::from_value::<LlmProviderKind>(json!(slug)).expect("provider slug"))
+        .unwrap_or(LlmProviderKind::ClaudeCodeAcp);
+    rec.app().new_chat();
+    rec.app().set_active_session_provider(provider);
+    rec.app().conv.composer.input = "Reply with exactly the word pong and nothing else.".into();
+    rec.app().send_message();
+    rec.harness.run_steps(2);
+    rec.still("remote-turn-running");
+    let key = rec.app().active_session_key();
+    wait_for(rec, "turn", 180, &|app| {
+        !app.run_state(key).is_some_and(|r| r.waiting_response)
+    });
+    rec.harness.run_steps(20);
+    rec.still("remote-turn-done");
+    let app = rec.app();
+    let session = app.session_by_key(key);
+    let answer = crate::model::last_answer(&session.messages)
+        .unwrap_or("")
+        .to_string();
+    println!(
+        "REMOTE file {:?} answer {answer:?} error {:?}",
+        session.session_file,
+        app.run_state(key).and_then(|r| r.stream_error.clone())
+    );
+    assert!(
+        session
+            .session_file
+            .as_deref()
+            .is_some_and(crate::remote::is_remote)
+    );
+    assert!(answer.to_lowercase().contains("pong"), "answer: {answer}");
+
+    // A follow-up uses the same chat: the transcripts agree, so no history goes along.
+    rec.app().conv.composer.input = "And now reply with exactly: ping".into();
+    rec.app().send_message();
+    wait_for(rec, "second turn", 180, &|app| {
+        !app.run_state(key).is_some_and(|r| r.waiting_response)
+    });
+    rec.harness.run_steps(20);
+    rec.still("remote-second-turn");
+    let answer = crate::model::last_answer(&rec.app().session_by_key(key).messages)
+        .unwrap_or("")
+        .to_string();
+    println!("REMOTE second answer {answer:?}");
+    assert!(answer.to_lowercase().contains("ping"), "answer: {answer}");
+
+    review_remote_panels(rec, root);
+
+    let si = key.session_idx;
+    rec.app().reveal_chat_view();
+    rec.app().delete_session(si);
+    rec.harness.run_steps(20);
+    std::thread::sleep(Duration::from_millis(500));
+    rec.harness.run_steps(5);
+}
+
+/// The editor side of a remote workspace: explorer, a file opened and saved, Cmd+P, Find in
+/// Files, the Git panel and a terminal, all on the host. `root` holds a git repository with a
+/// committed `README.md` that has one uncommitted line, and `src/main.rs`.
+fn review_remote_panels(rec: &mut Recorder<'_>, root: &str) {
+    let step_for = |rec: &mut Recorder<'_>, secs: f32| {
+        let until = Instant::now() + Duration::from_secs_f32(secs);
+        while Instant::now() < until {
+            rec.harness.step();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    };
+    let root_path = PathBuf::from(root);
+    {
+        let app = rec.app();
+        app.conv.explorer.expanded.insert(root_path.join("src"));
+        app.conv.explorer.cache.invalidate();
+        app.conv.sidebar.open = true;
+        app.conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
+        app.open_editor_file(root_path.join("README.md"));
+        app.conv.git_ui.open = true;
+        app.request(crate::git::GitOp::Refresh);
+    }
+    step_for(rec, 3.0);
+    let app = rec.app();
+    let doc = app
+        .conv
+        .editor
+        .active_document()
+        .map(|d| (d.path.clone(), d.content.clone()));
+    println!("REMOTE editor {doc:?} error {:?}", app.conv.editor.error);
+    assert!(app.conv.editor.error.is_none());
+    let (opened_path, content) = doc.expect("remote README opened in the editor");
+    assert_eq!(opened_path, root_path.join("README.md"));
+    assert!(content.contains("Hello from the mac mini."));
+    println!(
+        "REMOTE git repo {} branch {:?} unstaged {:?} error {:?}",
+        app.conv.git.repo,
+        app.conv.git.branch,
+        app.conv
+            .git
+            .unstaged
+            .iter()
+            .map(|e| (&e.path, e.status))
+            .collect::<Vec<_>>(),
+        app.conv.git.error
+    );
+    assert!(app.conv.git.repo, "remote Git repository was detected");
+    assert!(app.conv.git.error.is_none());
+    assert_eq!(app.conv.git.branch, "main");
+    assert!(app.conv.git.unstaged.iter().any(|e| e.path == "README.md"));
+    rec.still("remote-editor-git");
+
+    // Edit and save: the file on the host changes.
+    {
+        let app = rec.app();
+        if let Some(document) = app.conv.editor.active_document_mut() {
+            document.content.push_str("Saved from the app.\n");
+            document.dirty = true;
+            document.content_revision += 1;
+        }
+        let ctx = rec.harness.ctx.clone();
+        rec.app().save_editor_file(&ctx);
+    }
+    println!("REMOTE save error {:?}", rec.app().conv.editor.error);
+    let (host, path) = crate::remote::split(root).unwrap();
+    let on_host = std::process::Command::new("ssh")
+        .args([host, &format!("tail -n 1 '{path}/README.md'")])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("REMOTE README last line on host: {on_host:?}");
+    assert_eq!(on_host, "Saved from the app.");
+
+    rec.app().open_file_picker();
+    step_for(rec, 2.0);
+    rec.still("remote-file-picker");
+    rec.app().cancel_file_picker();
+    rec.app().show_project_search();
+    rec.app().conv.project_search.query = "remote".into();
+    step_for(rec, 2.5);
+    let (files, hits) = rec.app().conv.project_search.total_hits();
+    println!("REMOTE search: {hits} hits in {files} files");
+    assert!(
+        files >= 2 && hits >= 2,
+        "search found both remote fixture files"
+    );
+    rec.still("remote-search");
+
+    rec.app().conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
+    rec.app().conv.terminal_panel.open = true;
+    step_for(rec, 4.0);
+    assert!(
+        rec.app().terminals.first().is_some_and(|t| t.is_alive()),
+        "remote terminal started"
+    );
+    if let Some(terminal) = rec.app().terminals.first_mut() {
+        terminal.type_text("pwd; git status --short\r");
+    }
+    step_for(rec, 2.0);
+    rec.still("remote-terminal");
+    let app = rec.app();
+    app.conv.terminal_panel.open = false;
+    app.conv.git_ui.open = false;
+    app.terminals.clear();
+    // Leave the folder as it was.
+    let _ = std::process::Command::new("ssh")
+        .args([host, &format!("cd '{path}' && git checkout -q README.md && printf '\\nAn uncommitted line.\\n' >> README.md")])
+        .status();
 }

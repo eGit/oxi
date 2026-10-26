@@ -70,6 +70,7 @@ impl SubagentRunner {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
             ..parent.clone()
         };
         Self {
@@ -327,6 +328,11 @@ mod tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: Some(crate::evidence::tools::Context {
+                dir: PathBuf::from("unused-parent-evidence"),
+                execution: Default::default(),
+                policy: None,
+            }),
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let runner = SubagentRunner::new(
@@ -337,6 +343,10 @@ mod tests {
             rt.handle().clone(),
             Arc::new(AtomicBool::new(false)),
             100_000,
+        );
+        assert!(
+            runner.env.evidence.is_none(),
+            "research sub-agents cannot inherit evidence tools"
         );
         let on: Vec<&str> = ALL_TOOL_NAMES
             .iter()
@@ -439,6 +449,7 @@ mod tests {
             mcp: None,
             undo_journal: None,
             subagent: None,
+            evidence: None,
         };
         let (usage_tx, usage_rx) = mpsc::channel();
         let runner = SubagentRunner::new(

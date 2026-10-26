@@ -200,6 +200,12 @@ impl ApprovalGate {
         if self.plan_mode && !allowed_in_plan_mode(name) {
             return Err(PLAN_MODE_REFUSAL.to_string());
         }
+        if crate::evidence::tools::NAMES.contains(&name) {
+            return match crate::evidence::tools::command_args(name, args) {
+                Some(command) => self.request(tx, cancel, "bash", &command),
+                None => Ok(()),
+            };
+        }
         if self.auto_approve || !self.policy.requires_approval(name) || self.allowlisted(name, args)
         {
             return Ok(());

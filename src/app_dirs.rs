@@ -21,6 +21,17 @@ pub fn home_config_dir() -> PathBuf {
     root(Kind::HomeConfig).join("oxi")
 }
 
+/// `~/oxi-general`: where general chats run, the ones not about any project. A folder of their
+/// own rather than the home folder, so agents don't index, watch or write into all of `~`.
+pub fn general_chats_dir() -> PathBuf {
+    root(Kind::Home).join("oxi-general")
+}
+
+/// Whether workspace `root_path` is the general chats folder.
+pub fn is_general_chats_dir(root_path: &str) -> bool {
+    std::path::Path::new(root_path) == general_chats_dir()
+}
+
 /// The user's home folder: `$HOME` when set, else the platform's profile folder. Windows rarely
 /// sets `HOME`; falling back to the working directory there scattered chats into whatever folder
 /// oxi was started from.
@@ -36,6 +47,7 @@ enum Kind {
     Config,
     Data,
     HomeConfig,
+    Home,
 }
 
 #[cfg(not(test))]
@@ -44,6 +56,7 @@ fn root(kind: Kind) -> PathBuf {
         Kind::Config => dirs::config_dir(),
         Kind::Data => dirs::data_dir(),
         Kind::HomeConfig => home_dir().map(|home| home.join(".config")),
+        Kind::Home => home_dir(),
     };
     dir.unwrap_or_else(|| PathBuf::from("."))
 }
@@ -54,6 +67,7 @@ fn root(kind: Kind) -> PathBuf {
         Kind::Config => "config",
         Kind::Data => "data",
         Kind::HomeConfig => "home-config",
+        Kind::Home => "home",
     };
     test_root().join(name)
 }
@@ -72,7 +86,12 @@ mod tests {
 
     #[test]
     fn tests_never_resolve_to_the_real_folders() {
-        for dir in [config_dir(), data_dir(), home_config_dir()] {
+        for dir in [
+            config_dir(),
+            data_dir(),
+            home_config_dir(),
+            general_chats_dir(),
+        ] {
             assert!(dir.starts_with(test_root()), "{}", dir.display());
         }
         assert_ne!(config_dir(), data_dir());

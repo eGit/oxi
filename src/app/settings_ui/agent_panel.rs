@@ -50,7 +50,10 @@ impl OxiApp {
                 .filter(|enabled| **enabled)
                 .count();
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
+                // Hand-built header (it shares the row with Enable/Disable all), so it hooks
+                // into the Settings search reveal itself.
+                let flash = ui.painter().add(egui::Shape::Noop);
+                let header = ui.vertical(|ui| {
                     ui.label(
                         RichText::new("Enabled tools")
                             .size(FS_BODY)
@@ -67,6 +70,12 @@ impl OxiApp {
                         .color(c_text_muted()),
                     );
                 });
+                crate::ui::chrome::settings_reveal_flash(
+                    ui,
+                    "Enabled tools",
+                    header.response.rect,
+                    flash,
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     if ghost_button(ui, "Disable all", false).clicked() {
@@ -116,7 +125,7 @@ impl OxiApp {
                 nested_card_frame().show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut server.enabled, "");
+                        crate::ui::chrome::toggle(ui, &mut server.enabled, "");
                         settings_text_field_width(ui, &mut server.name, "name", 120.0);
                         for (transport, label) in
                             [(McpTransport::Stdio, "Command"), (McpTransport::Http, "HTTP")]
@@ -232,8 +241,7 @@ impl OxiApp {
                 Some("When on, the agent pauses and asks before each matching tool call."),
             );
             let mut require_write_edit_approval = self.conv.settings.require_write_edit_approval;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut require_write_edit_approval,
                     RichText::new("Ask before file changes")
                         .size(FS_SMALL)
@@ -247,8 +255,7 @@ impl OxiApp {
                 self.conv.settings.require_write_edit_approval = require_write_edit_approval;
             }
             let mut require_bash_approval = self.conv.settings.require_bash_approval;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut require_bash_approval,
                     RichText::new("Ask before bash").size(FS_SMALL).color(c_text()),
                 )
@@ -332,8 +339,7 @@ impl OxiApp {
             );
             ui.add_space(8.0);
             let mut notify = self.conv.settings.notify_in_background;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut notify,
                     RichText::new("Notify me in the background")
                         .size(FS_SMALL)
@@ -347,8 +353,7 @@ impl OxiApp {
                 self.conv.settings.notify_in_background = notify;
             }
             let mut keep_awake = self.conv.settings.keep_awake_while_working;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut keep_awake,
                     RichText::new("Keep the computer awake while an agent works")
                         .size(FS_SMALL)

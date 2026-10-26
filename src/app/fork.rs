@@ -31,11 +31,13 @@ impl OxiApp {
         (wi, si): (usize, usize),
         (start, end): (usize, usize),
     ) {
-        let Some(pos) = ui.input(|i| {
-            i.pointer
-                .secondary_clicked()
-                .then(|| i.pointer.interact_pos())
-                .flatten()
+        let Some(pos) = self.conv.transcript.secondary_click.or_else(|| {
+            ui.input(|i| {
+                i.pointer
+                    .secondary_clicked()
+                    .then(|| i.pointer.interact_pos())
+                    .flatten()
+            })
         }) else {
             return;
         };
@@ -49,6 +51,50 @@ impl OxiApp {
                 opened_pass: ui.ctx().cumulative_pass_nr(),
             });
         }
+    }
+
+    /// Keep a right-click over a selected transcript away from egui. Its labels treat any press
+    /// as the start of a new selection, so the part from the pointer down vanished until the
+    /// held selection was put back a frame later. The click is handed to `detect_message_menu`
+    /// on release instead.
+    pub(crate) fn route_transcript_right_click(
+        &mut self,
+        ctx: &egui::Context,
+        raw_input: &mut egui::RawInput,
+    ) {
+        let transcript = &mut self.conv.transcript;
+        transcript.secondary_click = None;
+        let viewport = transcript.viewport;
+        let mut swallowing = transcript.swallowing_secondary;
+        let mut click = None;
+        raw_input.events.retain(|event| {
+            let egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                ..
+            } = *event
+            else {
+                return true;
+            };
+            if pressed {
+                swallowing = viewport.is_some_and(|(layer, rect)| {
+                    rect.contains(pos) && ctx.layer_id_at(pos) == Some(layer)
+                }) && ctx
+                    .plugin::<egui::text_selection::LabelSelectionState>()
+                    .lock()
+                    .has_selection();
+                !swallowing
+            } else if swallowing {
+                swallowing = false;
+                click = Some(pos);
+                false
+            } else {
+                true
+            }
+        });
+        transcript.swallowing_secondary = swallowing;
+        transcript.secondary_click = click;
     }
 
     /// Keep the transcript's text selection through a right-click and the message menu that
@@ -67,13 +113,14 @@ impl OxiApp {
             ctx.input_mut(|i| i.events.push(egui::Event::Copy));
             return true;
         }
+        let swallowed = transcript.swallowing_secondary || transcript.secondary_click.is_some();
         let (secondary, primary) = ctx.input(|i| {
             let active = |b| i.pointer.button_down(b) || i.pointer.button_released(b);
-            (active(Secondary), active(Primary))
+            (active(Secondary) || swallowed, active(Primary))
         });
         match &transcript.held_selection {
             None => {
-                let pressed = ctx.input(|i| i.pointer.button_pressed(Secondary));
+                let pressed = swallowed || ctx.input(|i| i.pointer.button_pressed(Secondary));
                 if pressed && plugin.lock().has_selection() {
                     transcript.held_selection = Some(plugin.lock().clone());
                 }

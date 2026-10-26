@@ -1,5 +1,6 @@
 //! Persistent bottom status bar: thin strip below the terminal panel with quick
-//! toggles for the chats/explorer/search sidebar, terminal/git panels, and the current git branch.
+//! toggles for the chats/explorer/search sidebar, Settings, terminal/git panels, and the current
+//! git branch.
 
 use eframe::egui::{self, Align, Layout, Stroke};
 
@@ -28,7 +29,10 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
 
-                    let sidebar_on = self.conv.sidebar.open
+                    // Settings takes over the window, so no sidebar view reads as active.
+                    let settings_on = self.conv.settings_page.open;
+                    let sidebar_on = !settings_on
+                        && self.conv.sidebar.open
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Chats;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_MENU, 20.0, sidebar_on)
                         .on_hover_text(if sidebar_on {
@@ -43,7 +47,8 @@ impl OxiApp {
                         );
                     }
 
-                    let explorer_on = self.conv.sidebar.open
+                    let explorer_on = !settings_on
+                        && self.conv.sidebar.open
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Explorer;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 20.0, explorer_on)
                         .on_hover_text(if explorer_on {
@@ -58,7 +63,8 @@ impl OxiApp {
                         );
                     }
 
-                    let search_on = self.conv.sidebar.open
+                    let search_on = !settings_on
+                        && self.conv.sidebar.open
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Search;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_SEARCH, 20.0, search_on)
                         .on_hover_text(if search_on {
@@ -71,6 +77,20 @@ impl OxiApp {
                         self.request_settings_exit(
                             crate::app::state::SettingsExitAction::ShowSearch { toggle: true },
                         );
+                    }
+
+                    // Settings sits with the views it replaces, VS Code's gear at the foot
+                    // of the activity bar: reachable from every view, even with the
+                    // sidebar hidden.
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, settings_on)
+                        .on_hover_text(if settings_on {
+                            "Close settings (Esc)"
+                        } else {
+                            "Settings (Cmd/Ctrl+,)"
+                        })
+                        .clicked()
+                    {
+                        self.toggle_settings_page();
                     }
 
                     let file_shown = self.conv.editor.active.is_some()

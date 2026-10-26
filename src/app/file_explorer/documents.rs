@@ -89,8 +89,8 @@ impl OxiApp {
     }
     pub(super) fn reveal_editor_file_in_explorer(&mut self, path: &Path) {
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-        let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let safe_root = crate::vfs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let safe_path = crate::vfs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if !safe_path.starts_with(&safe_root) {
             return;
         }
@@ -121,8 +121,8 @@ impl OxiApp {
 
     pub(super) fn open_editor_file_impl(&mut self, path: PathBuf, reveal_in_explorer: bool) {
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-        let safe_path = match std::fs::canonicalize(&path) {
+        let safe_root = crate::vfs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let safe_path = match crate::vfs::canonicalize(&path) {
             Ok(path) if path.starts_with(&safe_root) => path,
             _ => {
                 self.conv.editor.error = Some("The file is outside the active workspace.".into());
@@ -149,7 +149,7 @@ impl OxiApp {
             }
             return;
         }
-        let metadata = match std::fs::metadata(&safe_path) {
+        let metadata = match crate::vfs::metadata(&safe_path) {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.conv.editor.error = Some(format!("Could not inspect file: {error}"));
@@ -158,10 +158,10 @@ impl OxiApp {
         };
         // Media and oversized/binary files open as a read-only preview tab.
         let media = MediaKind::from_path(&safe_path)
-            .or((metadata.len() > MAX_TEXT_FILE_BYTES).then_some(MediaKind::Binary));
+            .or((metadata.len > MAX_TEXT_FILE_BYTES).then_some(MediaKind::Binary));
         let content = match media {
             Some(_) => Ok(String::new()),
-            None => std::fs::read_to_string(&safe_path),
+            None => crate::vfs::read_to_string(&safe_path),
         };
         let (content, media) = match content {
             Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
@@ -177,7 +177,7 @@ impl OxiApp {
                     is_scratchpad: false,
                     saved_content: content.clone(),
                     content,
-                    disk_modified: metadata.modified().ok(),
+                    disk_modified: metadata.modified,
                     externally_modified: false,
                     syntax_state: None,
                     content_revision: 0,
@@ -266,6 +266,16 @@ impl OxiApp {
             return;
         }
         self.conv.editor.last_external_check = Some(std::time::Instant::now());
+        let remote: Vec<std::path::PathBuf> = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .filter(|d| crate::vfs::is_remote(&d.path))
+            .map(|d| d.path.clone())
+            .collect();
+        let waker = ctx.clone();
+        crate::vfs::refresh_stats(remote, move || waker.request_repaint());
         for index in 0..self.conv.editor.documents.len() {
             let document = &mut self.conv.editor.documents[index];
             // Its new text arrives through `apply_agent_writes`, as an undoable edit.
@@ -419,15 +429,26 @@ impl EditorDocument {
                 .ok();
             return self.take_in_disk_text(disk, true);
         }
-        let metadata = match std::fs::metadata(&self.path) {
+        // A remote file's metadata comes from the background refresh, never from a round
+        // trip on this (the UI) thread.
+        let metadata = if crate::vfs::is_remote(&self.path) {
+            match crate::vfs::cached_metadata(&self.path) {
+                Some(Some(metadata)) => Ok(metadata),
+                Some(None) => Err(()),
+                None => return None,
+            }
+        } else {
+            crate::vfs::metadata(&self.path).map_err(|_| ())
+        };
+        let metadata = match metadata {
             Ok(metadata) => metadata,
-            Err(_) => {
+            Err(()) => {
                 self.externally_modified = true;
                 return None;
             }
         };
-        let changed = metadata.modified().ok() != self.disk_modified
-            || (self.media.is_none() && metadata.len() != self.saved_content.len() as u64);
+        let changed = metadata.modified != self.disk_modified
+            || (self.media.is_none() && metadata.len != self.saved_content.len() as u64);
         if !changed && !self.externally_modified {
             return None;
         }
@@ -486,12 +507,14 @@ impl EditorDocument {
     }
 
     fn read_disk_text(&self) -> Result<(String, Option<std::time::SystemTime>), String> {
-        let metadata = std::fs::metadata(&self.path).map_err(|e| e.to_string())?;
-        if metadata.len() > MAX_TEXT_FILE_BYTES {
+        let metadata = crate::vfs::metadata(&self.path).map_err(|e| e.to_string())?;
+        if metadata.len > MAX_TEXT_FILE_BYTES {
             return Err("The file is too large for the text editor.".into());
         }
-        let content = std::fs::read_to_string(&self.path).map_err(|e| e.to_string())?;
-        Ok((content, metadata.modified().ok()))
+        let content = crate::vfs::read_to_string(&self.path).map_err(|e| e.to_string())?;
+        // Reading a remote file refreshes its metadata too.
+        let modified = crate::vfs::modified(&self.path).or(metadata.modified);
+        Ok((content, modified))
     }
 
     pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
@@ -507,7 +530,7 @@ impl EditorDocument {
     /// Compare actual bytes, not only mtimes: another tool can preserve the timestamp.
     pub(super) fn save_to_disk(&mut self, overwrite: bool) -> Result<(), String> {
         if !overwrite && !self.is_scratchpad {
-            match std::fs::read(&self.path) {
+            match crate::vfs::read(&self.path) {
                 Ok(bytes) if bytes == self.saved_content.as_bytes() => {}
                 Ok(bytes) => {
                     // Changed since the last check: merge it in now, as a sync would have.
@@ -534,13 +557,11 @@ impl EditorDocument {
                 Err(error) => return Err(format!("Could not check file before saving: {error}")),
             }
         }
-        std::fs::write(&self.path, self.content.as_bytes())
+        crate::vfs::write(&self.path, self.content.as_bytes())
             .map_err(|e| format!("Could not save file: {e}"))?;
         self.saved_content.clone_from(&self.content);
         self.dirty = false;
-        self.disk_modified = std::fs::metadata(&self.path)
-            .and_then(|m| m.modified())
-            .ok();
+        self.disk_modified = crate::vfs::modified(&self.path);
         self.externally_modified = false;
         Ok(())
     }

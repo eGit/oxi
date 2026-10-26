@@ -100,6 +100,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         mcp: None,
         undo_journal: None,
         subagent: None,
+        evidence: None,
     };
 
     let r = if cfg.is_acp() {

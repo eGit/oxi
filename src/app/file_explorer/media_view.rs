@@ -69,6 +69,23 @@ fn file_uri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
+/// The image's URI for egui's loaders. A remote file is fetched once and handed to egui as
+/// bytes under its own URI.
+fn image_uri(ctx: &egui::Context, path: &Path) -> String {
+    if !crate::vfs::is_remote(path) {
+        return file_uri(path);
+    }
+    let uri = format!("bytes://{}", path.display());
+    let loaded_id = egui::Id::new(("oxi_remote_image", path));
+    if !ctx.data(|d| d.get_temp::<bool>(loaded_id).unwrap_or(false)) {
+        if let Ok(bytes) = crate::vfs::read(path) {
+            ctx.include_bytes(uri.clone(), bytes);
+        }
+        ctx.data_mut(|d| d.insert_temp(loaded_id, true));
+    }
+    uri
+}
+
 impl OxiApp {
     pub(super) fn render_media_view(&mut self, ui: &mut Ui, kind: MediaKind) {
         let Some(document) = self.conv.editor.active_document_mut() else {
@@ -77,9 +94,11 @@ impl OxiApp {
         // Nothing to lose in a read-only preview, so external changes reload silently.
         if document.externally_modified {
             ui.ctx().forget_image(&file_uri(&document.path));
-            document.disk_modified = std::fs::metadata(&document.path)
-                .and_then(|m| m.modified())
-                .ok();
+            ui.ctx()
+                .forget_image(&format!("bytes://{}", document.path.display()));
+            let loaded_id = egui::Id::new(("oxi_remote_image", document.path.as_path()));
+            ui.ctx().data_mut(|d| d.remove::<bool>(loaded_id));
+            document.disk_modified = crate::vfs::modified(&document.path);
             document.externally_modified = false;
         }
         let path = document.path.clone();
@@ -92,7 +111,13 @@ impl OxiApp {
 }
 
 fn file_size_label(path: &Path) -> String {
-    std::fs::metadata(path).map_or_else(|_| String::new(), |m| human_size(m.len()))
+    // Drawn every frame: a remote file's size comes from what is already known.
+    let meta = if crate::vfs::is_remote(path) {
+        crate::vfs::cached_metadata(path).flatten()
+    } else {
+        crate::vfs::metadata(path).ok()
+    };
+    meta.map_or_else(String::new, |m| human_size(m.len))
 }
 
 fn human_size(bytes: u64) -> String {
@@ -123,7 +148,7 @@ fn image_view(ui: &mut Ui, path: &Path) {
     let ctx = ui.ctx().clone();
     let state_id = egui::Id::new(("oxi_media_view", path));
     let mut state: ImageViewState = ctx.data(|d| d.get_temp(state_id)).unwrap_or_default();
-    let uri = file_uri(path);
+    let uri = image_uri(&ctx, path);
 
     let toolbar_height = 32.0;
     let full = ui.available_rect_before_wrap();

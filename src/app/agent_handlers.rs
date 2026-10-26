@@ -335,6 +335,11 @@ impl OxiApp {
                     message.changes = Some(changes);
                 }
             }
+            AgentEvent::Evidence(report) => {
+                if let Some(message) = self.last_assistant_mut(key) {
+                    message.evidence = Some(report);
+                }
+            }
             AgentEvent::Finished(outcome) => {
                 let succeeded = matches!(&outcome, AgentOutcome::Success { .. });
                 let attention = match &outcome {

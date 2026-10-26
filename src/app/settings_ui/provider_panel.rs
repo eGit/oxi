@@ -90,8 +90,7 @@ impl OxiApp {
                 }
                 ui.add_space(6.0);
                 let mut accept_invalid = self.conv.settings.provider(kind).allows_self_signed_tls();
-                if ui
-                    .checkbox(
+                if crate::ui::chrome::toggle(ui,
                         &mut accept_invalid,
                         RichText::new("Accept self-signed TLS certificates")
                             .size(FS_SMALL)

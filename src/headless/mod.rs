@@ -33,6 +33,8 @@ use crate::session_store;
 use crate::settings::{AppSettings, LlmProviderKind};
 
 mod daemon;
+mod remote_app;
+pub use remote_app::HISTORY_MISMATCH;
 
 pub const SUBCOMMAND: &str = "headless";
 /// Bumped when a request or notification changes shape incompatibly.
@@ -95,6 +97,7 @@ struct Prompt {
     text: String,
     attachments: Vec<UserAttachment>,
     plan: Option<bool>,
+    evidence: Option<bool>,
 }
 
 struct Chat {
@@ -103,6 +106,7 @@ struct Chat {
     run: Option<Run>,
     queued: VecDeque<Prompt>,
     plan_mode: bool,
+    evidence_mode: crate::evidence::Mode,
     pending_approval: Option<Value>,
     status: Option<String>,
     /// PTYs the agent opened; dropping one kills its command, so they live as long as it runs.
@@ -121,6 +125,7 @@ impl Chat {
             run: None,
             queued: VecDeque::new(),
             plan_mode: false,
+            evidence_mode: false.into(),
             pending_approval: None,
             status: None,
             terminals: Vec::new(),
@@ -185,9 +190,19 @@ fn empty_session(title: String, config: SessionConfig) -> Session {
 /// - `--status`, `--stop`: show or stop the running daemon.
 pub fn run() -> i32 {
     crate::logging::init();
+    if crate::remote::service::managed() {
+        // Like the daemon `oxi server` runs: keys from its file, never a keychain prompt.
+        // SAFETY: no other thread runs yet.
+        unsafe { std::env::set_var(crate::secrets::SERVER_FILE_ENV, "1") };
+    }
     match std::env::args().nth(2).as_deref() {
         None => daemon::bridge().unwrap_or_else(|| serve(false)),
-        Some("--daemon") => serve(true),
+        Some("--daemon") => {
+            // `--keep`: run until stopped, for `oxi server`'s LaunchAgent.
+            let keep = std::env::args().nth(3).as_deref() == Some("--keep");
+            KEEP_RUNNING.store(keep, Ordering::Relaxed);
+            serve(true)
+        }
         Some("--stdio") => serve(false),
         Some("--status") => daemon::status(),
         Some("--stop") => daemon::stop(),
@@ -196,6 +211,20 @@ pub fn run() -> i32 {
             2
         }
     }
+}
+
+/// The daemon doesn't exit when idle (`oxi headless --daemon --keep`).
+static KEEP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// `oxi headless --status`, for `oxi server status`.
+pub fn print_status() -> i32 {
+    daemon::status()
+}
+
+/// Stop a daemon running now, if any (`oxi server install` replaces it).
+#[cfg(target_os = "macos")]
+pub fn stop_running_daemon() {
+    let _ = daemon::stop();
 }
 
 /// Run the server: as the daemon, for every editor that connects, else for the one on stdio.
@@ -256,6 +285,9 @@ struct Server {
     last_flush: Instant,
     /// Connected editors.
     clients: HashMap<u64, Sender<Arc<str>>>,
+    /// Clients (the oxi app connected over SSH) that take raw agent events instead of the
+    /// coalesced message snapshots; see `remote_app`.
+    event_clients: std::collections::HashSet<u64>,
     /// Some editor has connected, so the stdio server can stop once none is left.
     had_client: bool,
     daemon: bool,
@@ -284,6 +316,7 @@ impl Server {
             next_run: 1,
             last_flush: Instant::now(),
             clients: HashMap::new(),
+            event_clients: Default::default(),
             had_client: false,
             daemon,
             exe: daemon::exe_identity(),
@@ -342,7 +375,12 @@ impl Server {
         let line: Arc<str> = json!({"method": method, "params": params})
             .to_string()
             .into();
-        for writer in self.clients.values() {
+        // Event clients rebuild the streaming reply from the events themselves.
+        let snapshot = method == "message";
+        for (client, writer) in &self.clients {
+            if snapshot && self.event_clients.contains(client) {
+                continue;
+            }
             let _ = writer.send(line.clone());
         }
     }
@@ -381,6 +419,9 @@ impl Server {
         if !self.daemon {
             return self.had_client;
         }
+        if KEEP_RUNNING.load(Ordering::Relaxed) {
+            return false;
+        }
         self.idle_since.get_or_insert_with(Instant::now).elapsed() >= daemon::IDLE_EXIT
     }
 
@@ -396,6 +437,7 @@ impl Server {
                 );
             }
             Input::Disconnected { client } => {
+                self.event_clients.remove(&client);
                 if self.clients.remove(&client).is_some() {
                     log::info!(
                         "headless: editor {client} left ({} now)",
@@ -420,6 +462,20 @@ impl Server {
         };
         let method = request["method"].as_str().unwrap_or_default().to_string();
         let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
+        // File calls of a remote app can take a while (a search of a large tree): on a worker,
+        // so turns keep streaming meanwhile.
+        if method.starts_with("fs.") {
+            let tx = self.tx.clone();
+            let _ = std::thread::Builder::new()
+                .name("oxi-headless-fs".into())
+                .spawn(move || {
+                    let result = remote_app::fs_request(&method, &params);
+                    if !id.is_null() {
+                        let _ = tx.send(Input::Reply { to, result });
+                    }
+                });
+            return true;
+        }
         let result = match method.as_str() {
             "daemon.hello" => Ok(self.hello(&params)),
             "initialize" => Ok(self.initialize()),
@@ -458,6 +514,10 @@ impl Server {
                 self.clients.remove(&client);
                 return true;
             }
+            "client.features" => Ok(self.client_features(client, &params)),
+            "server.info" => Ok(remote_app::server_info()),
+            "chat.get" => self.get_chat(&params),
+            "chat.save" => self.save_chat(&params),
             "daemon.stop" => {
                 log::info!("headless: editor {client} stopped the server");
                 self.reply(to, Ok(Value::Null));
@@ -612,6 +672,7 @@ impl Server {
             "title": chat.session.title,
             "config": config_json(&config),
             "plan": chat.plan_mode,
+            "evidence": chat.evidence_mode.enabled(),
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "approval": chat.pending_approval,
@@ -749,6 +810,7 @@ impl Server {
                 .map(|items| items.iter().filter_map(attachment_param).collect())
                 .unwrap_or_default(),
             plan: params["plan"].as_bool(),
+            evidence: params["evidence"].as_bool(),
         };
         if prompt.text.is_empty() && prompt.attachments.is_empty() {
             return Err("Nothing to send".into());
@@ -757,6 +819,7 @@ impl Server {
             Some(id) => {
                 self.load_chat(&root, id)?;
                 let chat = self.chats.get_mut(id).expect("chat loaded");
+                remote_app::check_app_history(chat, params)?;
                 if chat.run.is_some() {
                     chat.queued.push_back(prompt);
                     let queued = chat.queued.len();
@@ -774,10 +837,17 @@ impl Server {
                 Chat::new(root.clone(), empty_session(String::new(), config))
             }
         };
+        let mut chat = chat;
+        self.apply_app_prompt_params(&mut chat, params)?;
         let id = self.start_turn(chat, prompt)?;
-        let title = self.chats[&id].session.title.clone();
+        let session = &self.chats[&id].session;
+        let title = session.title.clone();
+        // The prompt as stored here, with its @mentions expanded, for the app's copy.
+        let user = session.messages.len().checked_sub(2);
+        let stored =
+            user.map(|i| crate::remote::protocol::messages_to_json(&session.messages[i..i + 1]));
         self.notify("chats_changed", json!({"root": root}));
-        Ok(json!({"chat": id, "title": title, "queued": 0}))
+        Ok(json!({"chat": id, "title": title, "queued": 0, "user_index": user, "user": stored}))
     }
 
     fn worker_channel(&self, chat: &str, run: u64) -> Sender<AgentEvent> {
@@ -829,6 +899,9 @@ impl Server {
         }
         if let Some(plan) = prompt.plan {
             chat.plan_mode = plan;
+        }
+        if let Some(evidence) = prompt.evidence {
+            chat.evidence_mode.set(evidence);
         }
         let cwd = PathBuf::from(chat.root.trim());
         let expanded = crate::app::mentions::expand_at_mentions(&prompt.text, &cwd);
@@ -885,6 +958,7 @@ impl Server {
                 .chars_per_token
                 .unwrap_or(crate::agent::DEFAULT_CHARS_PER_TOKEN),
             plan_mode: chat.plan_mode,
+            evidence_mode: chat.evidence_mode.clone(),
             undo_journal,
         };
         let worker_tx = self.worker_channel(&id, run_id);
@@ -1014,6 +1088,10 @@ impl Server {
             return;
         };
         chat.terminals.retain(|t| t.is_alive());
+        self.forward_event(id, &event);
+        let Some(chat) = self.chats.get_mut(id) else {
+            return;
+        };
         match event {
             AgentEvent::AgentStart | AgentEvent::AssistantMessageDone => {}
             AgentEvent::AcpTerminal(pending) => {
@@ -1133,6 +1211,11 @@ impl Server {
             AgentEvent::TurnChanges(changes) => {
                 if let Some(m) = chat.last_assistant_mut() {
                     m.changes = Some(changes);
+                }
+            }
+            AgentEvent::Evidence(report) => {
+                if let Some(m) = chat.last_assistant_mut() {
+                    m.evidence = Some(report);
                 }
             }
             AgentEvent::Finished(outcome) => {
@@ -1446,6 +1529,7 @@ impl Server {
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "plan": chat.plan_mode,
+            "evidence": chat.evidence_mode.enabled(),
         });
         if let Some((outcome, error)) = finished {
             params["outcome"] = json!(outcome);
@@ -1847,6 +1931,7 @@ fn message_json(message: &ChatMessage) -> Value {
         "role": "assistant",
         "streaming": message.streaming,
         "blocks": blocks,
+        "evidence": message.evidence,
         "route": message.route.as_deref().map(|route| json!({
             "provider": route.provider.slug(),
             "label": crate::app::composer::composer_provider_label(route.provider),
@@ -1894,6 +1979,27 @@ mod tests {
         assert_eq!(blocks[2]["title"], "ls");
         assert_eq!(blocks[2]["status"], "in_progress");
         assert_eq!(value["streaming"], true);
+    }
+
+    #[test]
+    fn evidence_reports_reach_headless_clients_with_their_claims() {
+        let mut reply = ChatMessage::streaming_assistant(None);
+        reply.evidence = Some(Box::new(crate::evidence::EvidenceReport {
+            stale: false,
+            workspace: None,
+            turn: "turn".into(),
+            requested: true,
+            submitted: true,
+            summary: "Verified".into(),
+            claims: vec![crate::evidence::Claim {
+                text: "Check passed".into(),
+                evidence: vec!["e1".into()],
+            }],
+            ..Default::default()
+        }));
+        let value = message_json(&reply);
+        assert_eq!(value["evidence"]["summary"], "Verified");
+        assert_eq!(value["evidence"]["claims"][0]["evidence"], json!(["e1"]));
     }
 
     #[test]

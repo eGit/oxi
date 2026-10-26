@@ -118,6 +118,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -133,6 +134,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         }
     }
 
@@ -228,6 +230,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -243,6 +246,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         assert!(chat_messages_equal(&a, &b));
     }
@@ -263,6 +267,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -278,6 +283,7 @@ mod tests {
             worked_duration: None,
             route: None,
             changes: None,
+            evidence: None,
         };
         assert!(!chat_messages_equal(&a, &b));
     }

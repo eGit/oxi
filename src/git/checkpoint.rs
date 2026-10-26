@@ -54,6 +54,13 @@ fn snapshot_tree(repo: &Repository) -> Result<Oid, String> {
 
 /// Files that differ between two snapshot trees, with line counts.
 pub fn changed_files(repo: &Path, before: &str, after: &str) -> Result<Vec<CompareFile>, String> {
+    if let Some(result) = super::remote::call::<Result<Vec<CompareFile>, String>>(
+        &repo.to_string_lossy(),
+        "changed_files",
+        serde_json::json!({ "before": before, "after": after }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(&repo.to_string_lossy())?;
     let diff = tree_diff(&repo, before, after)?;
     let mut files = Vec::new();
@@ -84,6 +91,13 @@ pub fn changed_files(repo: &Path, before: &str, after: &str) -> Result<Vec<Compa
 /// What the turn changed as a unified diff (3 lines of context), for another agent to review.
 /// Files whose patch would push the text past `max_bytes` are listed by name only.
 pub fn patch(repo: &Path, before: &str, after: &str, max_bytes: usize) -> Result<String, String> {
+    if let Some(result) = super::remote::call::<Result<String, String>>(
+        &repo.to_string_lossy(),
+        "patch",
+        serde_json::json!({ "before": before, "after": after, "max_bytes": max_bytes }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(&repo.to_string_lossy())?;
     let old = find_tree(&repo, before)?;
     let new = find_tree(&repo, after)?;
@@ -115,10 +129,33 @@ pub fn patch(repo: &Path, before: &str, after: &str, max_bytes: usize) -> Result
     Ok(out)
 }
 
+/// Write the files of snapshot `tree` into `dest`, a plain folder without git metadata. The
+/// repository's index and work tree are left alone.
+pub fn checkout_to(repo: &Path, tree: &str, dest: &Path) -> Result<(), String> {
+    let repo = open_repo(&repo.to_string_lossy())?;
+    let tree = find_tree(&repo, tree)?;
+    std::fs::create_dir_all(dest).map_err(err)?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout
+        .target_dir(dest)
+        .force()
+        .recreate_missing(true)
+        .update_index(false);
+    repo.checkout_tree(tree.as_object(), Some(&mut checkout))
+        .map_err(err)
+}
+
 /// Put back the `before` state of every path the turn changed (`before` → `after`), or only
 /// `only` when given. Refused when one of those paths no longer matches `after`, so later edits
 /// (yours or a later turn's) are never overwritten.
 pub fn restore(repo: &Path, before: &str, after: &str, only: Option<&str>) -> Result<(), String> {
+    if let Some(result) = super::remote::call::<Result<(), String>>(
+        &repo.to_string_lossy(),
+        "restore",
+        serde_json::json!({ "before": before, "after": after, "only": only }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(&repo.to_string_lossy())?;
     let root = repo_root(&repo)?.to_path_buf();
     let changed: Vec<String> = tree_diff(&repo, before, after)?

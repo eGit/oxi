@@ -153,8 +153,6 @@ pub struct EditorState {
     pub focus_find_next_frame: bool,
     /// Return keyboard focus to the editor on its next render (definition/history jumps).
     pub focus_editor_next_frame: bool,
-    /// Collapse the active editor selection to its primary caret on the next render.
-    pub clear_editor_selection_next_frame: bool,
     /// Document opened explicitly from GitPanel. Only this document receives full-row Git
     /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
     pub git_full_highlight_path: Option<PathBuf>,
@@ -396,6 +394,8 @@ pub struct SessionRunState {
     pub plan_mode: bool,
     /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
     pub last_turn_planned: bool,
+    /// Shared with the running turn: verify unproven changes at completion, reusing valid proof.
+    pub evidence_mode: crate::evidence::Mode,
     /// Provider/model the running turn bills against (the routed one under the Router), for
     /// the usage ledger.
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
@@ -406,7 +406,10 @@ pub struct SessionRunState {
 impl SessionRunState {
     /// Per-chat composer modes that must survive idle-state pruning.
     pub fn keeps_chat_modes(&self) -> bool {
-        self.plan_mode || self.last_turn_planned || !self.queued.is_empty()
+        self.plan_mode
+            || self.evidence_mode.enabled()
+            || self.last_turn_planned
+            || !self.queued.is_empty()
     }
 
     pub fn clear_agent(&mut self) {
@@ -677,6 +680,10 @@ pub struct SettingsPageState {
     pub save_error: Option<String>,
     pub open: bool,
     pub tab: SettingsTab,
+    /// Settings search query (left nav); results replace the page list while non-empty.
+    pub search: String,
+    /// Focus the search field next frame (Cmd/Ctrl+F on the Settings page).
+    pub focus_search: bool,
     pub provider_tab: LlmProviderKind,
     pub oauth_busy: bool,
     pub oauth_last_message: Option<String>,
@@ -728,6 +735,7 @@ pub struct TranscriptState {
     pub rendered: std::collections::HashSet<(usize, usize, usize)>,
     /// File lists and view state of "N files changed" cards under agent turns.
     pub turn_changes: super::turn_changes::TurnChangesCache,
+    pub evidence: super::evidence_card::EvidenceCardCache,
     /// Right-click menu of a transcript message (fork, copy).
     pub message_menu: Option<super::fork::MessageMenu>,
     /// The transcript's text selection as it was when a right-click began. egui collapses a
@@ -735,6 +743,13 @@ pub struct TranscriptState {
     pub held_selection: Option<egui::text_selection::LabelSelectionState>,
     /// "Copy selection" was chosen: copy the held selection on the next frame.
     pub copy_held_selection: bool,
+    /// Where last frame's transcript was visible, for routing right-clicks in `raw_input_hook`.
+    pub viewport: Option<(egui::LayerId, egui::Rect)>,
+    /// A right-press over a selected transcript was kept from egui (its labels would start a
+    /// new selection on it); the matching release is kept back too.
+    pub swallowing_secondary: bool,
+    /// The swallowed right-click's position, for this frame's `detect_message_menu`.
+    pub secondary_click: Option<egui::Pos2>,
     /// The Cmd/Ctrl+F bar over the transcript, while open.
     pub find: Option<super::conversation::find::ChatFind>,
 }
@@ -752,9 +767,13 @@ impl Default for TranscriptState {
             tool_detail: Default::default(),
             rendered: Default::default(),
             turn_changes: Default::default(),
+            evidence: Default::default(),
             message_menu: None,
             held_selection: None,
             copy_held_selection: false,
+            viewport: None,
+            swallowing_secondary: false,
+            secondary_click: None,
             find: None,
         }
     }
@@ -831,6 +850,10 @@ pub struct ConversationState {
     pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// A second chat shown next to the active one (see [`super::split_view`]).
+    pub split: Option<super::split_view::SplitView>,
+    /// The chat to show next to the work tree chat being created.
+    pub pending_split: Option<super::split_view::ChatRef>,
     /// Background filesystem chores (see [`super::chores`]).
     pub chores: Vec<super::chores::Chore>,
     pub git_ui: GitUiState,

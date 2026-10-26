@@ -18,7 +18,8 @@ impl OxiApp {
     /// Start a title completion when `key` just finished its first turn and still carries the
     /// automatic first-prompt title (a manual rename is never overwritten).
     pub(crate) fn maybe_start_title_gen(&mut self, key: SessionKey) {
-        if !self.conv.settings.auto_title_chats {
+        // A remote chat's server names it.
+        if !self.conv.settings.auto_title_chats || self.is_remote_key(key) {
             return;
         }
         let config = crate::router::helper_config(

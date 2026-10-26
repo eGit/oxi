@@ -186,6 +186,14 @@ pub fn load_unified() -> UnifiedSecrets {
     if let Some(s) = cached() {
         return s;
     }
+    if let Some(path) = server_file() {
+        let unified = load_server_file(&path);
+        return UNIFIED_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert(unified)
+            .clone();
+    }
     let stored = load_blob(UNIFIED_ACCOUNT);
     let unified = if !stored.is_empty() {
         serde_json::from_str(&stored).unwrap_or_default()
@@ -202,11 +210,68 @@ pub fn load_unified() -> UnifiedSecrets {
 
 pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
     let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
-    store_blob(UNIFIED_ACCOUNT, &json)?;
+    match server_file() {
+        Some(path) => write_server_file(&path, &json)?,
+        None => store_blob(UNIFIED_ACCOUNT, &json)?,
+    }
     // Never let the in-process cache claim a failed keychain write succeeded. Callers can now
     // surface the error and retry without silently diverging from what survives a restart.
     *UNIFIED_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(unified.clone());
     Ok(())
+}
+
+/// Set by `oxi server`'s LaunchAgent (see `remote::service`): keep the secrets in a file only
+/// this user can read instead of the keychain.
+pub const SERVER_FILE_ENV: &str = "OXI_SECRETS_FILE";
+
+/// The keychain asks again for every new oxi build (oxi is ad-hoc signed), and a server
+/// waiting on that prompt serves nobody until someone walks to its screen. So a server copies
+/// the secrets out of the keychain once and then uses the file.
+fn server_file() -> Option<std::path::PathBuf> {
+    std::env::var_os(SERVER_FILE_ENV)
+        .filter(|v| !v.is_empty())
+        .map(|_| crate::app_dirs::config_dir().join("server-secrets.json"))
+}
+
+fn load_server_file(path: &std::path::Path) -> UnifiedSecrets {
+    if let Ok(text) = std::fs::read_to_string(path) {
+        return serde_json::from_str(&text).unwrap_or_default();
+    }
+    // First start: the one keychain read (and prompt) this server needs.
+    let stored = load_blob(UNIFIED_ACCOUNT);
+    let unified: UnifiedSecrets = if stored.is_empty() {
+        migrate_legacy_accounts()
+    } else {
+        serde_json::from_str(&stored).unwrap_or_default()
+    };
+    match serde_json::to_string(&unified) {
+        Ok(json) => {
+            if let Err(e) = write_server_file(path, &json) {
+                log::warn!("secrets: could not write {}: {e}", path.display());
+            }
+        }
+        Err(e) => log::warn!("secrets: {e}"),
+    }
+    unified
+}
+
+fn write_server_file(path: &std::path::Path, json: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Windows Credential Manager caps a single credential blob at

@@ -3,7 +3,6 @@
 //! revert), and reverting one file or the whole turn.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use eframe::egui::{self, FontId, RichText, Sense, Ui};
 
@@ -54,6 +53,7 @@ impl OxiApp {
         author: Option<crate::settings::LlmProviderKind>,
     ) {
         let key = cache_key(changes);
+        let repo = self.turn_repo(&changes.repo);
         let entry = self
             .conv
             .transcript
@@ -62,7 +62,7 @@ impl OxiApp {
             .entry(key.clone())
             .or_insert_with(|| TurnEntry {
                 files: crate::git::checkpoint::changed_files(
-                    Path::new(&changes.repo),
+                    &repo,
                     &changes.before,
                     &changes.after,
                 ),
@@ -250,7 +250,7 @@ impl OxiApp {
 
     fn revert_turn_changes(&mut self, changes: &TurnChanges, key: &str, only: Option<String>) {
         let result = crate::git::checkpoint::restore(
-            Path::new(&changes.repo),
+            &self.turn_repo(&changes.repo),
             &changes.before,
             &changes.after,
             only.as_deref(),

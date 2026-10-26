@@ -13,6 +13,7 @@ fn chat_msg(role: MsgRole, text: &str, blocks: Vec<AssistantBlock>) -> ChatMessa
         worked_duration: None,
         route: None,
         changes: None,
+        evidence: None,
     }
 }
 

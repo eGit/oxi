@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align, Layout, RichText, ScrollArea, Ui};
@@ -17,6 +18,10 @@ const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 /// How long a directory listing is reused before the explorer reads the folder again. Changes
 /// made through the explorer itself invalidate the cache immediately.
 const EXPLORER_CACHE_TTL: Duration = Duration::from_secs(2);
+/// A remote folder is read again (in the background) after this long.
+const REMOTE_CACHE_TTL: Duration = Duration::from_secs(5);
+/// A remote `.gitignore` costs a round trip on the UI thread; it rarely changes.
+const REMOTE_GITIGNORE_TTL: Duration = Duration::from_secs(60);
 
 /// Directory listings behind the explorer tree. Rendering used to call `read_dir`, sort, and
 /// match every entry against every `.gitignore` glob (compiling each glob anew) for every
@@ -24,6 +29,9 @@ const EXPLORER_CACHE_TTL: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub(crate) struct ExplorerCache {
     dirs: HashMap<PathBuf, CachedDir>,
+    /// Remote folders being read again in the background, and the answers that came in.
+    remote_refreshing: std::collections::HashSet<PathBuf>,
+    remote_results: Option<(Sender<RemoteListing>, Receiver<RemoteListing>)>,
     gitignore: Option<(PathBuf, Instant, Rc<GitIgnore>)>,
     /// Deepest row drawn in the current / previous frame, to size the indentation.
     deepest: usize,
@@ -45,6 +53,9 @@ fn explorer_indent_step(row_width: f32, deepest: usize) -> f32 {
     ((row_width - ROW_CHROME - MIN_NAME_WIDTH) / deepest as f32).clamp(MIN_STEP, FULL_STEP)
 }
 
+/// A remote folder read on a worker: the folder and its entries.
+type RemoteListing = (PathBuf, Result<Vec<crate::vfs::Entry>, String>);
+
 struct CachedDir {
     at: Instant,
     listing: Result<Rc<[ExplorerEntry]>, String>,
@@ -60,14 +71,31 @@ struct ExplorerEntry {
 impl ExplorerCache {
     /// Forget everything, so the next frame reads the tree from disk.
     pub(crate) fn invalidate(&mut self) {
-        self.dirs.clear();
-        self.gitignore = None;
+        // Remote folders stay on screen while they are read again in the background.
+        self.dirs.retain(|path, _| crate::vfs::is_remote(path));
+        for cached in self.dirs.values_mut() {
+            cached.at = Instant::now()
+                .checked_sub(REMOTE_CACHE_TTL)
+                .unwrap_or(cached.at);
+        }
+        if self
+            .gitignore
+            .as_ref()
+            .is_some_and(|(root, _, _)| !crate::vfs::is_remote(root))
+        {
+            self.gitignore = None;
+        }
     }
 
     fn gitignore(&mut self, root: &Path) -> Rc<GitIgnore> {
+        let ttl = if crate::vfs::is_remote(root) {
+            REMOTE_GITIGNORE_TTL
+        } else {
+            EXPLORER_CACHE_TTL
+        };
         if let Some((cached_root, at, patterns)) = &self.gitignore
             && cached_root == root
-            && at.elapsed() < EXPLORER_CACHE_TTL
+            && at.elapsed() < ttl
         {
             return patterns.clone();
         }
@@ -76,12 +104,69 @@ impl ExplorerCache {
         patterns
     }
 
+    /// A remote folder: the last listing while a fresh one is read on a worker, so expanded
+    /// folders never stall a frame on the network. Only a folder never listed waits.
+    fn remote_listing(
+        &mut self,
+        root: &Path,
+        directory: &Path,
+        ignored: &GitIgnore,
+    ) -> Result<Rc<[ExplorerEntry]>, String> {
+        let (tx, rx) = self
+            .remote_results
+            .get_or_insert_with(std::sync::mpsc::channel);
+        let tx = tx.clone();
+        while let Ok((path, entries)) = rx.try_recv() {
+            self.remote_refreshing.remove(&path);
+            let listing = entries.map(|entries| explorer_entries(root, entries, ignored));
+            self.dirs.insert(
+                path,
+                CachedDir {
+                    at: Instant::now(),
+                    listing,
+                },
+            );
+        }
+        match self.dirs.get(directory) {
+            Some(cached) => {
+                if cached.at.elapsed() >= REMOTE_CACHE_TTL
+                    && self.remote_refreshing.insert(directory.to_path_buf())
+                {
+                    let path = directory.to_path_buf();
+                    let _ = std::thread::Builder::new()
+                        .name("oxi-explorer-remote".into())
+                        .spawn(move || {
+                            let entries = crate::vfs::read_dir(&path).map_err(|e| e.to_string());
+                            let _ = tx.send((path, entries));
+                        });
+                }
+                cached.listing.clone()
+            }
+            None => {
+                let listing = crate::vfs::read_dir(directory)
+                    .map_err(|e| e.to_string())
+                    .map(|entries| explorer_entries(root, entries, ignored));
+                self.dirs.insert(
+                    directory.to_path_buf(),
+                    CachedDir {
+                        at: Instant::now(),
+                        listing: listing.clone(),
+                    },
+                );
+                listing
+            }
+        }
+    }
+
     fn listing(
         &mut self,
         root: &Path,
         directory: &Path,
         ignored: &GitIgnore,
     ) -> Result<Rc<[ExplorerEntry]>, String> {
+        if crate::vfs::is_remote(directory) {
+            return self.remote_listing(root, directory, ignored);
+        }
         if let Some(cached) = self.dirs.get(directory)
             && cached.at.elapsed() < EXPLORER_CACHE_TTL
         {
@@ -105,30 +190,36 @@ fn read_explorer_directory(
     directory: &Path,
     ignored: &GitIgnore,
 ) -> Result<Rc<[ExplorerEntry]>, String> {
-    let mut entries: Vec<ExplorerEntry> = std::fs::read_dir(directory)
-        .map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
+    let entries = crate::vfs::read_dir(directory).map_err(|error| error.to_string())?;
+    Ok(explorer_entries(root, entries, ignored))
+}
+
+/// The rows of one folder's entries: sorted, `.git` left out, ignored ones marked.
+fn explorer_entries(
+    root: &Path,
+    entries: Vec<crate::vfs::Entry>,
+    ignored: &GitIgnore,
+) -> Rc<[ExplorerEntry]> {
+    let mut entries: Vec<ExplorerEntry> = entries
+        .into_iter()
         .filter_map(|entry| {
-            let kind = entry.file_type().ok()?;
-            if !kind.is_dir() && !kind.is_file() {
+            if !entry.is_dir && !entry.is_file {
                 return None;
             }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if kind.is_dir() && ALWAYS_SKIPPED_DIRS.contains(&name.as_str()) {
+            if entry.is_dir && ALWAYS_SKIPPED_DIRS.contains(&entry.name.as_str()) {
                 return None;
             }
-            let path = entry.path();
-            let git_ignored = is_gitignored(root, &path, kind.is_dir(), ignored);
+            let git_ignored = is_gitignored(root, &entry.path, entry.is_dir, ignored);
             Some(ExplorerEntry {
-                path,
-                name,
-                is_dir: kind.is_dir(),
+                path: entry.path,
+                name: entry.name,
+                is_dir: entry.is_dir,
                 git_ignored,
             })
         })
         .collect();
     entries.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
-    Ok(entries.into())
+    entries.into()
 }
 
 impl OxiApp {
@@ -212,7 +303,8 @@ impl OxiApp {
         ui.add_space(8.0);
         ui.add_space(1.0);
 
-        const FOOTER_H: f32 = 36.0;
+        // Settings moved to the status bar; only a little bottom breathing room is left.
+        const FOOTER_H: f32 = 4.0;
         let content_height = (ui.available_height() - FOOTER_H).max(48.0);
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), content_height),
@@ -306,23 +398,6 @@ impl OxiApp {
                 }
             },
         );
-
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            if crate::ui::chrome::flat_button_icon(
-                ui,
-                ICON_SETTINGS,
-                "Settings",
-                FS_SMALL,
-                egui::vec2(ui.available_width(), 28.0),
-                c_text_muted(),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
-            {
-                self.open_settings_page();
-            }
-        });
     }
 
     fn render_explorer_directory(

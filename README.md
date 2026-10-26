@@ -147,6 +147,25 @@ Also install Visual Studio Build Tools with the **Desktop development with C++**
 
 Also: chats saved per workspace, local Whisper voice dictation, web search without an API key (DuckDuckGo, Bing or your SearXNG), custom system prompts, `AGENTS.md` support, and five themes (Dark, Light, Midnight, Sublime, Sublime 4).
 
+**Evidence mode.** Click the camera in the composer or send `/evidence` to toggle it;
+`/evidence <task>` enables it and sends the task. ACP agents and API/local models that
+support tool calls can capture before/after images or recordings, run checks, and cite
+them in a report beneath their response. oxi records check results and flags missing or
+contradicted claims, requesting missing evidence at most twice. You can enable or disable
+it while the agent is answering: the live choice applies when that response finishes.
+Informational replies with no workspace changes do not trigger automatic verification.
+Unverified edits from earlier in the conversation can still need proof. Existing reports
+in the same chat are reused when their cited checks/captures cover the exact current
+workspace state; later changes invalidate that proof. Older reports without workspace
+version information are not assumed to cover the current state.
+Commands use the usual
+shell approvals and, for API/local providers, the configured command timeout. Plan mode
+takes precedence. Capturing a URL needs a Chromium browser; screen/window capture depends
+on OS support and permissions. A model can produce captures without vision, but cannot
+inspect their contents unless images are supplied to a vision-capable model.
+Headless clients can set `evidence: true` or `false` on `prompt.send`; subsequent turns in
+that chat retain the choice until it is changed or the chat is reloaded.
+
 ## Models and providers
 
 Pick a provider in Settings or from the model picker in the composer.
@@ -184,9 +203,21 @@ ChatGPT sign-in needs port `1455` free for the login callback. The Router's task
 
 </details>
 
+## Remote workspaces over SSH
+
+Connect the desktop app to another machine with **File → Connect to Remote Host…**
+or the server icon above the chat list. Choose an SSH host and a folder on it;
+agents, files, Git and the terminal run on that host, and chats are saved there.
+
+Install the same oxi build on both machines. On a macOS host, run `oxi server install`
+once from its logged-in desktop session. The client uses your existing SSH keys or
+ssh-agent; first check that `ssh -o BatchMode=yes your-host true` succeeds.
+
+See [Remote SSH setup](docs/remote-ssh.md) for installation, credentials and troubleshooting.
+
 ## Your data
 
-Everything stays on your machine. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). API keys, sign-in tokens and SSH passwords go to the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never into the settings file.
+Local workspaces keep their data on your machine; remote workspaces keep chats and project files on their SSH host. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). The desktop app stores API keys, sign-in tokens and SSH passwords in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in the settings file. The managed macOS server uses an owner-only `server-secrets.json` file in its config folder to avoid keychain prompts after updates; see [server credentials](docs/remote-ssh.md#credentials).
 
 If a workspace has an `AGENTS.md` at its root, oxi adds it to the agent's instructions.
 

@@ -161,6 +161,7 @@ pub const ICON_UPLOAD: &str = "\u{f0aa}";
 pub const ICON_WEB_SEARCH: &str = "\u{f070f}";
 /// Globe — web fetch / URL tool pill (`nf-fa-globe`).
 pub const ICON_GLOBE: &str = "\u{f0ac}";
+pub const ICON_SERVER: &str = "\u{f233}";
 /// Git branch — current-branch line in the source-control panel (`nf-oct-git_branch`).
 pub const ICON_BRANCH: &str = "\u{f418}";
 /// Play triangle — start a local/remote model (`nf-fa-play`).
@@ -171,6 +172,8 @@ pub const ICON_HEART: &str = "\u{f004}";
 pub const ICON_SEARCH: &str = "\u{f002}";
 /// Activity log (status bar) — nf-md-pulse.
 pub const ICON_ACTIVITY: &str = "\u{f0430}";
+/// Evidence mode toggle, captures — nf-fa-camera.
+pub const ICON_CAMERA: &str = "\u{f030}";
 /// Plan mode toggle — nf-md-map_outline.
 pub const ICON_PLAN: &str = "\u{f0982}";
 /// Agent checklist (`todo_write`) — nf-md-format_list_checks.

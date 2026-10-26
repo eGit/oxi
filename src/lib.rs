@@ -12,6 +12,7 @@ mod app_dirs;
 mod code_nav;
 mod compute;
 mod desktop_entry;
+mod evidence;
 pub mod fsutil;
 mod git;
 mod headless;
@@ -26,6 +27,7 @@ mod model;
 mod oauth;
 mod open_buffers;
 mod os_open;
+mod remote;
 mod router;
 mod runtime;
 mod scratchpad;
@@ -38,6 +40,7 @@ mod text_diff;
 mod theme;
 mod ui;
 mod update;
+mod vfs;
 mod voice_engine;
 mod voice_models;
 
@@ -68,6 +71,7 @@ pub fn run() -> eframe::Result<()> {
             std::process::exit(agent::acp::oxi_mcp::run_stdio())
         }
         Some(headless::SUBCOMMAND) => std::process::exit(headless::run()),
+        Some(remote::service::SUBCOMMAND) => std::process::exit(remote::service::run()),
         _ => {}
     }
     logging::init();

@@ -436,6 +436,7 @@ pub fn spawn_agent_run(
                         .flatten(),
                     chars_per_token: request.chars_per_token,
                     plan_mode: request.plan_mode,
+                    evidence_mode: request.evidence_mode.clone(),
                     undo_journal: request.undo_journal.clone(),
                 },
                 event_tx,
@@ -525,6 +526,7 @@ pub fn spawn_agent_run(
                     worked_duration: None,
                     route: Some(Box::new(note.clone())),
                     changes: None,
+                    evidence: None,
                 });
                 user.text = format!("Continue the original request after the quota interruption. A different provider was selected because the previous one is unavailable; retain all task constraints and approval rules.\n\nOriginal request:\n{}", user.text);
                 chat.push(user);

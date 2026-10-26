@@ -61,6 +61,7 @@ mod tests {
             bash_timeout_cap_secs: 300,
             mcp: None,
             subagent: None,
+            evidence: None,
             undo_journal: Some(journal.clone()),
         };
         for args in [

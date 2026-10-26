@@ -14,7 +14,7 @@ use super::{
 /// Commits listed at most; a base that is far behind would otherwise walk the whole history.
 const MAX_COMPARE_COMMITS: usize = 500;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompareFile {
     pub path: String,
     /// The pre-rename path, for renames.
@@ -24,7 +24,7 @@ pub struct CompareFile {
     pub deleted: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GitCompare {
     /// The base it was computed against (a local or remote branch name).
     pub base: String,
@@ -44,6 +44,9 @@ pub struct GitCompare {
 /// Compare the current branch (and its work tree) against `base`; an empty `base` picks the
 /// repository's default branch.
 pub fn compare(cwd: &str, base: &str) -> GitCompare {
+    if let Some(result) = super::remote::call(cwd, "compare", serde_json::json!({ "base": base })) {
+        return result.unwrap_or_else(|e| failed(base, e));
+    }
     let repo = match open_repo(cwd) {
         Ok(repo) if !repo.is_bare() => repo,
         Ok(_) => return failed(base, "Bare repositories are not supported".into()),

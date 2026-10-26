@@ -8,7 +8,8 @@ use crate::model::WireCache;
 ///
 /// `input_tokens` counts only the uncached remainder; the full prompt size is
 /// `input + cache_read + cache_creation`.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -135,6 +136,9 @@ pub enum AgentEvent {
     /// What the turn changed in the workspace (git snapshots before and after it). Sent just
     /// before [`AgentEvent::Finished`] by turns that snapshot the work tree (ACP).
     TurnChanges(Box<crate::model::TurnChanges>),
+    /// What the turn proved with oxi's evidence tools (see [`crate::evidence`]). Sent before
+    /// [`AgentEvent::Finished`] by ACP turns that used them or ran in evidence mode.
+    Evidence(Box<crate::evidence::EvidenceReport>),
     /// The only terminal event for a run.
     Finished(AgentOutcome),
 }

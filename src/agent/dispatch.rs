@@ -61,6 +61,68 @@ pub(crate) fn streaming_client(
         .map_err(|e| e.to_string())
 }
 
+/// Keep missing-proof followups in the same streaming loop, preserving protocol state,
+/// approvals, cancellation and the configured maximum number of rounds.
+pub(crate) fn evidence_followup(
+    env: &ToolEnv,
+    tx: &Sender<AgentEvent>,
+    cancel: &Arc<AtomicBool>,
+    messages: &mut Vec<Value>,
+    followups: &mut usize,
+) -> bool {
+    let Some(context) = env.evidence.as_ref() else {
+        return false;
+    };
+    if *followups >= crate::evidence::MAX_FOLLOWUPS
+        || cancel.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return false;
+    }
+    let Some(marker) = crate::evidence::current_turn(&context.dir) else {
+        return false;
+    };
+    let report = crate::evidence::collect(&context.dir, &marker.turn, true);
+    let problems = context.policy.as_ref().map_or_else(
+        || report.problems(),
+        |p| p.inspect(&context.dir, &marker.turn).problems,
+    );
+    if problems.is_empty() {
+        return false;
+    }
+    *followups += 1;
+    let _ = tx.send(AgentEvent::TextDelta(format!(
+        "\n\n*oxi asked the agent for the missing evidence ({}).*\n\n",
+        problems.len()
+    )));
+    messages.push(serde_json::json!({
+        "role": "user", "content": format!("{}\n\n{}", crate::evidence::PROMPT_PREFIX, crate::evidence::followup_prompt(&problems)),
+    }));
+    true
+}
+
+/// Re-read the live switch before every request, including an end-of-response follow-up.
+pub(crate) fn tools_for_round(tools: &[Value], env: &ToolEnv) -> Vec<Value> {
+    let Some(context) = &env.evidence else {
+        return tools.to_vec();
+    };
+    let Some(policy) = &context.policy else {
+        return tools.to_vec();
+    };
+    let mut available: Vec<_> = tools
+        .iter()
+        .filter(|tool| {
+            !tool["function"]["name"]
+                .as_str()
+                .is_some_and(|n| crate::evidence::tools::NAMES.contains(&n))
+        })
+        .cloned()
+        .collect();
+    if policy.mode.enabled() {
+        available.extend(crate::evidence::tools::native_definitions());
+    }
+    available
+}
+
 /// Run the provider loop for `p.cfg` over `messages` until the model stops calling tools (or
 /// `max_rounds` is reached). `messages` accumulates the provider-native history.
 pub(crate) async fn run_provider_loop(

@@ -29,6 +29,9 @@ pub mod worktree;
 
 #[path = "git/hunk.rs"]
 mod hunk;
+
+#[path = "git/remote.rs"]
+pub mod remote;
 pub use hunk::{BlockEdit, BlockTarget, DiffBase, diff_texts, splice_lines, text_hunks};
 pub use system::version as system_git_version;
 
@@ -46,7 +49,7 @@ const MAX_DIFF_CHARS: usize = 200_000;
 const MAX_FILE_DIFF_CHARS: usize = 2_000_000;
 const FULL_FILE_CONTEXT: u32 = 1_000_000;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GitEntry {
     pub path: String,
     /// `git status --short` letter for this side: `A M D R T` staged, `? M D R T U` unstaged
@@ -54,7 +57,7 @@ pub struct GitEntry {
     pub status: char,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GitCommit {
     pub hash: String,
     pub date: String,
@@ -62,7 +65,7 @@ pub struct GitCommit {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GitLineKind {
     Added,
     Modified,
@@ -70,13 +73,13 @@ pub enum GitLineKind {
     Deleted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GitLineChange {
     pub line: usize,
     pub kind: GitLineKind,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GitState {
     pub repo: bool,
     pub branch: String,
@@ -102,7 +105,7 @@ pub struct GitState {
     pub diff_only: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GitOp {
     Refresh,
     AutoRefresh,
@@ -307,6 +310,9 @@ fn diff_worker(
 
 /// The diff-view part of a snapshot for `op`, without the repository status.
 fn view_diff(cwd: &str, op: GitOp) -> GitState {
+    if let Some(result) = remote::call(cwd, "view", serde_json::json!({ "op": op })) {
+        return result.unwrap_or_else(|e| non_repo(Some(e)));
+    }
     let repo = match open_repo(cwd) {
         Ok(repo) if !repo.is_bare() => repo,
         _ => return GitState::default(),
@@ -711,6 +717,9 @@ pub fn run_op(cwd: &str, op: GitOp) -> GitState {
 }
 
 fn handle_op(cwd: &str, op: GitOp) -> GitState {
+    if let Some(result) = remote::call(cwd, "op", serde_json::json!({ "op": op })) {
+        return result.unwrap_or_else(|e| non_repo(Some(e)));
+    }
     let repo = match open_repo(cwd) {
         Ok(repo) if !repo.is_bare() => repo,
         Ok(_) => return non_repo(Some("Bare repositories are not supported".into())),

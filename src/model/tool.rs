@@ -40,7 +40,7 @@ impl ToolMetadata {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolUpdate {
     pub tool_call_id: String,
     pub name: String,

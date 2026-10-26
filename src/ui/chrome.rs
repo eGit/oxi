@@ -180,12 +180,16 @@ pub fn settings_list_row(ui: &mut Ui, show_divider: bool, add_contents: impl FnO
 
 /// Section caption used above groups of settings: small, uppercase, muted.
 pub fn settings_caption(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(text.to_uppercase())
-            .size(FS_TINY)
-            .color(c_text_faint())
-            .strong(),
-    );
+    let flash = ui.painter().add(egui::Shape::Noop);
+    let rect = ui
+        .label(
+            RichText::new(text.to_uppercase())
+                .size(FS_TINY)
+                .color(c_text_faint())
+                .strong(),
+        )
+        .rect;
+    settings_reveal_flash(ui, text, rect, flash);
     ui.add_space(2.0);
 }
 
@@ -201,12 +205,208 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 
 /// Card header: caption + optional one-line helper. Returns nothing; just paints.
 pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
-    ui.label(RichText::new(title).size(FS_BODY).color(c_text()).strong());
+    let flash = ui.painter().add(egui::Shape::Noop);
+    let mut rect = ui
+        .label(RichText::new(title).size(FS_BODY).color(c_text()).strong())
+        .rect;
     if let Some(help) = help {
         ui.add_space(2.0);
-        ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()));
+        rect = rect.union(
+            ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()))
+                .rect,
+        );
     }
+    settings_reveal_flash(ui, title, rect, flash);
     ui.add_space(8.0);
+}
+
+/// A Settings search hit waiting to be shown: the page scrolls to the card (or caption) with
+/// this title and tints it briefly so the eye lands on it.
+#[derive(Clone)]
+struct SettingsReveal {
+    title: String,
+    at: f64,
+    scrolled: bool,
+}
+
+fn settings_reveal_id() -> egui::Id {
+    egui::Id::new("oxi_settings_reveal")
+}
+
+/// Scroll to the settings card or caption titled `title` on the next frame and flash it.
+pub fn request_settings_reveal(ctx: &egui::Context, title: &str) {
+    let at = ctx.input(|i| i.time);
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            settings_reveal_id(),
+            SettingsReveal {
+                title: title.to_owned(),
+                at,
+                scrolled: false,
+            },
+        )
+    });
+}
+
+/// Paint the reveal tint into the `slot` reserved before the header's text was laid out, so it
+/// sits behind the text.
+pub fn settings_reveal_flash(ui: &Ui, title: &str, rect: egui::Rect, slot: egui::layers::ShapeIdx) {
+    const FLASH_S: f64 = 1.6;
+    let Some(mut reveal) = ui
+        .ctx()
+        .data(|d| d.get_temp::<SettingsReveal>(settings_reveal_id()))
+    else {
+        return;
+    };
+    if !reveal.title.eq_ignore_ascii_case(title) {
+        return;
+    }
+    let elapsed = ui.input(|i| i.time) - reveal.at;
+    if elapsed > FLASH_S {
+        ui.ctx()
+            .data_mut(|d| d.remove::<SettingsReveal>(settings_reveal_id()));
+        return;
+    }
+    let rect = rect.expand2(egui::vec2(8.0, 5.0));
+    if !reveal.scrolled {
+        reveal.scrolled = true;
+        ui.scroll_to_rect(
+            egui::Rect::from_min_max(rect.min - egui::vec2(0.0, 48.0), rect.max),
+            Some(Align::TOP),
+        );
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(settings_reveal_id(), reveal));
+    }
+    // Hold, then fade out over the last half.
+    let fade = (1.0 - ((elapsed / FLASH_S - 0.5) * 2.0).clamp(0.0, 1.0)) as f32;
+    let accent = c_accent();
+    ui.painter().set(
+        slot,
+        egui::Shape::rect_filled(
+            rect,
+            CornerRadius::same(RADIUS_ROW),
+            Color32::from_rgba_unmultiplied(
+                accent.r(),
+                accent.g(),
+                accent.b(),
+                (48.0 * fade) as u8,
+            ),
+        ),
+    );
+    ui.ctx().request_repaint();
+}
+
+/// Width of the [`toggle`] track; with [`TOGGLE_GAP`], the indent that lines help text up
+/// with a toggle's label.
+pub const TOGGLE_W: f32 = 28.0;
+pub const TOGGLE_GAP: f32 = 8.0;
+
+/// On/off switch with a label, a drop-in for `ui.checkbox` in Settings: egui's checkbox box
+/// nearly vanished on the card background, so a checked option read as plain text.
+pub fn toggle(ui: &mut Ui, on: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    const TRACK_H: f32 = 16.0;
+    let text: egui::WidgetText = label.into();
+    let label_text = text.text().to_owned();
+    let galley = (!label_text.is_empty()).then(|| {
+        text.into_galley(
+            ui,
+            Some(egui::TextWrapMode::Wrap),
+            (ui.available_width() - TOGGLE_W - TOGGLE_GAP).max(40.0),
+            egui::TextStyle::Body,
+        )
+    });
+    let row_h = galley
+        .as_ref()
+        .map_or(TRACK_H, |g| g.size().y / g.rows.len().max(1) as f32);
+    // Taller than the text so a stack of toggles without help lines doesn't crowd.
+    let line_h = row_h.max(24.0);
+    let size = egui::vec2(
+        TOGGLE_W + galley.as_ref().map_or(0.0, |g| TOGGLE_GAP + g.size().x),
+        galley
+            .as_ref()
+            .map_or(0.0, |g| g.size().y + line_h - row_h)
+            .max(line_h),
+    );
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            *on,
+            &label_text,
+        )
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let hovered = ui.is_enabled() && (response.hovered() || response.has_focus());
+    let t = ui.ctx().animate_bool_with_time(response.id, *on, 0.12);
+    let track = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), rect.top() + (line_h - TRACK_H) * 0.5),
+        egui::vec2(TOGGLE_W, TRACK_H),
+    );
+    let off_fill = if hovered {
+        c_border()
+    } else {
+        c_bg_elevated_2()
+    };
+    let fill = lerp_color(off_fill, c_accent(), t);
+    let radius = CornerRadius::same(255);
+    ui.painter().rect_filled(track, radius, fill);
+    if t < 1.0 {
+        ui.painter().rect_stroke(
+            track,
+            radius,
+            Stroke::new(1.0, lerp_color(c_border(), c_accent(), t)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let knob_r = TRACK_H * 0.5 - 3.0;
+    let knob_x = egui::lerp(
+        (track.left() + 3.0 + knob_r)..=(track.right() - 3.0 - knob_r),
+        t,
+    );
+    ui.painter().circle_filled(
+        egui::pos2(knob_x, track.center().y),
+        knob_r,
+        lerp_color(c_text_muted(), Color32::from_gray(248), t),
+    );
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            track.expand(2.0),
+            radius,
+            Stroke::new(1.0, c_accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if let Some(galley) = galley {
+        ui.painter().galley(
+            egui::pos2(
+                track.right() + TOGGLE_GAP,
+                rect.top() + (line_h - row_h) * 0.5,
+            ),
+            galley,
+            c_text(),
+        );
+    }
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_unmultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
 }
 
 /// A card used to group related settings. Matches the elevated background + subtle border.

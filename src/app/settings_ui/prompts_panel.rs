@@ -25,8 +25,7 @@ impl OxiApp {
                 Some("Single editable prompt. Use {tools_list} to inject currently enabled tools."),
             );
             let mut include_agents_md = self.conv.settings.include_agents_md;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut include_agents_md,
                     RichText::new("Include workspace AGENTS.md")
                         .size(FS_SMALL)
@@ -40,8 +39,7 @@ impl OxiApp {
                 self.conv.settings.include_agents_md = include_agents_md;
             }
             let mut include_oxi_rules = self.conv.settings.include_oxi_rules;
-            if ui
-                .checkbox(
+            if crate::ui::chrome::toggle(ui,
                     &mut include_oxi_rules,
                     RichText::new("Include .oxi/rules and .cursor/rules")
                         .size(FS_SMALL)
@@ -84,7 +82,7 @@ impl OxiApp {
                     "A helper model, separate from the agent: the Generate button in the git panel drafts a commit message from the staged diff, and new chats get a short title after their first reply.",
                 ),
             );
-            ui.checkbox(
+            crate::ui::chrome::toggle(ui,
                 &mut self.conv.settings.auto_title_chats,
                 RichText::new("Name new chats with this model")
                     .size(FS_SMALL)

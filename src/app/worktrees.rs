@@ -19,17 +19,24 @@ impl OxiApp {
     /// Create a work tree off workspace `wi`'s repository in the background, then open a chat
     /// in it.
     pub(crate) fn start_worktree_chat(&mut self, wi: usize) {
+        self.conv.workspaces[wi].sidebar_folded = false;
+        let root = PathBuf::from(&self.conv.workspaces[wi].root_path);
+        if self.start_worktree_chat_at(root) {
+            self.sync_workspaces_to_settings();
+        }
+    }
+
+    /// Create a work tree off the repository at `root`; false when another operation runs.
+    pub(crate) fn start_worktree_chat_at(&mut self, root: PathBuf) -> bool {
         if !self.conv.worktree_ops.is_empty() {
             self.notify_composer("A work tree operation is already in progress…");
-            return;
+            return false;
         }
-        self.conv.workspaces[wi].sidebar_folded = false;
-        self.sync_workspaces_to_settings();
-        let root = PathBuf::from(&self.conv.workspaces[wi].root_path);
         self.spawn_worktree_op(move || {
             WorktreeResult::Created(crate::git::worktree::create(&root))
         });
         self.notify_composer("Creating a work tree…");
+        true
     }
 
     /// Commit the work tree's changes and merge its branch into the main checkout.
@@ -98,6 +105,7 @@ impl OxiApp {
             match result {
                 WorktreeResult::Created(Ok(path)) => self.open_worktree_workspace(path),
                 WorktreeResult::Created(Err(e)) => {
+                    self.conv.pending_split = None;
                     self.notify_composer(format!("Could not create a work tree: {e}"));
                 }
                 WorktreeResult::Merged(Ok(summary)) => {
@@ -138,6 +146,7 @@ impl OxiApp {
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.sync_workspaces_to_settings();
         self.new_chat();
+        self.finish_pending_split();
     }
 }
 

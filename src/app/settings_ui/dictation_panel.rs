@@ -34,31 +34,31 @@ impl OxiApp {
                 Some("Shows the mic button in the composer. No model is loaded until you dictate."),
             );
             let mut enabled = self.conv.settings.dictation.enabled;
-            if ui
-                .checkbox(
-                    &mut enabled,
-                    RichText::new("Enable dictation")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                )
-                .changed()
+            if crate::ui::chrome::toggle(
+                ui,
+                &mut enabled,
+                RichText::new("Enable dictation")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            )
+            .changed()
             {
                 self.conv.settings.dictation.enabled = enabled;
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let mut keep_loaded = self.conv.settings.dictation.keep_loaded;
-                if ui
-                    .checkbox(
-                        &mut keep_loaded,
-                        RichText::new("Keep model loaded after use")
-                            .size(FS_SMALL)
-                            .color(c_text()),
-                    )
-                    .on_hover_text(
-                        "Off (default): unload after each transcription. On: keep warm in memory.",
-                    )
-                    .changed()
+                if crate::ui::chrome::toggle(
+                    ui,
+                    &mut keep_loaded,
+                    RichText::new("Keep model loaded after use")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "Off (default): unload after each transcription. On: keep warm in memory.",
+                )
+                .changed()
                 {
                     self.conv.settings.dictation.keep_loaded = keep_loaded;
                 }

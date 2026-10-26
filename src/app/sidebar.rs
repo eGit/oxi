@@ -1,4 +1,4 @@
-//! Sidebar: workspace list, session rows, search, settings button.
+//! Sidebar: workspace list, session rows, search.
 
 mod workspace_list;
 
@@ -44,6 +44,31 @@ impl OxiApp {
         if new_chat.clicked() {
             self.new_chat();
         }
+        new_chat.context_menu(|ui| {
+            if ui
+                .button("New general chat")
+                .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
+                .clicked()
+            {
+                self.new_general_chat();
+            }
+            if ui
+                .button("New chat side by side")
+                .on_hover_text("Open a new chat next to this one, e.g. to ask a second agent")
+                .clicked()
+            {
+                self.new_chat_split();
+            }
+            if ui
+                .button("New work tree chat side by side")
+                .on_hover_text(
+                    "Start the same project in a work tree next to this chat, e.g. to give the task to a second agent",
+                )
+                .clicked()
+            {
+                self.start_worktree_split();
+            }
+        });
         ui.add_space(SPACE_SM);
 
         // Search row + add-workspace button.
@@ -52,6 +77,8 @@ impl OxiApp {
             ui.set_height(28.0);
 
             let add_w = 22.0;
+            let general_w = 22.0;
+            let remote_w = 22.0;
             let clear_w = if self.conv.sidebar.search.is_empty() {
                 0.0
             } else {
@@ -59,8 +86,10 @@ impl OxiApp {
             };
             let search_w = (ui.available_width()
                 - add_w
+                - general_w
+                - remote_w
                 - clear_w
-                - ui.spacing().item_spacing.x * if clear_w > 0.0 { 2.0 } else { 1.0 })
+                - ui.spacing().item_spacing.x * if clear_w > 0.0 { 4.0 } else { 3.0 })
             .max(48.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(search_w, 28.0),
@@ -77,6 +106,23 @@ impl OxiApp {
                     .clicked()
             {
                 self.conv.sidebar.search.clear();
+            }
+
+            if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, general_w, false)
+                .on_hover_text("New general chat: not about any project, run in ~/oxi-general")
+                .clicked()
+            {
+                self.new_general_chat();
+            }
+
+            if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, remote_w, false)
+                .on_hover_text(
+                    "Connect to a remote host: open a folder on another machine over SSH; \
+                     its oxi server runs the agents there.",
+                )
+                .clicked()
+            {
+                self.open_remote_dialog();
             }
 
             if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
@@ -99,33 +145,13 @@ impl OxiApp {
             ui.add_space(8.0);
         }
 
-        const FOOTER_H: f32 = 36.0;
-        let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
-            .max_height(scroll_h)
             .auto_shrink([false, false])
             .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
-
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            if crate::ui::chrome::flat_button_icon(
-                ui,
-                ICON_SETTINGS,
-                "Settings",
-                FS_SMALL,
-                egui::vec2(ui.available_width(), 28.0),
-                c_text_muted(),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
-            {
-                self.open_settings_page();
-            }
-        });
 
         // The outer sidebar allocation already owns the full fixed width/height. Expanding
         // again from content made Conversations report a subtly different size than Explorer.
@@ -147,6 +173,13 @@ impl OxiApp {
             ui.add_space(6.0);
             if ui.button("Open folder…").clicked() {
                 self.open_workspace_folder();
+            }
+            if ui
+                .button("Start a general chat")
+                .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
+                .clicked()
+            {
+                self.new_general_chat();
             }
             return;
         }

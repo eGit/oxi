@@ -476,7 +476,11 @@ fn daemon_connection() -> io::Result<Connection> {
             Ok(connection) => handshake(connection)?,
             Err(_) => {
                 private_dir(&run_dir())?;
-                spawn_daemon()?;
+                // Under `oxi server` launchd owns the daemon: one started from here (an SSH
+                // login) couldn't reach the keychain.
+                if !(crate::remote::service::managed() && crate::remote::service::kickstart()) {
+                    spawn_daemon()?;
+                }
                 wait_for_daemon()?
             }
         };
@@ -648,6 +652,26 @@ mod tests {
             }
         }
 
+        /// The error a request is expected to fail with.
+        fn request_error(&mut self, method: &str, params: Value) -> String {
+            let id = self.next;
+            self.next += 1;
+            let line = json!({"id": id, "method": method, "params": params});
+            self.stream
+                .write_all(format!("{line}\n").as_bytes())
+                .expect("write request");
+            loop {
+                let message = self.read().unwrap_or_else(|| panic!("{method}: no answer"));
+                if message["id"] == id {
+                    return message["error"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{method} succeeded: {message}"))
+                        .to_string();
+                }
+                self.notes.push(message);
+            }
+        }
+
         fn wait_for(&mut self, method: &str) -> Value {
             if let Some(i) = self.notes.iter().position(|m| m["method"] == method) {
                 return self.notes.remove(i)["params"].clone();
@@ -728,6 +752,74 @@ mod tests {
         assert_eq!(b.wait_for("chat_reloaded")["chat"], chat.as_str());
         let reopened = b.request("chat.open", json!({"root": root, "chat": chat}));
         assert_eq!(reopened["messages"].as_array().unwrap().len(), 3);
+
+        // The oxi app over SSH: whole transcripts, fingerprints and file access.
+        let mut app = TestClient::connect();
+        let features = app.request("client.features", json!({"events": true}));
+        assert_eq!(features["features"][0], crate::remote::protocol::FEATURE);
+        let got = app.request("chat.get", json!({"root": root, "chat": chat}));
+        assert_eq!(got["count"], 3);
+        let messages = crate::remote::protocol::messages_from_json(&got["messages"]);
+        assert_eq!(
+            got["hash"].as_str().unwrap(),
+            crate::remote::protocol::messages_hash(&messages),
+            "the app's copy fingerprints like the server's"
+        );
+        let tail = app.request("chat.get", json!({"root": root, "chat": chat, "from": 2}));
+        assert_eq!(tail["messages"].as_array().unwrap().len(), 1);
+        // A prompt from a stale copy is refused until the app sends its transcript.
+        let stale = app.request_error(
+            "prompt.send",
+            json!({"root": root, "chat": chat, "text": "x", "history_hash": "stale"}),
+        );
+        assert_eq!(stale, super::super::HISTORY_MISMATCH);
+        // The app rewound the chat: the server takes its transcript.
+        let rewound = crate::remote::protocol::messages_to_json(&messages[..2]);
+        let saved = app.request(
+            "chat.save",
+            json!({"root": root, "chat": chat, "messages": rewound, "title": "rewound"}),
+        );
+        assert_eq!(saved["changed"], true);
+        assert_eq!(b.wait_for("chat_reloaded")["chat"], chat.as_str());
+        let got = app.request("chat.get", json!({"root": root, "chat": chat}));
+        assert_eq!(
+            (got["count"].as_u64(), got["title"].as_str()),
+            (Some(2), Some("rewound"))
+        );
+
+        // Canonical Windows paths use the verbatim prefix, which requires native separators.
+        let file = PathBuf::from(&root).join("notes.txt");
+        let written = app.request("fs.write", json!({"path": file, "data": "aGk="}));
+        assert_eq!(written["len"], 2);
+        assert_eq!(
+            app.request("fs.read", json!({"path": file}))["data"],
+            "aGk="
+        );
+        assert_eq!(app.request("fs.stat", json!({"path": file}))["file"], true);
+        let missing = PathBuf::from(&root).join("missing.txt");
+        assert_eq!(
+            app.request("fs.stat", json!({"path": missing}))["exists"],
+            false
+        );
+        assert!(
+            app.request_error("fs.read", json!({"path": missing}))
+                .starts_with("not_found:")
+        );
+        app.request(
+            "fs.op",
+            json!({"path": PathBuf::from(&root).join("dir"), "op": "create_dir"}),
+        );
+        let listing = app.request("fs.list", json!({"path": root, "files": true}));
+        let names: Vec<&str> = listing["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["dir", "notes.txt"], "folders first");
+        let walked = app.request("fs.walk", json!({"root": root}));
+        assert_eq!(walked, json!(["notes.txt"]));
+        app.request("shutdown", json!({}));
 
         // An editor leaving doesn't stop the daemon for the others.
         a.request("shutdown", json!({}));

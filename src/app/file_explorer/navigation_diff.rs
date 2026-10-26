@@ -74,7 +74,9 @@ impl OxiApp {
         };
         crate::ui::diff_view::DiffView::sync(&mut self.conv.diff_view.git, diff_text);
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let can_open = |path: &str| root.join(path).is_file();
+        // Asked per row and frame: a remote file is assumed to be there.
+        let remote = crate::vfs::is_remote(&root);
+        let can_open = |path: &str| remote || root.join(path).is_file();
         self.conv
             .diff_view
             .git
@@ -104,7 +106,7 @@ impl OxiApp {
         path: PathBuf,
         line: Option<usize>,
     ) -> Option<PathBuf> {
-        let wanted = std::fs::canonicalize(&path).ok()?;
+        let wanted = crate::vfs::canonicalize(&path).ok()?;
         self.open_editor_file_only(path);
         let document = self
             .conv
