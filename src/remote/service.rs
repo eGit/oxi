@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 pub const SUBCOMMAND: &str = "server";
+#[cfg(target_os = "macos")]
 pub const LABEL: &str = "dev.oxi.server";
 
 pub fn run() -> i32 {

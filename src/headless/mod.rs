@@ -222,6 +222,7 @@ pub fn print_status() -> i32 {
 }
 
 /// Stop a daemon running now, if any (`oxi server install` replaces it).
+#[cfg(target_os = "macos")]
 pub fn stop_running_daemon() {
     let _ = daemon::stop();
 }
