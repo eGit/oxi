@@ -44,6 +44,7 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
             (SettingsTab::Editor, ICON_FILE, "Editor"),
             (SettingsTab::Terminal, ICON_TERMINAL, "Terminal"),
             (SettingsTab::Voice, ICON_MIC, "Voice"),
+            (SettingsTab::Server, ICON_SERVER, "Server & phone"),
             (SettingsTab::About, ICON_INFO, "About"),
         ],
     },
@@ -580,6 +581,7 @@ impl OxiApp {
             SettingsTab::Terminal => self.render_settings_terminal_panel(ui),
             SettingsTab::Editor => self.render_settings_editor_panel(ui),
             SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
+            SettingsTab::Server => self.render_settings_server_panel(ui),
             SettingsTab::About => self.render_settings_about_panel(ui),
         }
     }

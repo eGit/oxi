@@ -33,6 +33,7 @@ use crate::session_store;
 use crate::settings::{AppSettings, LlmProviderKind};
 
 mod daemon;
+pub mod phone;
 mod remote_app;
 pub use remote_app::HISTORY_MISMATCH;
 
@@ -216,15 +217,19 @@ pub fn run() -> i32 {
 /// The daemon doesn't exit when idle (`oxi headless --daemon --keep`).
 static KEEP_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// `oxi headless --status`, for `oxi server status`.
-pub fn print_status() -> i32 {
-    daemon::status()
+/// Stop a daemon running now, if any (`oxi server install` replaces it).
+pub fn stop_running_daemon() {
+    let _ = daemon::stop_quietly();
 }
 
-/// Stop a daemon running now, if any (`oxi server install` replaces it).
-#[cfg(target_os = "macos")]
-pub fn stop_running_daemon() {
-    let _ = daemon::stop();
+/// The running daemon's `daemon.hello` answer (pid, version, clients, ...), if one runs.
+pub fn daemon_hello() -> Option<Value> {
+    daemon::hello()
+}
+
+/// Start a daemon detached from this process; `keep` keeps it running when idle.
+pub fn start_daemon(keep: bool) -> std::io::Result<()> {
+    daemon::spawn_daemon(keep)
 }
 
 /// Run the server: as the daemon, for every editor that connects, else for the one on stdio.
@@ -480,6 +485,9 @@ impl Server {
             "daemon.hello" => Ok(self.hello(&params)),
             "initialize" => Ok(self.initialize()),
             "chats.list" => self.list_chats(&params),
+            "workspaces.list" => Ok(self.list_workspaces()),
+            // Phones check their connection with it; switching networks leaves dead sockets.
+            "ping" => Ok(Value::Null),
             "chat.open" => self.open_chat(&params),
             "chat.set_config" => self.set_config(&params),
             "chat.rename" => self.rename_chat(&params),
@@ -570,6 +578,35 @@ impl Server {
             "version": env!("CARGO_PKG_VERSION"),
             "providers": providers,
         })
+    }
+
+    /// Folders to pick from on a phone: the app's sidebar workspaces and every folder with
+    /// chats, most recently used first.
+    fn list_workspaces(&mut self) -> Value {
+        self.refresh_settings();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut push = |path: &str, modified: Option<SystemTime>, chats: usize| {
+            if path.contains("://") || !seen.insert(path.to_string()) || !Path::new(path).is_dir() {
+                return;
+            }
+            let name = Path::new(path)
+                .file_name()
+                .map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string());
+            out.push(json!({
+                "path": path,
+                "name": name,
+                "modified": modified.map(unix_secs),
+                "chats": chats,
+            }));
+        };
+        for (path, modified, chats) in session_store::workspaces_with_chats() {
+            push(&path, Some(modified), chats);
+        }
+        for entry in &self.settings.workspaces {
+            push(&entry.root_path, None, 0);
+        }
+        json!(out)
     }
 
     fn list_chats(&mut self, params: &Value) -> Result<Value, String> {

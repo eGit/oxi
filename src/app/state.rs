@@ -37,6 +37,7 @@ pub enum SettingsTab {
     Terminal,
     Editor,
     Appearance,
+    Server,
     About,
 }
 
@@ -696,6 +697,8 @@ pub struct SettingsPageState {
     pub ssh_test: std::collections::HashMap<LlmProviderKind, SshTestStatus>,
     /// Channel for SSH "Test connection" results (drained each frame).
     pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
+    /// Settings → Server: the oxi server on this machine and phone pairing.
+    pub server: super::settings_ui::server_panel::ServerPanel,
 }
 
 /// The diff view that replaces the chat while a file/commit diff is open.

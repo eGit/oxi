@@ -34,6 +34,19 @@ pub(super) struct SettingsHit {
 type Entry = (SettingsTab, &'static str, &'static str, &'static str);
 
 const ENTRIES: &[Entry] = &[
+    // Server
+    (
+        SettingsTab::Server,
+        "Run the oxi server",
+        "Start at login and keep running",
+        "daemon background service launchagent systemd remote ssh",
+    ),
+    (
+        SettingsTab::Server,
+        "Phone access",
+        "Allow phones to connect",
+        "android mobile pair qr tailscale token",
+    ),
     // Prompts
     (
         SettingsTab::Prompts,
@@ -405,6 +418,7 @@ pub(super) fn tab_title(tab: SettingsTab) -> &'static str {
         SettingsTab::Editor => "Editor",
         SettingsTab::Terminal => "Terminal",
         SettingsTab::Appearance => "Appearance",
+        SettingsTab::Server => "Server & phone",
         SettingsTab::About => "About",
     }
 }
@@ -484,6 +498,7 @@ pub(super) fn search(query: &str) -> Vec<SettingsHit> {
         SettingsTab::Editor,
         SettingsTab::Terminal,
         SettingsTab::Appearance,
+        SettingsTab::Server,
         SettingsTab::About,
     ] {
         let page = tab_title(tab);

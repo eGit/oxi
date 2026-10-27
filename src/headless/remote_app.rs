@@ -192,7 +192,11 @@ pub(super) fn server_info() -> Value {
     })
 }
 
-fn host_name() -> String {
+pub(super) fn host_name() -> String {
+    #[cfg(windows)]
+    if let Some(name) = std::env::var("COMPUTERNAME").ok().filter(|s| !s.is_empty()) {
+        return name;
+    }
     std::process::Command::new("hostname")
         .output()
         .ok()

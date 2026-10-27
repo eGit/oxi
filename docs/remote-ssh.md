@@ -4,8 +4,8 @@ The desktop app can open a folder on another machine and run its agents there.
 The host owns the project files, agent processes and saved chats. The client shows
 the conversation, approvals, editor, search, Git panel and an SSH terminal.
 
-Use the same oxi build on the client and host. This protocol is intended for
-matching builds; support for mobile clients is future work.
+Use the same oxi build on the client and host. To use the host's agents from a
+phone, see [oxi server](server.md).
 
 ## Prepare the host
 
@@ -29,8 +29,9 @@ when needed. Keep the host's user session logged in. After moving the binary,
 run `server install` again. To remove the service and link, run `oxi server uninstall`.
 This leaves settings and chats in place.
 
-On Linux, `oxi server install` creates the link. Arrange for
-`oxi headless --daemon --keep` to stay running, for example in a user service.
+On Linux, `oxi server install` sets up the `oxi-server.service` systemd user
+service; on Windows it starts the server at sign-in. The desktop app can do the
+same from **Settings → Server & phone**. See [oxi server](server.md).
 
 ## Connect from the desktop app
 
@@ -61,9 +62,9 @@ uses `server-secrets.json` in oxi's config folder, with owner-only permissions,
 so replacing the oxi binary does not repeatedly block it at a keychain prompt.
 On macOS that folder is normally `~/Library/Application Support/oxi`.
 
-This is a separate credential copy. Changes to credentials in the desktop app's
-keychain are not automatically mirrored into an existing server file. Agent CLIs
-such as Claude Code retain their own sign-in storage; sign in on the host.
+This is a separate credential copy. Keys changed in the desktop app on the same
+machine are written to it too, and the server picks them up. Agent CLIs such as
+Claude Code retain their own sign-in storage; sign in on the host.
 
 ## Troubleshooting
 

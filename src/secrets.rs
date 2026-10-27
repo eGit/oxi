@@ -179,6 +179,14 @@ pub fn load_unified() -> UnifiedSecrets {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     };
+    if let Some(path) = server_file() {
+        let mtime = file_mtime(&path);
+        let mut seen = SERVER_FILE_MTIME.lock().unwrap_or_else(|e| e.into_inner());
+        if mtime.is_some() && *seen != mtime {
+            *seen = mtime;
+            *UNIFIED_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
     if let Some(s) = cached() {
         return s;
     }
@@ -212,7 +220,17 @@ pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
     let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
     match server_file() {
         Some(path) => write_server_file(&path, &json)?,
-        None => store_blob(UNIFIED_ACCOUNT, &json)?,
+        None => {
+            store_blob(UNIFIED_ACCOUNT, &json)?;
+            // An `oxi server` on this machine reads its own copy: keep it current, so keys
+            // changed here reach it.
+            let copy = server_file_path();
+            if copy.exists()
+                && let Err(e) = write_server_file(&copy, &json)
+            {
+                log::warn!("secrets: could not update {}: {e}", copy.display());
+            }
+        }
     }
     // Never let the in-process cache claim a failed keychain write succeeded. Callers can now
     // surface the error and retry without silently diverging from what survives a restart.
@@ -230,7 +248,18 @@ pub const SERVER_FILE_ENV: &str = "OXI_SECRETS_FILE";
 fn server_file() -> Option<std::path::PathBuf> {
     std::env::var_os(SERVER_FILE_ENV)
         .filter(|v| !v.is_empty())
-        .map(|_| crate::app_dirs::config_dir().join("server-secrets.json"))
+        .map(|_| server_file_path())
+}
+
+fn server_file_path() -> std::path::PathBuf {
+    crate::app_dirs::config_dir().join("server-secrets.json")
+}
+
+/// The server file's mtime when it was last read, so the server picks up keys the app wrote.
+static SERVER_FILE_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn load_server_file(path: &std::path::Path) -> UnifiedSecrets {

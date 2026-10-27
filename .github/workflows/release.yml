@@ -152,8 +152,59 @@ jobs:
           path: ${{ matrix.name }}.*
           if-no-files-found: error
 
+  android:
+    needs: changelog
+    if: needs.changelog.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.changelog.outputs.source_sha }}
+
+      # The bumped Cargo.toml: the app takes its version from it.
+      - name: Apply generated version metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: release-metadata
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # Installed apps update only to APKs signed with the same key, so a release never falls
+      # back to the debug key: without the secrets this step fails.
+      - name: Restore the signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.OXI_ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::OXI_ANDROID_KEYSTORE_B64 is not set; see frontends/android/README.md"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build the release APK
+        working-directory: frontends/android
+        env:
+          OXI_ANDROID_KEYSTORE: ${{ runner.temp }}/release.jks
+          OXI_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.OXI_ANDROID_KEYSTORE_PASSWORD }}
+          OXI_ANDROID_KEY_ALIAS: oxi
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/oxi-android.apk"
+          ls -la "$GITHUB_WORKSPACE/oxi-android.apk"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: oxi-android
+          path: oxi-android.apk
+          if-no-files-found: error
+
   publish:
-    needs: [changelog, build]
+    needs: [changelog, build, android]
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
