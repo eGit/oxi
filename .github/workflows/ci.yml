@@ -199,6 +199,7 @@ jobs:
 
       # `oxi server` for real on the throwaway runner: sign-in service, phone pairing, uninstall.
       - name: oxi server end to end
+        timeout-minutes: 20
         run: cargo test --locked --test server_service -- --ignored --nocapture
 
   # The Android app (frontends/android) ships in every release: catch build breaks here.

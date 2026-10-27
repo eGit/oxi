@@ -9,16 +9,23 @@ use std::net::TcpStream;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+/// Run oxi with its output in files, not pipes: a daemon it starts inherits its handles on
+/// Windows and would hold a pipe open, so reading it to the end would never finish.
 fn oxi(args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_oxi"))
+    let dir = std::env::temp_dir();
+    let out_path = dir.join("oxi-server-test.out");
+    let err_path = dir.join("oxi-server-test.err");
+    let status = Command::new(env!("CARGO_BIN_EXE_oxi"))
         .args(args)
-        .output()
+        .stdout(std::fs::File::create(&out_path).unwrap())
+        .stderr(std::fs::File::create(&err_path).unwrap())
+        .status()
         .expect("run oxi");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let text = std::fs::read_to_string(&out_path).unwrap_or_default();
     assert!(
-        out.status.success(),
+        status.success(),
         "oxi {args:?} failed: {text}{}",
-        String::from_utf8_lossy(&out.stderr)
+        std::fs::read_to_string(&err_path).unwrap_or_default()
     );
     text
 }
