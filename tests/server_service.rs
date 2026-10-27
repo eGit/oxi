@@ -45,14 +45,20 @@ fn phone_token() -> String {
 /// Send a hello, then a ping; the replies, or `None` once the server hangs up.
 fn talk(token: &str) -> Option<(String, String)> {
     let stream = TcpStream::connect(("127.0.0.1", 47811)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
     let mut writer = stream.try_clone().ok()?;
     let mut reader = BufReader::new(stream);
     let mut read = || {
         let mut line = String::new();
         (reader.read_line(&mut line).ok()? > 0).then_some(line)
     };
-    writeln!(writer, r#"{{"id":1,"method":"daemon.hello","params":{{"token":"{token}"}}}}"#).ok()?;
+    writeln!(
+        writer,
+        r#"{{"id":1,"method":"daemon.hello","params":{{"token":"{token}"}}}}"#
+    )
+    .ok()?;
     let hello = read()?;
     writeln!(writer, r#"{{"id":2,"method":"ping","params":{{}}}}"#).ok()?;
     Some((hello, read()?))
@@ -61,7 +67,10 @@ fn talk(token: &str) -> Option<(String, String)> {
 fn eventually(what: &str, check: impl Fn() -> bool) {
     let started = Instant::now();
     while !check() {
-        assert!(started.elapsed() < Duration::from_secs(30), "timed out: {what}");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "timed out: {what}"
+        );
         std::thread::sleep(Duration::from_millis(300));
     }
 }
@@ -72,7 +81,9 @@ fn install_pair_and_uninstall_on_windows() {
     let installed = oxi(&["server", "install"]);
     assert!(installed.contains("oxi server installed"), "{installed}");
     assert!(run_key_has_oxi(), "no Run entry after install");
-    eventually("the server runs", || oxi(&["server"]).contains("Server:   running"));
+    eventually("the server runs", || {
+        oxi(&["server"]).contains("Server:   running")
+    });
 
     let phone = oxi(&["server", "phone"]);
     assert!(phone.contains("Phones:   on, port 47811"), "{phone}");
@@ -91,5 +102,7 @@ fn install_pair_and_uninstall_on_windows() {
     let removed = oxi(&["server", "uninstall"]);
     assert!(removed.contains("oxi server removed"), "{removed}");
     assert!(!run_key_has_oxi(), "Run entry left after uninstall");
-    eventually("the server stopped", || oxi(&["server"]).contains("Server:   not running"));
+    eventually("the server stopped", || {
+        oxi(&["server"]).contains("Server:   not running")
+    });
 }
