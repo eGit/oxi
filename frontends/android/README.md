@@ -32,7 +32,8 @@ build that may reach a phone is signed with the release key:
 
 - **Release CI** (`.github/workflows/release.yml`, job `android`) reads it from the
   secrets `OXI_ANDROID_KEYSTORE_B64` (the base64 keystore) and
-  `OXI_ANDROID_KEYSTORE_PASSWORD`, and fails without them.
+  `OXI_ANDROID_KEYSTORE_PASSWORD`. Without them the release goes out without the APK
+  (with a warning) rather than signing it with another key.
 - **Locally**, `~/.config/oxi-android/keystore.properties` (`storeFile`,
   `storePassword`, `keyAlias`, `keyPassword`). Without it builds use the debug key;
   they install, but can't update a release-signed app.

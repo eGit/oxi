@@ -174,18 +174,23 @@ jobs:
           cache: gradle
 
       # Installed apps update only to APKs signed with the same key, so a release never falls
-      # back to the debug key: without the secrets this step fails.
+      # back to the debug key. Without the secrets the release ships without the APK.
       - name: Restore the signing key
+        id: key
         env:
           KEYSTORE_B64: ${{ secrets.OXI_ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.OXI_ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::error::OXI_ANDROID_KEYSTORE_B64 is not set; see frontends/android/README.md"
-            exit 1
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::warning::Android signing secrets are not set; this release has no APK (see frontends/android/README.md)"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Build the release APK
+        if: steps.key.outputs.present == 'true'
         working-directory: frontends/android
         env:
           OXI_ANDROID_KEYSTORE: ${{ runner.temp }}/release.jks
@@ -197,6 +202,7 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/oxi-android.apk"
 
       - name: Upload the APK
+        if: steps.key.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: oxi-android
