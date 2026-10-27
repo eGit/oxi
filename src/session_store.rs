@@ -45,6 +45,55 @@ pub fn list_session_files(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
     Some(files)
 }
 
+/// Folders that have chats in the default session store, newest chat first, with that
+/// chat's mtime and the number of chats. The folder is the `cwd` in the newest file's header
+/// when it has one, else the existing folder the session folder's name was made from.
+pub fn workspaces_with_chats() -> Vec<(String, SystemTime, usize)> {
+    let Ok(dirs) = fs::read_dir(agent_dir().join("sessions")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, SystemTime, usize)> = dirs
+        .filter_map(Result::ok)
+        .filter_map(|dir| {
+            let files = list_session_files(&dir.path())?;
+            let (newest, modified) = files.iter().max_by_key(|(_, m)| *m)?.clone();
+            let root = header_cwd(Path::new(&newest)).or_else(|| {
+                let name = dir.file_name().to_string_lossy().to_string();
+                folder_from_session_dir_name(&name, Path::new("/"))
+            })?;
+            Some((root, modified, files.len()))
+        })
+        .collect();
+    out.sort_by_key(|(_, modified, _)| std::cmp::Reverse(*modified));
+    out
+}
+
+fn header_cwd(file: &Path) -> Option<String> {
+    let file = fs::File::open(file).ok()?;
+    let mut header = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(file), &mut header).ok()?;
+    let header: serde_json::Value = serde_json::from_str(&header).ok()?;
+    header["cwd"].as_str().map(str::to_string)
+}
+
+/// Undo [`paths::default_session_dir`]'s naming (`--Users-me-my-app--`), which turned the
+/// separators into dashes: the existing folder under `base` whose path gives that name.
+fn folder_from_session_dir_name(name: &str, base: &Path) -> Option<String> {
+    let inner = name.strip_prefix("--")?.strip_suffix("--")?;
+    let parts: Vec<&str> = inner.split('-').collect();
+    fn walk(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
+        if parts.is_empty() {
+            return Some(dir.to_path_buf());
+        }
+        // Longest component first: `my-app` before `my/app`.
+        (1..=parts.len()).rev().find_map(|n| {
+            let next = dir.join(parts[..n].join("-"));
+            next.is_dir().then(|| walk(&next, &parts[n..])).flatten()
+        })
+    }
+    walk(base, &parts).map(|p| p.to_string_lossy().to_string())
+}
+
 fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Session> {
     let session_dir = configured_session_dir(root_path, agent_dir)
         .unwrap_or_else(|| default_session_dir(root_path, agent_dir));
@@ -179,6 +228,29 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn session_dir_names_map_back_to_existing_folders() {
+        let base = temp_root("dirname");
+        fs::create_dir_all(base.join("Users/me/my-app/src")).unwrap();
+        fs::create_dir_all(base.join("Users/me/notes")).unwrap();
+        let found = |name: &str| folder_from_session_dir_name(name, &base).map(PathBuf::from);
+        assert_eq!(
+            found("--Users-me-my-app--"),
+            Some(base.join("Users/me/my-app"))
+        );
+        assert_eq!(
+            found("--Users-me-my-app-src--"),
+            Some(base.join("Users/me/my-app/src"))
+        );
+        assert_eq!(
+            found("--Users-me-notes--"),
+            Some(base.join("Users/me/notes"))
+        );
+        assert_eq!(found("--Users-me-gone--"), None);
+        assert_eq!(found("not-a-session-dir"), None);
+        let _ = fs::remove_dir_all(base);
+    }
 
     /// A throwaway workspace whose chats are stored inside it (via `.pi/settings.json`), so
     /// tests never write into the real `~/.config/oxi/sessions`.

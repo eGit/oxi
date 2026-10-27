@@ -222,10 +222,25 @@ fn run_gallery(rec: &mut Recorder<'_>) {
             (SettingsTab::Editor, "settings-editor"),
             (SettingsTab::Terminal, "settings-terminal"),
             (SettingsTab::Appearance, "settings-appearance"),
+            (SettingsTab::Server, "settings-server"),
             (SettingsTab::About, "settings-about"),
         ] {
             rec.app().conv.settings_page.tab = tab;
             rec.harness.run_steps(3);
+            if tab == SettingsTab::Server {
+                // Phone access on (in the throwaway config folder); the status comes from a worker.
+                crate::headless::phone::save(&crate::headless::phone::PhoneConfig {
+                    port: crate::headless::phone::DEFAULT_PORT,
+                    token: "0123456789abcdef0123456789abcdef".into(),
+                    lan: false,
+                })
+                .unwrap();
+                rec.app().conv.settings_page.server = Default::default();
+                for _ in 0..40 {
+                    rec.harness.run_steps(1);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
             rec.still(name);
             if tab == SettingsTab::Agent {
                 rec.scroll_by(-700.0);

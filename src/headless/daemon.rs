@@ -144,6 +144,7 @@ pub(super) fn listen(tx: Sender<Input>) -> io::Result<Option<DaemonGuard>> {
         Err(fs::TryLockError::Error(e)) => return Err(e),
     }
     let next_client = Arc::new(AtomicU64::new(1));
+    let (phone_tx, phone_clients) = (tx.clone(), next_client.clone());
 
     #[cfg(unix)]
     let endpoint = {
@@ -192,16 +193,46 @@ pub(super) fn listen(tx: Sender<Input>) -> io::Result<Option<DaemonGuard>> {
         path
     };
 
+    super::phone::listen(phone_tx, phone_clients);
+
     Ok(Some(DaemonGuard {
         endpoint,
         _lock: lock,
     }))
 }
 
-/// Check the editor's hello on its own thread, then register it.
-fn accept(
-    stream: Stream,
-    #[allow(unused_variables)] token: Option<Arc<str>>,
+/// A connection the daemon accepts: the local socket, or TCP (Windows, phones).
+pub(super) trait Conn: io::Read + io::Write + Send + Sized + 'static {
+    fn try_clone(&self) -> io::Result<Self>;
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+    fn shutdown(&self, how: Shutdown) -> io::Result<()>;
+}
+
+macro_rules! impl_conn {
+    ($ty:ty) => {
+        impl Conn for $ty {
+            fn try_clone(&self) -> io::Result<Self> {
+                <$ty>::try_clone(self)
+            }
+            fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+                <$ty>::set_read_timeout(self, timeout)
+            }
+            fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+                <$ty>::shutdown(self, how)
+            }
+        }
+    };
+}
+
+#[cfg(unix)]
+impl_conn!(std::os::unix::net::UnixStream);
+impl_conn!(std::net::TcpStream);
+
+/// Check the editor's hello on its own thread, then register it. With a `token`, the hello
+/// must carry it.
+pub(super) fn accept<S: Conn>(
+    stream: S,
+    token: Option<Arc<str>>,
     tx: &Sender<Input>,
     next_client: &AtomicU64,
 ) {
@@ -226,12 +257,11 @@ fn accept(
                 log::warn!("headless: a connection did not start with daemon.hello");
                 return;
             }
-            #[cfg(windows)]
+            if let Some(token) = &token
+                && !super::phone::token_matches(hello["params"]["token"].as_str(), token)
             {
-                if hello["params"]["token"].as_str() != token.as_deref() {
-                    log::warn!("headless: a connection had the wrong token");
-                    return;
-                }
+                log::warn!("headless: a connection had the wrong token");
+                return;
             }
             let _ = reader.get_ref().set_read_timeout(None);
             let close_half = write_half.try_clone().ok();
@@ -384,11 +414,14 @@ fn handshake((stream, token): (Stream, Option<String>)) -> io::Result<Connection
     }
 }
 
-fn spawn_daemon() -> io::Result<()> {
+pub(super) fn spawn_daemon(keep: bool) -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let mut command = std::process::Command::new(exe);
+    command.args([super::SUBCOMMAND, "--daemon"]);
+    if keep {
+        command.arg("--keep");
+    }
     command
-        .args([super::SUBCOMMAND, "--daemon"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -479,7 +512,7 @@ fn daemon_connection() -> io::Result<Connection> {
                 // Under `oxi server` launchd owns the daemon: one started from here (an SSH
                 // login) couldn't reach the keychain.
                 if !(crate::remote::service::managed() && crate::remote::service::kickstart()) {
-                    spawn_daemon()?;
+                    spawn_daemon(false)?;
                 }
                 wait_for_daemon()?
             }
@@ -556,6 +589,23 @@ pub(super) fn status() -> i32 {
             println!("oxi headless: no daemon is running");
             1
         }
+    }
+}
+
+/// The running daemon's hello answer.
+pub(super) fn hello() -> Option<Value> {
+    connect().and_then(handshake).ok().map(|c| c.hello)
+}
+
+/// Stop the daemon, if one runs, and wait until it has. Whether one ran.
+pub(super) fn stop_quietly() -> bool {
+    match connect().and_then(handshake) {
+        Ok(connection) => {
+            request_stop(connection);
+            wait_until_stopped();
+            true
+        }
+        Err(_) => false,
     }
 }
 

@@ -196,3 +196,29 @@ jobs:
       # Windows, and those bugs used to surface only after a release.
       - name: cargo test
         run: cargo test --locked
+
+      # `oxi server` for real on the throwaway runner: sign-in service, phone pairing, uninstall.
+      - name: oxi server end to end
+        timeout-minutes: 20
+        run: cargo test --locked --test server_service -- --ignored --nocapture
+
+  # The Android app (frontends/android) ships in every release: catch build breaks here.
+  android-check:
+    name: android-check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build the debug APK
+        working-directory: frontends/android
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest

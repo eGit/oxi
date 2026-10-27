@@ -24,6 +24,7 @@ mod provider_ssh;
 mod providers_panel;
 mod router_panel;
 mod search;
+pub(crate) mod server_panel;
 mod terminal_panel;
 
 pub(super) use provider_catalog::PROVIDER_GROUPS;

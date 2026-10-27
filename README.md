@@ -215,9 +215,16 @@ ssh-agent; first check that `ssh -o BatchMode=yes your-host true` succeeds.
 
 See [Remote SSH setup](docs/remote-ssh.md) for installation, credentials and troubleshooting.
 
+## Your agents on your phone
+
+Run `oxi server` on a machine you keep on (Settings → **Server & phone**, or
+`oxi server install`), then pair the oxi Android app (`oxi-android.apk` in each
+release) by scanning the QR code. Phones connect over Tailscale; the app updates
+itself. See [oxi server](docs/server.md).
+
 ## Your data
 
-Local workspaces keep their data on your machine; remote workspaces keep chats and project files on their SSH host. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). The desktop app stores API keys, sign-in tokens and SSH passwords in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in the settings file. The managed macOS server uses an owner-only `server-secrets.json` file in its config folder to avoid keychain prompts after updates; see [server credentials](docs/remote-ssh.md#credentials).
+Local workspaces keep their data on your machine; remote workspaces keep chats and project files on their SSH host. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). The desktop app stores API keys, sign-in tokens and SSH passwords in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never in the settings file. The managed server (`oxi server install`) uses an owner-only `server-secrets.json` file in its config folder to avoid keychain prompts after updates; see [server credentials](docs/remote-ssh.md#credentials).
 
 If a workspace has an `AGENTS.md` at its root, oxi adds it to the agent's instructions.
 
