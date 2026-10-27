@@ -49,7 +49,10 @@ usage: oxi server [command]
 
 pub fn run() -> i32 {
     #[cfg(windows)]
-    attach_console();
+    {
+        attach_console();
+        keep_std_handles_from_children();
+    }
     crate::logging::init();
     let args: Vec<String> = std::env::args().skip(2).collect();
     let flag = args.get(1).map(String::as_str);
@@ -80,6 +83,26 @@ fn attach_console() {
     // SAFETY: plain Win32 call without pointers.
     unsafe {
         AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+/// A daemon this command starts would inherit its stdin/stdout/stderr (Windows passes every
+/// inheritable handle on) and hold the caller's pipe open: a script piping `oxi server` or an
+/// SSH session would never see it end. This process exits soon, so it can give them up.
+#[cfg(windows)]
+fn keep_std_handles_from_children() {
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: plain Win32 calls on this process's own standard handles.
+        unsafe {
+            let handle = GetStdHandle(id);
+            if !handle.is_null() {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
     }
 }
 
