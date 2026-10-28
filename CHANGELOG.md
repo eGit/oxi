@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-10-28
+
+### Added
+- **Desktop app:** Full-featured Tauri client with editor, chat, Git panel, and terminal integrated in one window.
+- **Theme:** New Zed theme with IBM Plex Sans and Lilex fonts for interface and code.
+- **Settings:** Headless API for managing app configuration.
+
+### Fixed
+- **Security:** Updated pulldown-cmark to address RUSTSEC-2026-0414.
+
+
 ## [1.27.0] - 2026-10-27
 
 ### Added
@@ -1229,7 +1240,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.27.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.28.0...HEAD
+[1.28.0]: https://github.com/maziluiosif/oxi/compare/v1.27.0...v1.28.0
 [1.27.0]: https://github.com/maziluiosif/oxi/compare/v1.26.0...v1.27.0
 [1.26.0]: https://github.com/maziluiosif/oxi/compare/v1.25.0...v1.26.0
 [1.25.0]: https://github.com/maziluiosif/oxi/compare/v1.24.0...v1.25.0
