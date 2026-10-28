@@ -97,6 +97,10 @@ fn setup(
         .renderer(NoCursor(egui_kittest::wgpu::WgpuTestRenderer::new()))
         .build_eframe(|cc| {
             let mut app = OxiApp::new();
+            crate::theme::set_active_fonts(crate::theme::FontSelection {
+                ui: app.conv.settings.ui_font.clone(),
+                mono: app.conv.settings.mono_font.clone(),
+            });
             crate::theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             seed_local_model(&mut app);
@@ -395,12 +399,13 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         }
     }
     // The same moment in every theme (stills only, not part of the video).
-    for theme in ["mariana", "sublime", "midnight", "light", "dark"] {
+    for theme in ["mariana", "sublime", "midnight", "zed", "light", "dark"] {
         crate::theme::apply_theme(&rec.harness.ctx, theme);
         rec.harness.run_steps(3);
         rec.still(&format!("theme-{theme}"));
     }
-    crate::theme::apply_theme(&rec.harness.ctx, "mariana");
+    let theme = rec.app().conv.settings.theme_id.clone();
+    crate::theme::apply_theme(&rec.harness.ctx, &theme);
     rec.harness.run_steps(3);
     fix_turn_finish(rec);
     rec.hold(2.2);

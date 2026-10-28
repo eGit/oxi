@@ -16,6 +16,11 @@ const FONT_LICENSES: &[(&str, &str)] = &[
         include_str!("../../../assets/fonts/JetBrainsMono-OFL.txt"),
     ),
     (
+        "IBM Plex Sans",
+        include_str!("../../../assets/fonts/IBMPlexSans-OFL.txt"),
+    ),
+    ("Lilex", include_str!("../../../assets/fonts/Lilex-OFL.txt")),
+    (
         "Noto Sans, Noto Emoji, scripts and symbols",
         include_str!("../../../assets/fonts/NotoScripts-OFL.txt"),
     ),
