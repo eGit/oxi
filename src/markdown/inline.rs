@@ -50,7 +50,7 @@ pub(super) fn inline_text_format(
         c_text()
     };
     let lh = density.line_height(size);
-    let mut f = TextFormat::simple(FontId::proportional(size), color);
+    let mut f = TextFormat::simple(prose_font(size, strong), color);
     f.italics = italic;
     f.line_height = Some(lh);
     f.valign = Align::Center;
@@ -158,6 +158,15 @@ pub(super) fn append_inline_fallback(job: &mut LayoutJob, wrap_w: f32, s: &str, 
     set_job_wrap(job, wrap_w);
 }
 
+/// Prose font: [`strong_font`] (a semibold face when the UI font has one) for bold runs.
+fn prose_font(size: f32, strong: u32) -> FontId {
+    if strong > 0 {
+        FontId::new(size, strong_font())
+    } else {
+        FontId::proportional(size)
+    }
+}
+
 pub(super) fn fmt_body(size: f32, strong: u32) -> TextFormat {
     let color = if strong > 0 {
         c_text_strong()
@@ -165,7 +174,7 @@ pub(super) fn fmt_body(size: f32, strong: u32) -> TextFormat {
         c_text()
     };
     let lh = (size * 1.35).max(16.0);
-    let mut f = TextFormat::simple(FontId::proportional(size), color);
+    let mut f = TextFormat::simple(prose_font(size, strong), color);
     f.line_height = Some(lh);
     f.valign = Align::Center;
     f

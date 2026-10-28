@@ -42,6 +42,11 @@ pub fn builtin_themes() -> Vec<ThemeChoice> {
             palette: Palette::MIDNIGHT,
         },
         ThemeChoice {
+            id: "zed".to_string(),
+            name: "Zed".to_string(),
+            palette: Palette::ZED,
+        },
+        ThemeChoice {
             id: "sublime".to_string(),
             name: "Sublime".to_string(),
             palette: Palette::SUBLIME,

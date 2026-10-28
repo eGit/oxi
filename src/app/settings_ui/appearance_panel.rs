@@ -10,6 +10,11 @@ use crate::ui::chrome::{
 
 use super::super::OxiApp;
 
+/// Theme id and font ids for the Zed look (see [`Palette::ZED`]).
+const ZED_THEME_ID: &str = "zed";
+const ZED_UI_FONT: &str = "bundled:ibm_plex_sans";
+const ZED_MONO_FONT: &str = "bundled:lilex";
+
 impl OxiApp {
     /// Register the current font choice and rebuild egui's font atlas so the change shows
     /// immediately (theme stays as-is).
@@ -56,7 +61,22 @@ impl OxiApp {
                     }
                 });
             if let Some(theme_id) = next_theme.filter(|id| id != &current) {
-                self.conv.settings.theme_id = theme_id.clone();
+                // The Zed theme brings Zed's fonts along, but only over untouched defaults;
+                // leaving it restores the defaults when the fonts are still Zed's pair.
+                let settings = &mut self.conv.settings;
+                let fonts = (settings.ui_font.as_str(), settings.mono_font.as_str());
+                if theme_id == ZED_THEME_ID && fonts == ("default", "default") {
+                    settings.ui_font = ZED_UI_FONT.to_string();
+                    settings.mono_font = ZED_MONO_FONT.to_string();
+                } else if current == ZED_THEME_ID && fonts == (ZED_UI_FONT, ZED_MONO_FONT) {
+                    settings.ui_font = "default".to_string();
+                    settings.mono_font = "default".to_string();
+                }
+                crate::theme::set_active_fonts(crate::theme::FontSelection {
+                    ui: settings.ui_font.clone(),
+                    mono: settings.mono_font.clone(),
+                });
+                settings.theme_id = theme_id.clone();
                 crate::theme::apply_theme(ui.ctx(), &theme_id);
             }
 
@@ -67,7 +87,7 @@ impl OxiApp {
                 ui,
                 "Font",
                 Some(
-                    "Inter and JetBrains Mono are included. You can also choose an installed font.",
+                    "Inter, JetBrains Mono, IBM Plex Sans and Lilex are included. You can also choose an installed font.",
                 ),
             );
             settings_caption(ui, "Interface");

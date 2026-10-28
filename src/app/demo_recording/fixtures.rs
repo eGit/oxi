@@ -165,6 +165,14 @@ pub(super) fn create_project(project: &Path) {
 pub(super) fn seed_settings() {
     let mut settings = crate::settings::AppSettings::load();
     settings.theme_id = "mariana".into();
+    // OXI_GALLERY_THEME=zed renders the gallery in another theme (Zed also gets Zed's fonts).
+    if let Ok(theme) = std::env::var("OXI_GALLERY_THEME") {
+        if theme == "zed" {
+            settings.ui_font = "bundled:ibm_plex_sans".into();
+            settings.mono_font = "bundled:lilex".into();
+        }
+        settings.theme_id = theme;
+    }
     settings.active_provider = LlmProviderKind::LocalHf;
     settings.provider_mut(LlmProviderKind::LocalHf).model_id = MODEL.into();
     settings.save().unwrap();

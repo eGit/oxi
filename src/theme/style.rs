@@ -13,6 +13,11 @@ const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/UbuntuMono
 const INTER_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
 const JETBRAINS_MONO_REGULAR: &[u8] =
     include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
+/// Zed's interface face (Delta, Zed's agent app) and its semibold for strong text.
+const IBM_PLEX_SANS_REGULAR: &[u8] = include_bytes!("../../assets/fonts/IBMPlexSans-Regular.ttf");
+const IBM_PLEX_SANS_SEMIBOLD: &[u8] = include_bytes!("../../assets/fonts/IBMPlexSans-SemiBold.ttf");
+/// Zed's code face.
+const LILEX_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Lilex-Regular.ttf");
 /// Script-specific fallbacks stay behind the selected UI/code faces.
 const SCRIPT_FONTS: &[(&str, &[u8])] = &[
     (
@@ -75,6 +80,13 @@ pub const FS_CODE: f32 = 13.0;
 #[inline]
 pub fn icon_font() -> FontFamily {
     FontFamily::Name("icons".into())
+}
+
+/// [`FontFamily`] for bold/strong prose: a real semibold face when the interface font ships
+/// one (IBM Plex Sans), otherwise the regular proportional chain (strong is then color-only).
+#[inline]
+pub fn strong_font() -> FontFamily {
+    FontFamily::Name("strong".into())
 }
 
 // ─── Icon glyphs (Nerd Font, rendered with [`icon_font`]) ───────────────────────
@@ -292,10 +304,12 @@ fn system_fonts() -> &'static SystemFontCatalog {
         let mut all = options(&[
             ("default", "Default — Inter"),
             ("bundled:noto_sans", "Noto Sans (bundled)"),
+            ("bundled:ibm_plex_sans", "IBM Plex Sans (bundled, Zed)"),
         ]);
         let mut monospace = options(&[
             ("default", "Default — JetBrains Mono"),
             ("bundled:ubuntu_mono", "Ubuntu Mono (bundled)"),
+            ("bundled:lilex", "Lilex (bundled, Zed)"),
         ]);
         for (_, (name, is_monospace)) in families {
             let option = FontOption {
@@ -635,6 +649,28 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
         std::sync::Arc::new(FontData::from_static(SYMBOLS_NERD_FONT_MONO)),
     );
 
+    let plex_ui = sel.ui == "bundled:ibm_plex_sans";
+    if plex_ui {
+        for (key, bytes) in [
+            ("ibm_plex_sans", IBM_PLEX_SANS_REGULAR),
+            ("ibm_plex_sans_semibold", IBM_PLEX_SANS_SEMIBOLD),
+        ] {
+            // Plex's x-height (0.516 em) is below Inter's (0.546 em); scale it up so the
+            // shared type scale reads the same size in either face.
+            let mut data = centered_text_font(FontData::from_static(bytes));
+            data.tweak.scale *= 1.06;
+            fonts
+                .font_data
+                .insert(key.to_string(), std::sync::Arc::new(data));
+        }
+    }
+    if sel.mono == "bundled:lilex" {
+        fonts.font_data.insert(
+            "lilex".to_string(),
+            std::sync::Arc::new(centered_text_font(FontData::from_static(LILEX_REGULAR))),
+        );
+    }
+
     for &(key, bytes) in SCRIPT_FONTS {
         fonts.font_data.insert(
             key.into(),
@@ -667,6 +703,9 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
         proportional.retain(|key| key != "noto_sans");
         proportional.insert(0, "noto_sans".to_string());
     }
+    if plex_ui {
+        proportional.insert(0, "ibm_plex_sans".to_string());
+    }
     // The chosen system font wins; bundled faces stay as glyph fallbacks.
     if let Some(key) = &sys_ui {
         proportional.insert(0, key.clone());
@@ -678,6 +717,9 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
     if sel.mono == "bundled:ubuntu_mono" {
         monospace.retain(|key| key != "ubuntu_mono");
         monospace.insert(0, "ubuntu_mono".to_string());
+    }
+    if sel.mono == "bundled:lilex" {
+        monospace.insert(0, "lilex".to_string());
     }
     if let Some(key) = &sys_mono {
         monospace.insert(0, key.clone());
@@ -692,6 +734,13 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
                 .chain(SYMBOL_FONTS.iter().map(|(key, _)| (*key).to_string())),
         );
     }
+
+    // Strong prose: the semibold face first while Plex is the UI font, then the normal chain.
+    let mut strong_chain = fonts.families[&FontFamily::Proportional].clone();
+    if plex_ui {
+        strong_chain.insert(0, "ibm_plex_sans_semibold".into());
+    }
+    fonts.families.insert(strong_font(), strong_chain);
 
     // Sequence emoji must shape with Noto Emoji even when their base (a digit or heart)
     // also exists in the primary text face. Keep fallback coverage for unsupported bases.
