@@ -131,37 +131,34 @@ impl OxiApp {
     }
 
     pub(super) fn render_git_tabs(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-            for (tab, label) in [
-                (GitTab::Changes, "Changes"),
-                (GitTab::Branches, "Branches"),
-                (GitTab::History, "History"),
-                (GitTab::Compare, "Compare"),
-            ] {
-                let selected = self.conv.git_ui.tab == tab;
-                let n = match tab {
-                    GitTab::Changes => self.conv.git.staged.len() + self.conv.git.unstaged.len(),
-                    GitTab::Branches => self.conv.git.branches.len(),
-                    GitTab::History => self.conv.git.log.len(),
-                    GitTab::Compare => self
-                        .conv
-                        .git_ui
-                        .compare
-                        .data
-                        .as_ref()
-                        .map_or(0, |data| data.commits.len()),
-                };
-                let label = if n > 0 {
-                    format!("{label} {n}")
-                } else {
-                    label.to_string()
-                };
-                if crate::ui::chrome::pill_tab(ui, &label, selected) {
-                    self.conv.git_ui.tab = tab;
-                }
-            }
-        });
+        // Counts only where they say something: pending changes and the compare commits.
+        // The branch and history list lengths just crowd a narrow panel.
+        let tabs = [
+            (
+                GitTab::Changes,
+                "Changes",
+                self.conv.git.staged.len() + self.conv.git.unstaged.len(),
+            ),
+            (GitTab::Branches, "Branches", 0),
+            (GitTab::History, "History", 0),
+            (
+                GitTab::Compare,
+                "Compare",
+                self.conv
+                    .git_ui
+                    .compare
+                    .data
+                    .as_ref()
+                    .map_or(0, |data| data.commits.len()),
+            ),
+        ];
+        let strip: Vec<_> = tabs
+            .iter()
+            .map(|(tab, label, n)| (*label, *n, self.conv.git_ui.tab == *tab))
+            .collect();
+        if let Some(i) = crate::ui::chrome::underline_tabs(ui, &strip) {
+            self.conv.git_ui.tab = tabs[i].0;
+        }
     }
 
     pub(super) fn render_git_changes(&mut self, ui: &mut Ui) {

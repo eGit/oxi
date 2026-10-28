@@ -1739,6 +1739,10 @@ fn git_op_param(params: &Value) -> Result<crate::git::GitOp, String> {
         }
         "checkout" => GitOp::Checkout(str_param(params, "branch")?),
         "new_branch" => GitOp::NewBranch(str_param(params, "branch")?.trim().to_string()),
+        "delete_branch" => GitOp::DeleteBranch {
+            name: str_param(params, "branch")?,
+            force: params["force"].as_bool().unwrap_or(false),
+        },
         "diff" => GitOp::ShowDiff {
             path: str_param(params, "path")?,
             staged: params["staged"].as_bool().unwrap_or(false),

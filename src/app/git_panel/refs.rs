@@ -56,58 +56,150 @@ impl OxiApp {
                 }
                 for (i, b) in branches.iter().enumerate() {
                     ui.push_id(("branch", i), |ui| {
-                        let is_current = b == &current;
-                        let full_w = ui.available_width();
-                        let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
-                        let hovered = response.hovered();
-                        let fill = if is_current {
-                            c_row_active()
-                        } else if hovered {
-                            c_row_hover()
-                        } else {
-                            Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(crate::theme::RADIUS_ROW),
-                            fill,
-                        );
-                        ui.scope_builder(
-                            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
-                            |ui| {
-                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                    ui.label(
-                                        RichText::new(if is_current { "●" } else { "○" })
-                                            .size(FS_TINY)
-                                            .color(if is_current {
-                                                c_accent()
-                                            } else {
-                                                c_text_faint()
-                                            }),
-                                    );
-                                    ui.add_space(6.0);
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(b.clone())
-                                                .size(FS_SMALL)
-                                                .color(c_text())
-                                                .monospace(),
-                                        )
-                                        .truncate(),
-                                    );
-                                });
-                            },
-                        );
-                        if response.clicked() && !is_current {
-                            self.request(GitOp::Checkout(b.clone()));
-                        }
-                        if hovered {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
+                        self.render_branch_row(ui, b, b == &current);
                     });
                 }
             });
+    }
+
+    fn render_branch_row(&mut self, ui: &mut Ui, branch: &str, is_current: bool) {
+        let full_w = ui.available_width();
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
+        // Geometric hover: the trash button on top of the row takes the pointer away from
+        // the row response, which would otherwise hide the button under the cursor.
+        let row_hot = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| rect.contains(p));
+        let deleting = self.conv.git_ui.pending_branch_delete.as_deref() == Some(branch);
+        let fill = if is_current {
+            c_row_active()
+        } else if row_hot {
+            c_row_hover()
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::RADIUS_ROW), fill);
+        let inner = rect.shrink2(egui::vec2(6.0, 0.0));
+        let (icon, icon_ink) = if is_current {
+            (ICON_CHECK, c_accent())
+        } else {
+            (ICON_BRANCH, c_text_faint())
+        };
+        let icon_rect = ui.painter().text(
+            egui::pos2(inner.left(), inner.center().y),
+            egui::Align2::LEFT_CENTER,
+            icon,
+            FontId::new(FS_TINY, icon_font()),
+            icon_ink,
+        );
+        let name_left = inner.left().max(icon_rect.right()) + 7.0;
+        let action_w = 22.0;
+        let name = single_line_galley(
+            ui,
+            branch,
+            FontId::monospace(FS_SMALL),
+            if is_current {
+                c_text_strong()
+            } else {
+                c_text()
+            },
+            inner.right() - action_w - name_left,
+        );
+        let name_y = inner.center().y - name.size().y / 2.0;
+        ui.painter()
+            .galley(egui::pos2(name_left, name_y), name, c_text());
+
+        let mut delete = false;
+        if deleting {
+            let spin = egui::Rect::from_center_size(
+                egui::pos2(inner.right() - 8.0, inner.center().y),
+                egui::vec2(12.0, 12.0),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(spin), |ui| {
+                crate::theme::spinner(ui, 12.0, c_text_muted());
+            });
+        } else if row_hot && !is_current {
+            let slot = egui::Rect::from_min_max(
+                egui::pos2(inner.right() - action_w, rect.top()),
+                egui::pos2(inner.right(), rect.bottom()),
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(slot)
+                    .layout(Layout::right_to_left(Align::Center)),
+                |ui| {
+                    delete = crate::ui::chrome::icon_button_inline(
+                        ui,
+                        ICON_TRASH,
+                        FS_TINY,
+                        c_text_faint(),
+                    )
+                    .on_hover_text("Delete branch")
+                    .clicked();
+                },
+            );
+        }
+
+        let mut force_delete = false;
+        response.context_menu(|ui| {
+            if ui
+                .add_enabled(!is_current, egui::Button::new("Checkout"))
+                .clicked()
+            {
+                self.request(GitOp::Checkout(branch.to_string()));
+                ui.close();
+            }
+            if ui.button("Copy name").clicked() {
+                ui.ctx().copy_text(branch.to_string());
+                ui.close();
+            }
+            ui.separator();
+            let delete_btn = ui
+                .add_enabled(!is_current, egui::Button::new("Delete"))
+                .on_disabled_hover_text("The checked-out branch can't be deleted");
+            if delete_btn.clicked() {
+                delete = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(!is_current, egui::Button::new("Force delete…"))
+                .on_hover_text("Delete even if its commits are not merged")
+                .clicked()
+            {
+                force_delete = true;
+                ui.close();
+            }
+        });
+
+        if delete {
+            self.delete_branch(branch);
+        } else if force_delete {
+            self.request_confirm(crate::app::state::ConfirmAction::GitForceDeleteBranch {
+                name: branch.to_string(),
+            });
+        } else if response.clicked() && !is_current {
+            self.request(GitOp::Checkout(branch.to_string()));
+        }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            response.on_hover_text(if is_current {
+                "Current branch · Right-click for actions"
+            } else {
+                "Click: checkout · Right-click for actions"
+            });
+        }
+    }
+
+    /// Safe delete (`git branch -d`); an unmerged branch comes back as a force-delete
+    /// confirmation (see `settle_branch_delete`).
+    fn delete_branch(&mut self, branch: &str) {
+        self.conv.git.error = None;
+        self.conv.git_ui.pending_branch_delete = Some(branch.to_string());
+        self.request(GitOp::DeleteBranch {
+            name: branch.to_string(),
+            force: false,
+        });
     }
 
     pub(super) fn render_git_history(&mut self, ui: &mut Ui) {

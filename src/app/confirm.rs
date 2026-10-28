@@ -112,6 +112,15 @@ impl OxiApp {
                     "Discard".to_string(),
                 )
             }
+            ConfirmAction::GitForceDeleteBranch { name } => (
+                "Delete unmerged branch?".to_string(),
+                format!(
+                    "\u{201c}{name}\u{201d} has commits that are not in the current branch \
+                     or its upstream. Deleting it drops them."
+                ),
+                Some("This action cannot be undone.".to_string()),
+                "Delete".to_string(),
+            ),
             ConfirmAction::DeleteLocalModel { id } => (
                 "Delete model?".to_string(),
                 format!("{id} will be deleted from disk."),
@@ -157,6 +166,9 @@ impl OxiApp {
             ConfirmAction::RemoveWorktree { wi } => self.remove_worktree(wi),
             ConfirmAction::GitDiscard { paths } => {
                 self.request(crate::git::GitOp::Discard(paths));
+            }
+            ConfirmAction::GitForceDeleteBranch { name } => {
+                self.request(crate::git::GitOp::DeleteBranch { name, force: true });
             }
             ConfirmAction::DeleteLocalModel { id } => {
                 if let Err(e) = crate::local_models::remove_downloaded(&id) {

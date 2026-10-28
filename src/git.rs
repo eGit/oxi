@@ -115,6 +115,12 @@ pub enum GitOp {
     Commit(String),
     Checkout(String),
     NewBranch(String),
+    /// Delete a local branch. Without `force` it must be merged into HEAD or its upstream,
+    /// like `git branch -d`; `force` is `git branch -D`.
+    DeleteBranch {
+        name: String,
+        force: bool,
+    },
     ShowCommit(String),
     ShowDiff {
         path: String,
@@ -385,6 +391,7 @@ fn label_op(op: &GitOp) -> &'static str {
         GitOp::Commit(_) => "commit",
         GitOp::Checkout(_) => "checkout",
         GitOp::NewBranch(_) => "new branch",
+        GitOp::DeleteBranch { .. } => "delete branch",
         GitOp::ShowCommit(_) => "show",
         GitOp::ShowDiff { .. }
         | GitOp::ShowCompareDiff { .. }
@@ -735,6 +742,7 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
             GitOp::ApplyBlock(edit) => hunk::apply_block(cwd, &edit)?,
             GitOp::Checkout(branch) => checkout_branch(&repo, &branch, false)?,
             GitOp::NewBranch(branch) => checkout_branch(&repo, &branch, true)?,
+            GitOp::DeleteBranch { name, force } => delete_branch(&repo, &name, force)?,
             GitOp::ShowDiff { path, staged } => {
                 return Ok(Some(snapshot(&repo, Some((path, staged)), None, None)));
             }
@@ -890,6 +898,33 @@ fn checkout_branch(repo: &Repository, name: &str, create: bool) -> Result<(), St
     checkout.safe();
     repo.checkout_tree(&obj, Some(&mut checkout)).map_err(err)?;
     repo.set_head(&reference).map_err(err)
+}
+
+/// Error prefix of a refused safe delete; the panel offers a force delete when it sees it.
+pub const UNMERGED_BRANCH_ERROR: &str = "Branch is not fully merged";
+
+fn delete_branch(repo: &Repository, name: &str, force: bool) -> Result<(), String> {
+    if name == current_branch(repo) {
+        return Err(format!(
+            "Can't delete \u{201c}{name}\u{201d}: it is the checked-out branch"
+        ));
+    }
+    let mut branch = repo.find_branch(name, BranchType::Local).map_err(err)?;
+    if !force {
+        let tip = branch.get().peel_to_commit().map_err(err)?.id();
+        let contains_tip =
+            |target: Oid| target == tip || repo.graph_descendant_of(target, tip).unwrap_or(false);
+        let head = repo.head().ok().and_then(|h| h.target());
+        let upstream = branch.upstream().ok().and_then(|u| u.get().target());
+        if !head.is_some_and(contains_tip) && !upstream.is_some_and(contains_tip) {
+            return Err(format!(
+                "{UNMERGED_BRANCH_ERROR}: \u{201c}{name}\u{201d} has commits that are not in \
+                 the current branch or its upstream"
+            ));
+        }
+    }
+    // libgit2 also refuses a branch checked out in another work tree.
+    branch.delete().map_err(err)
 }
 
 fn show_commit(repo: &Repository, hash: &str) -> Result<String, String> {
