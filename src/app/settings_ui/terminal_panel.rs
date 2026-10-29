@@ -29,7 +29,9 @@ impl OxiApp {
                     || {
                         choices
                             .iter()
-                            .map(|terminal| SelectOption::new(terminal.label(), *terminal == current))
+                            .map(|terminal| {
+                                SelectOption::new(terminal.label(), *terminal == current)
+                            })
                             .collect()
                     },
                 );
@@ -62,7 +64,12 @@ impl OxiApp {
                     "Shell",
                     Some("Your login shell. Change it to use a different one."),
                     |ui| {
-                        ui.label(RichText::new(shell).size(FS_SMALL).color(c_text_muted()).monospace())
+                        ui.label(
+                            RichText::new(shell)
+                                .size(FS_SMALL)
+                                .color(c_text_muted())
+                                .monospace(),
+                        )
                     },
                 );
             }

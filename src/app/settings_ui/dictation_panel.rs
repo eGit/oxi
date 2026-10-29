@@ -49,7 +49,11 @@ impl OxiApp {
                 "Keep model loaded after use",
                 Some("Faster next time, but holds the model in memory."),
                 |ui| {
-                    crate::ui::chrome::toggle(ui, &mut self.conv.settings.dictation.keep_loaded, "");
+                    crate::ui::chrome::toggle(
+                        ui,
+                        &mut self.conv.settings.dictation.keep_loaded,
+                        "",
+                    );
                     if self.conv.settings.dictation.keep_loaded {
                         ui.add_space(8.0);
                         if ghost_button(ui, "Unload now", false)
@@ -71,19 +75,21 @@ impl OxiApp {
             "Whisper model",
             Some("Larger models are more accurate and slower."),
             |ui| {
-            for entry in VOICE_MODEL_CATALOG.iter() {
-                let downloaded = self
-                    .conv
-                    .voice_ui
-                    .downloaded
-                    .iter()
-                    .find(|m| m.id == entry.id)
-                    .cloned();
-                let is_active = self.conv.settings.dictation.model_id.as_deref() == Some(entry.id);
-                let downloading = self.conv.voice_ui.downloading_id.as_deref() == Some(entry.id);
-                let size = format!("~{} MB", entry.approx_mb);
+                for entry in VOICE_MODEL_CATALOG.iter() {
+                    let downloaded = self
+                        .conv
+                        .voice_ui
+                        .downloaded
+                        .iter()
+                        .find(|m| m.id == entry.id)
+                        .cloned();
+                    let is_active =
+                        self.conv.settings.dictation.model_id.as_deref() == Some(entry.id);
+                    let downloading =
+                        self.conv.voice_ui.downloading_id.as_deref() == Some(entry.id);
+                    let size = format!("~{} MB", entry.approx_mb);
 
-                setting_row(ui, entry.label, Some(&size), |ui| {
+                    setting_row(ui, entry.label, Some(&size), |ui| {
                         if let Some(m) = &downloaded {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
                                 self.request_confirm(
@@ -120,18 +126,19 @@ impl OxiApp {
                         {
                             self.spawn_voice_download(ui.ctx(), entry);
                         }
-                });
-            }
+                    });
+                }
 
-            if let Some(e) = self.conv.voice_ui.download_error.clone() {
-                ui.add_space(6.0);
-                alert_banner(ui, &e, true);
-            }
-            if let Some(e) = self.conv.voice_ui.error.clone() {
-                ui.add_space(8.0);
-                alert_banner(ui, &format!("Dictation error: {e}"), true);
-            }
-        });
+                if let Some(e) = self.conv.voice_ui.download_error.clone() {
+                    ui.add_space(6.0);
+                    alert_banner(ui, &e, true);
+                }
+                if let Some(e) = self.conv.voice_ui.error.clone() {
+                    ui.add_space(8.0);
+                    alert_banner(ui, &format!("Dictation error: {e}"), true);
+                }
+            },
+        );
     }
 
     fn spawn_voice_download(

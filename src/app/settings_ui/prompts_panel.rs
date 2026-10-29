@@ -15,7 +15,9 @@ impl OxiApp {
         settings_section_title(
             ui,
             "Prompts",
-            Some("What oxi's own agent is told, and the helper model that names chats and drafts commit messages."),
+            Some(
+                "What oxi's own agent is told, and the helper model that names chats and drafts commit messages.",
+            ),
         );
 
         settings_section(ui, "Agent system prompt", None, |ui| {
@@ -62,12 +64,13 @@ impl OxiApp {
                     ui,
                     &mut self.conv.settings.auto_title_chats,
                     "Name new chats with this model",
-                    Some("After the first reply, a short summary replaces the title. Not for ACP agents; renamed chats are kept."),
+                    Some(
+                        "After the first reply, a short summary replaces the title. Not for ACP agents; renamed chats are kept.",
+                    ),
                 );
 
                 let current = self.conv.settings.commit_msg_provider;
-                let current_label =
-                    current.map_or("Active provider", |provider| provider.label());
+                let current_label = current.map_or("Active provider", |provider| provider.label());
                 let kinds: Vec<Option<LlmProviderKind>> = std::iter::once(None)
                     .chain(
                         PROVIDER_GROUPS
@@ -118,21 +121,26 @@ impl OxiApp {
                     );
                 }
 
-                settings_disclosure(ui, "Edit the commit message prompt", &["Commit message prompt"], |ui| {
-                    setting_row(ui, "Commit message prompt", None, |ui| {
-                        if ghost_button(ui, "Reset to default", false).clicked() {
-                            self.conv.settings.commit_msg_system_prompt =
-                                crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string();
-                        }
-                    });
-                    settings_text_area(
-                        ui,
-                        &mut self.conv.settings.commit_msg_system_prompt,
-                        crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT,
-                        8,
-                    );
-                    ui.add_space(8.0);
-                });
+                settings_disclosure(
+                    ui,
+                    "Edit the commit message prompt",
+                    &["Commit message prompt"],
+                    |ui| {
+                        setting_row(ui, "Commit message prompt", None, |ui| {
+                            if ghost_button(ui, "Reset to default", false).clicked() {
+                                self.conv.settings.commit_msg_system_prompt =
+                                    crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string();
+                            }
+                        });
+                        settings_text_area(
+                            ui,
+                            &mut self.conv.settings.commit_msg_system_prompt,
+                            crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT,
+                            8,
+                        );
+                        ui.add_space(8.0);
+                    },
+                );
             },
         );
     }

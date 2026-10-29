@@ -75,8 +75,16 @@ impl OxiApp {
             }
 
             for (mono, label, help) in [
-                (false, "Interface font", Some("Inter and IBM Plex Sans are included.")),
-                (true, "Code font", Some("JetBrains Mono and Lilex are included.")),
+                (
+                    false,
+                    "Interface font",
+                    Some("Inter and IBM Plex Sans are included."),
+                ),
+                (
+                    true,
+                    "Code font",
+                    Some("JetBrains Mono and Lilex are included."),
+                ),
             ] {
                 let options = if mono {
                     crate::theme::mono_font_options()

@@ -138,7 +138,9 @@ impl OxiApp {
         settings_section_title(
             ui,
             "Server & phone",
-            Some("Run your agents on this machine and use them from your phone or another computer."),
+            Some(
+                "Run your agents on this machine and use them from your phone or another computer.",
+            ),
         );
 
         let Some(status) = panel.status.clone() else {
@@ -194,9 +196,9 @@ impl OxiApp {
                     status_dot(ui, dot);
                     if status.running()
                         && ui
-                        .add_enabled(!busy, ghost_button_widget("Restart", false))
-                        .on_hover_text("Restart the server. Running turns are stopped.")
-                        .clicked()
+                            .add_enabled(!busy, ghost_button_widget("Restart", false))
+                            .on_hover_text("Restart the server. Running turns are stopped.")
+                            .clicked()
                     {
                         panel.run(&ctx, Some("Restarting…"), || {
                             service::restart().map(|()| None)
@@ -205,7 +207,6 @@ impl OxiApp {
                 });
             }
         });
-
 
         // ---- phones -------------------------------------------------------------------------
         settings_section(ui, "Phone access", None, |ui| {
@@ -350,20 +351,20 @@ impl OxiApp {
             "From the terminal",
             Some("The same controls, for a machine you reach over SSH."),
             |ui| {
-            ui.add_space(4.0);
-            for line in [
-                "oxi server install     # start at login",
-                "oxi server phone       # allow phones, print the QR code",
-                "oxi server             # status",
-            ] {
-                ui.label(
-                    RichText::new(line)
-                        .size(FS_SMALL)
-                        .monospace()
-                        .color(c_text_muted()),
-                );
-            }
-            ui.add_space(8.0);
+                ui.add_space(4.0);
+                for line in [
+                    "oxi server install     # start at login",
+                    "oxi server phone       # allow phones, print the QR code",
+                    "oxi server             # status",
+                ] {
+                    ui.label(
+                        RichText::new(line)
+                            .size(FS_SMALL)
+                            .monospace()
+                            .color(c_text_muted()),
+                    );
+                }
+                ui.add_space(8.0);
             },
         );
 

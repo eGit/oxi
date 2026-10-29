@@ -41,7 +41,10 @@ impl OxiApp {
         settings_section_title(
             ui,
             "About",
-            Some(&format!("oxi {} \u{00b7} coding agent chat", crate::update::APP_VERSION)),
+            Some(&format!(
+                "oxi {} \u{00b7} coding agent chat",
+                crate::update::APP_VERSION
+            )),
         );
 
         settings_section(
@@ -91,7 +94,9 @@ impl OxiApp {
                         ui,
                         &mut self.conv.settings.auto_update,
                         "Install updates automatically",
-                        Some("Downloaded in the background; they take effect the next time oxi starts."),
+                        Some(
+                            "Downloaded in the background; they take effect the next time oxi starts.",
+                        ),
                     );
                 }
                 setting_row(ui, "Links", None, |ui| {

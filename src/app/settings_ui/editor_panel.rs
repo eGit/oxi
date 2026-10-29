@@ -82,7 +82,12 @@ impl OxiApp {
                 "Auto complete",
                 Some("Offer words from the file while you type; Enter or Tab inserts one."),
             );
-            setting_switch(ui, &mut prefs.highlight_line, "Highlight current line", None);
+            setting_switch(
+                ui,
+                &mut prefs.highlight_line,
+                "Highlight current line",
+                None,
+            );
             let current = prefs.draw_white_space;
             if let Some(mode) = setting_select(
                 ui,

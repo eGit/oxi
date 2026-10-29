@@ -12,7 +12,9 @@ impl OxiApp {
         settings_section_title(
             ui,
             "Models",
-            Some("Where your models run. The active provider is used for new chats; each chat can switch in the composer."),
+            Some(
+                "Where your models run. The active provider is used for new chats; each chat can switch in the composer.",
+            ),
         );
 
         let active = self.conv.settings.active_provider;
@@ -44,7 +46,9 @@ impl OxiApp {
                                     kind == provider,
                                 )
                                 .group(Some((*group).to_owned()));
-                                if let Some(hint) = chip_hint(kind == active, chip_state(kind, &configured)) {
+                                if let Some(hint) =
+                                    chip_hint(kind == active, chip_state(kind, &configured))
+                                {
                                     option = option.detail(hint);
                                 }
                                 options.push(option);

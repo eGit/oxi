@@ -34,69 +34,81 @@ impl OxiApp {
         settings_section(
             ui,
             "How it decides",
-            Some("Each turn is rated light, standard or heavy, then candidates are scored on quality, quota left, cost and prompt caching. The choice and why show above every reply."),
+            Some(
+                "Each turn is rated light, standard or heavy, then candidates are scored on quality, quota left, cost and prompt caching. The choice and why show above every reply.",
+            ),
             |ui| {
-            let router_cfg = self.conv.settings.provider_mut(LlmProviderKind::Router);
-            let current = RouterStrategy::from_id(&router_cfg.model_id);
-            if let Some(i) = setting_select(
-                ui,
-                "router_default_strategy",
-                "Default strategy",
-                Some(current.description()),
-                current.label(),
-                || {
-                    RouterStrategy::ALL
-                        .iter()
-                        .map(|s| SelectOption::new(s.label(), *s == current).detail(s.description()))
-                        .collect()
-                },
-            ) {
-                router_cfg.model_id = RouterStrategy::ALL[i].id().to_string();
-            }
+                let router_cfg = self.conv.settings.provider_mut(LlmProviderKind::Router);
+                let current = RouterStrategy::from_id(&router_cfg.model_id);
+                if let Some(i) = setting_select(
+                    ui,
+                    "router_default_strategy",
+                    "Default strategy",
+                    Some(current.description()),
+                    current.label(),
+                    || {
+                        RouterStrategy::ALL
+                            .iter()
+                            .map(|s| {
+                                SelectOption::new(s.label(), *s == current).detail(s.description())
+                            })
+                            .collect()
+                    },
+                ) {
+                    router_cfg.model_id = RouterStrategy::ALL[i].id().to_string();
+                }
 
-            let router = &mut self.conv.settings.router;
-            setting_row(
-                ui,
-                "Subscription reserve",
-                Some("Light and standard tasks leave a subscription once less than this share of its window is left."),
-                |ui| {
-                    ui.spacing_mut().slider_width = 120.0;
-                    ui.add(egui::Slider::new(&mut router.reserve_pct, 0..=50).suffix("%"))
-                },
-            );
-            let budget_help = format!(
-                "Pay-per-use providers are skipped past it; 0 means no cap. Spent this month (est.): ${:.2}.",
-                ledger::spend_this_month()
-            );
-            setting_row(ui, "Monthly pay-per-use budget", Some(&budget_help), |ui| {
-                ui.add(
-                    egui::DragValue::new(&mut router.monthly_budget_usd)
-                        .range(0.0..=10_000.0)
-                        .speed(1.0)
-                        .prefix("$"),
-                )
-            });
-            setting_switch(
-                ui,
-                &mut router.failover,
-                "Continue with another provider when quota is reached",
-                Some("Keeps progress and approval rules. An agent picked in the composer only moves to other ACP agents set up here."),
-            );
-            setting_switch(
-                ui,
-                &mut router.wait_for_quota,
-                "Wait for quota to reset when every provider is out",
-                Some("The turn pauses until the first provider resets (up to 24 hours), then continues."),
-            );
-            settings_disclosure(ui, "Task classification", &[], |ui| {
+                let router = &mut self.conv.settings.router;
+                setting_row(
+                    ui,
+                    "Subscription reserve",
+                    Some(
+                        "Light and standard tasks leave a subscription once less than this share of its window is left.",
+                    ),
+                    |ui| {
+                        ui.spacing_mut().slider_width = 120.0;
+                        ui.add(egui::Slider::new(&mut router.reserve_pct, 0..=50).suffix("%"))
+                    },
+                );
+                let budget_help = format!(
+                    "Pay-per-use providers are skipped past it; 0 means no cap. Spent this month (est.): ${:.2}.",
+                    ledger::spend_this_month()
+                );
+                setting_row(ui, "Monthly pay-per-use budget", Some(&budget_help), |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut router.monthly_budget_usd)
+                            .range(0.0..=10_000.0)
+                            .speed(1.0)
+                            .prefix("$"),
+                    )
+                });
                 setting_switch(
                     ui,
-                    &mut router.use_jev,
-                    "Use Jev to classify tasks",
-                    Some("Multilingual, via your OpenRouter key; billed there and counted in the budget. Without a key, or when unsure, a local fallback decides."),
+                    &mut router.failover,
+                    "Continue with another provider when quota is reached",
+                    Some(
+                        "Keeps progress and approval rules. An agent picked in the composer only moves to other ACP agents set up here.",
+                    ),
                 );
-            });
-        },
+                setting_switch(
+                    ui,
+                    &mut router.wait_for_quota,
+                    "Wait for quota to reset when every provider is out",
+                    Some(
+                        "The turn pauses until the first provider resets (up to 24 hours), then continues.",
+                    ),
+                );
+                settings_disclosure(ui, "Task classification", &[], |ui| {
+                    setting_switch(
+                        ui,
+                        &mut router.use_jev,
+                        "Use Jev to classify tasks",
+                        Some(
+                            "Multilingual, via your OpenRouter key; billed there and counted in the budget. Without a key, or when unsure, a local fallback decides.",
+                        ),
+                    );
+                });
+            },
         );
     }
 

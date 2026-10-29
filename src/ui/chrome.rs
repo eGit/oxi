@@ -158,7 +158,12 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
 
 /// Primary section title inside a panel.
 pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(RichText::new(title).size(FS_H2).color(c_text_strong()).strong());
+    ui.label(
+        RichText::new(title)
+            .size(FS_H2)
+            .color(c_text_strong())
+            .strong(),
+    );
     if let Some(sub) = subtitle {
         ui.add_space(3.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
@@ -170,7 +175,12 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
     let flash = ui.painter().add(egui::Shape::Noop);
     let mut rect = ui
-        .label(RichText::new(title).size(FS_BODY).color(c_text_strong()).strong())
+        .label(
+            RichText::new(title)
+                .size(FS_BODY)
+                .color(c_text_strong())
+                .strong(),
+        )
         .rect;
     if let Some(help) = help {
         ui.add_space(1.0);

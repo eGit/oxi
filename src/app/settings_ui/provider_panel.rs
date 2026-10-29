@@ -26,21 +26,28 @@ impl OxiApp {
         // ACP agents advertise their own models and thinking levels, which the composer
         // offers; only Claude Code needs a field, for ids its adapter doesn't list.
         if kind == LlmProviderKind::ClaudeCodeAcp {
-            settings_section(ui, "Model", Some("Pick the model and effort in the composer."), |ui| {
-                setting_row(
-                    ui,
-                    "Model id",
-                    Some("Follows the composer's picker. Type an id the agent doesn't list to launch with it."),
-                    |ui| {
-                        settings_text_field_width(
-                            ui,
-                            &mut self.conv.settings.provider_mut(kind).model_id,
-                            "e.g. claude-opus-5",
-                            CONTROL_W - 18.0,
-                        )
-                    },
-                );
-            });
+            settings_section(
+                ui,
+                "Model",
+                Some("Pick the model and effort in the composer."),
+                |ui| {
+                    setting_row(
+                        ui,
+                        "Model id",
+                        Some(
+                            "Follows the composer's picker. Type an id the agent doesn't list to launch with it.",
+                        ),
+                        |ui| {
+                            settings_text_field_width(
+                                ui,
+                                &mut self.conv.settings.provider_mut(kind).model_id,
+                                "e.g. claude-opus-5",
+                                CONTROL_W - 18.0,
+                            )
+                        },
+                    );
+                },
+            );
         } else if !kind.is_acp() {
             self.render_model_card(ui, kind);
         }
@@ -82,7 +89,11 @@ impl OxiApp {
                 setting_row(
                     ui,
                     "Check that it starts",
-                    Some(status.as_deref().unwrap_or("Failures include installation hints.")),
+                    Some(
+                        status
+                            .as_deref()
+                            .unwrap_or("Failures include installation hints."),
+                    ),
                     |ui| {
                         if ghost_button(ui, "Test launch", false).clicked() {
                             self.spawn_model_fetch(ui.ctx(), kind);
@@ -178,14 +189,19 @@ impl OxiApp {
             if kind == LlmProviderKind::OpenRouter {
                 settings_disclosure(ui, "OpenRouter headers", &[], |ui| {
                     let config = self.conv.settings.provider_mut(kind);
-                    setting_row(ui, "HTTP-Referer", Some("Your app's URL, for OpenRouter rankings."), |ui| {
-                        settings_text_field_width(
-                            ui,
-                            &mut config.openrouter_http_referer,
-                            "https://\u{2026}",
-                            CONTROL_W - 18.0,
-                        )
-                    });
+                    setting_row(
+                        ui,
+                        "HTTP-Referer",
+                        Some("Your app's URL, for OpenRouter rankings."),
+                        |ui| {
+                            settings_text_field_width(
+                                ui,
+                                &mut config.openrouter_http_referer,
+                                "https://\u{2026}",
+                                CONTROL_W - 18.0,
+                            )
+                        },
+                    );
                     setting_row(ui, "X-Title", Some("Your app's name."), |ui| {
                         settings_text_field_width(
                             ui,
@@ -213,7 +229,14 @@ impl OxiApp {
         if f.error.is_some() {
             None
         } else if f.loading {
-            Some(if kind.is_acp() { "Starting agent\u{2026}" } else { "Loading models\u{2026}" }.to_owned())
+            Some(
+                if kind.is_acp() {
+                    "Starting agent\u{2026}"
+                } else {
+                    "Loading models\u{2026}"
+                }
+                .to_owned(),
+            )
         } else if !f.models.is_empty() {
             Some(if kind.is_acp() {
                 format!("Agent runs \u{00b7} {} models", f.models.len())
@@ -253,7 +276,11 @@ impl OxiApp {
             setting_row(
                 ui,
                 "Model",
-                Some(status.as_deref().unwrap_or("Load the provider's list with the refresh button.")),
+                Some(
+                    status
+                        .as_deref()
+                        .unwrap_or("Load the provider's list with the refresh button."),
+                ),
                 |ui| {
                     if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
                         .on_hover_text("Load available models from provider")
@@ -342,7 +369,12 @@ impl OxiApp {
                 );
                 let current = self.conv.settings.provider(kind).effort.clone();
                 let values: &[(&str, &str)] = if is_gpt {
-                    &[("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high")]
+                    &[
+                        ("", "default"),
+                        ("low", "low"),
+                        ("medium", "medium"),
+                        ("high", "high"),
+                    ]
                 } else {
                     &[
                         ("", "default (high)"),

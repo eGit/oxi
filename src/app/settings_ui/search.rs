@@ -110,7 +110,6 @@ const ENTRIES: &[Entry] = &[
         "Always allowed commands",
         "allowlist bash whitelist",
     ),
-
     (
         SettingsTab::Agent,
         "Limits",
@@ -160,7 +159,6 @@ const ENTRIES: &[Entry] = &[
         "Use system Git for push, pull, and fetch",
         "git executable ssh remote libgit2 native engine",
     ),
-
     // Voice
     (
         SettingsTab::Voice,

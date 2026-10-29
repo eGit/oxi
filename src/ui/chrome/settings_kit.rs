@@ -47,7 +47,13 @@ fn row_separator(ui: &mut Ui) {
 }
 
 /// The label + description column of a row, in `rect`.
-fn row_text(ui: &mut Ui, rect: egui::Rect, label: &str, help: Option<&str>, id: egui::Id) -> egui::Rect {
+fn row_text(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    label: &str,
+    help: Option<&str>,
+    id: egui::Id,
+) -> egui::Rect {
     let mut text_ui = ui.new_child(
         UiBuilder::new()
             .id_salt(id.with("text"))
@@ -113,7 +119,10 @@ pub fn setting_row<R>(
         id,
     );
     let bottom = control_rect.bottom().max(text_rect.bottom()) + ROW_PAD;
-    let row = egui::Rect::from_min_max(egui::pos2(full.left(), top), egui::pos2(full.right(), bottom));
+    let row = egui::Rect::from_min_max(
+        egui::pos2(full.left(), top),
+        egui::pos2(full.right(), bottom),
+    );
     settings_reveal_flash(ui, label, text_rect, flash);
     ui.advance_cursor_after_rect(row);
     inner
@@ -158,7 +167,12 @@ pub fn setting_item<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> 
 }
 
 /// An on/off setting; `.changed()` on the result tells whether it flipped this frame.
-pub fn setting_switch(ui: &mut Ui, on: &mut bool, label: &str, help: Option<&str>) -> egui::Response {
+pub fn setting_switch(
+    ui: &mut Ui,
+    on: &mut bool,
+    label: &str,
+    help: Option<&str>,
+) -> egui::Response {
     setting_row(ui, label, help, |ui| toggle(ui, on, ""))
 }
 
@@ -248,7 +262,11 @@ pub fn settings_disclosure(
     ui.painter().text(
         egui::pos2(rect.left() + 5.0, rect.center().y),
         egui::Align2::CENTER_CENTER,
-        if open { ICON_ANGLE_DOWN } else { ICON_CHEVRON_RIGHT },
+        if open {
+            ICON_ANGLE_DOWN
+        } else {
+            ICON_CHEVRON_RIGHT
+        },
         egui::FontId::new(FS_TINY - 2.0, icon_font()),
         color,
     );
