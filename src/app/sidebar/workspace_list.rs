@@ -10,6 +10,7 @@ impl OxiApp {
         parent: Option<usize>,
         parent_folded: bool,
         q: &str,
+        worktrees: &[usize],
     ) -> bool {
         const FS_WORKSPACE: f32 = FS_SMALL;
         let mut sidebar_changed = false;
@@ -249,12 +250,22 @@ impl OxiApp {
             if ws_running {
                 resp.on_disabled_hover_text("A chat in this workspace is still running");
             } else if resp.clicked() {
-                self.request_confirm(crate::app::state::ConfirmAction::DeleteWorkspace { wi });
+                self.request_confirm(crate::app::state::ConfirmAction::DeleteWorkspace {
+                    wi,
+                    remove_worktree: false,
+                });
             }
         });
         ui.add_space(1.0);
         if sidebar_changed {
             return true;
+        }
+        // Work trees sit right under their main checkout's header, above its chats: after
+        // them they read as part of the last date group ("Older").
+        for &child in worktrees {
+            if self.render_sidebar_worktree_child(ui, child, wi, q) {
+                return true;
+            }
         }
         // Folding hides the normal chat list. The chat currently open in the main view,
         // in-progress chats, and chats that need attention remain visible.
@@ -498,6 +509,7 @@ impl OxiApp {
                                             crate::app::state::ConfirmAction::DeleteSession {
                                                 wi,
                                                 si,
+                                                remove_worktree: false,
                                             },
                                         );
                                     }
@@ -564,7 +576,11 @@ impl OxiApp {
                                 }
                                 if trash_resp.clicked() {
                                     self.request_confirm(
-                                        crate::app::state::ConfirmAction::DeleteSession { wi, si },
+                                        crate::app::state::ConfirmAction::DeleteSession {
+                                            wi,
+                                            si,
+                                            remove_worktree: false,
+                                        },
                                     );
                                 }
                             }
