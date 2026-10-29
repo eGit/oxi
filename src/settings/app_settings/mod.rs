@@ -136,10 +136,11 @@ pub struct AppSettings {
     #[serde(default)]
     pub tool_detail: ToolDetail,
     /// Interface font id — `"default"` uses Inter; `bundled:<id>` or `system:<family>` selects a face.
-    #[serde(default = "default_font_id")]
+    /// Fresh installs start on Zed's IBM Plex Sans to match the default Zed theme.
+    #[serde(default = "default_ui_font")]
     pub ui_font: String,
     /// Code (monospace) font id — see `crate::theme::mono_font_options`.
-    #[serde(default = "default_font_id")]
+    #[serde(default = "default_mono_font")]
     pub mono_font: String,
     /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
     #[serde(default = "default_max_tool_rounds")]
@@ -310,6 +311,14 @@ fn default_font_id() -> String {
     "default".to_string()
 }
 
+fn default_ui_font() -> String {
+    crate::theme::DEFAULT_UI_FONT.to_string()
+}
+
+fn default_mono_font() -> String {
+    crate::theme::DEFAULT_MONO_FONT.to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         let providers = LlmProviderKind::ALL
@@ -345,8 +354,8 @@ impl Default for AppSettings {
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
             tool_detail: ToolDetail::Balanced,
-            ui_font: default_font_id(),
-            mono_font: default_font_id(),
+            ui_font: default_ui_font(),
+            mono_font: default_mono_font(),
             max_tool_rounds: default_max_tool_rounds(),
             bash_timeout_cap_secs: default_bash_timeout_cap_secs(),
             context_window_default: default_context_window(),
