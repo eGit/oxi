@@ -21,6 +21,7 @@ impl OxiApp {
         let mut diff_request: Option<(usize, Option<super::DiffSource>)> = None;
         let mut select_git_diff = false;
         let mut close_git_diff = false;
+        let mut close_all = false;
         let mut new_file = false;
         let mut navigate_back = false;
         let mut navigate_forward = false;
@@ -179,6 +180,10 @@ impl OxiApp {
                                             close = Some(index);
                                             ui.close();
                                         }
+                                        if ui.button("Close All Tabs").clicked() {
+                                            close_all = true;
+                                            ui.close();
+                                        }
                                     });
                                     if document.markdown_preview_open
                                         && document.supports_markdown_preview()
@@ -272,6 +277,13 @@ impl OxiApp {
                                     ui.close();
                                 }
                             }
+                            if !self.conv.editor.documents.is_empty() || git_diff_tab {
+                                ui.separator();
+                                if ui.button("Close All Tabs").clicked() {
+                                    close_all = true;
+                                    ui.close();
+                                }
+                            }
                         })
                         .0
                         .on_hover_text("Open tabs");
@@ -338,6 +350,9 @@ impl OxiApp {
         }
         if let Some(index) = close {
             self.request_close_editor_tab(index);
+        }
+        if close_all {
+            self.request_close_all_editor_tabs();
         }
     }
 

@@ -22,6 +22,52 @@ impl OxiApp {
         }
     }
 
+    /// Close every editor tab, including the git diff tab; unsaved documents ask first.
+    pub(crate) fn request_close_all_editor_tabs(&mut self) {
+        for index in 0..self.conv.editor.documents.len() {
+            if self.conv.editor.documents[index].is_scratchpad {
+                self.autosave_scratchpad(index);
+            }
+        }
+        if self.conv.editor.documents.iter().any(|d| d.is_dirty()) {
+            self.conv.editor.prompt = Some(EditorPrompt::CloseAll);
+        } else {
+            self.close_all_editor_documents();
+        }
+    }
+
+    fn close_all_editor_documents(&mut self) {
+        if self.conv.diff_view.open {
+            self.close_editor_git_diff();
+        }
+        self.conv.editor.markdown_preview_active = false;
+        while let Some(index) = self.conv.editor.documents.len().checked_sub(1) {
+            self.close_editor_document(index);
+        }
+    }
+
+    /// Save every dirty document; on failure leave the error for the open prompt and stop.
+    fn save_dirty_editor_documents(&mut self) -> bool {
+        for index in 0..self.conv.editor.documents.len() {
+            if !self.conv.editor.documents[index].is_dirty() {
+                continue;
+            }
+            if self.conv.editor.documents[index].is_scratchpad {
+                self.autosave_scratchpad(index);
+                if self.conv.editor.documents[index].is_dirty() {
+                    return false;
+                }
+            } else if let Err(error) = self.save_editor_document(index, false) {
+                self.conv.editor.error = Some(format!(
+                    "{}: {error} Cancel to review this file.",
+                    self.conv.editor.documents[index].path.display()
+                ));
+                return false;
+            }
+        }
+        true
+    }
+
     /// Drop a tab and focus the remaining document or the chat composer.
     fn close_editor_document(&mut self, index: usize) {
         self.conv.editor.remove_document(index);
@@ -89,6 +135,12 @@ impl OxiApp {
                 "Overwrite",
                 None,
             ),
+            EditorPrompt::CloseAll => (
+                "Save changes before closing?",
+                "Some open files have unsaved changes.".into(),
+                "Save all & close",
+                Some("Don't save"),
+            ),
             EditorPrompt::Exit => (
                 "Save before quitting?",
                 "Open files or settings have unsaved changes. Save them before closing oxi.".into(),
@@ -104,7 +156,7 @@ impl OxiApp {
             ui.label(RichText::new(title).size(FS_H2).strong());
             ui.add_space(8.0);
             ui.label(description);
-            if matches!(prompt, EditorPrompt::Exit) {
+            if matches!(prompt, EditorPrompt::Exit | EditorPrompt::CloseAll) {
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
                     .show(ui, |ui| {
@@ -113,7 +165,7 @@ impl OxiApp {
                                 RichText::new(document.path.display().to_string()).size(FS_SMALL),
                             );
                         }
-                        if self.settings_dirty() {
+                        if matches!(prompt, EditorPrompt::Exit) && self.settings_dirty() {
                             ui.label("Settings");
                         }
                     });
@@ -143,24 +195,19 @@ impl OxiApp {
         if !save && !discard {
             return;
         }
+        if matches!(prompt, EditorPrompt::CloseAll) {
+            if save && !self.save_dirty_editor_documents() {
+                return;
+            }
+            self.conv.editor.prompt = None;
+            self.conv.editor.error = None;
+            self.close_all_editor_documents();
+            return;
+        }
         if matches!(prompt, EditorPrompt::Exit) {
             if save {
-                for index in 0..self.conv.editor.documents.len() {
-                    if !self.conv.editor.documents[index].is_dirty() {
-                        continue;
-                    }
-                    if self.conv.editor.documents[index].is_scratchpad {
-                        self.autosave_scratchpad(index);
-                        if self.conv.editor.documents[index].is_dirty() {
-                            return;
-                        }
-                    } else if let Err(error) = self.save_editor_document(index, false) {
-                        self.conv.editor.error = Some(format!(
-                            "{}: {error} Cancel to review this file.",
-                            self.conv.editor.documents[index].path.display()
-                        ));
-                        return;
-                    }
+                if !self.save_dirty_editor_documents() {
+                    return;
                 }
                 if self.settings_dirty()
                     && let Err(error) = self.conv.settings.save()
@@ -178,7 +225,7 @@ impl OxiApp {
             EditorPrompt::Close(path)
             | EditorPrompt::Reload(path)
             | EditorPrompt::Overwrite { path, .. } => path,
-            EditorPrompt::Exit => unreachable!(),
+            EditorPrompt::CloseAll | EditorPrompt::Exit => unreachable!(),
         };
         let Some(index) = self
             .conv
@@ -227,7 +274,7 @@ impl OxiApp {
                     self.close_editor_document(index);
                 }
             }
-            EditorPrompt::Exit => unreachable!(),
+            EditorPrompt::CloseAll | EditorPrompt::Exit => unreachable!(),
         }
         self.conv.editor.prompt = None;
         self.conv.editor.error = None;

@@ -112,7 +112,12 @@ pub enum SidebarMode {
 pub enum EditorPrompt {
     Close(PathBuf),
     Reload(PathBuf),
-    Overwrite { path: PathBuf, close_after: bool },
+    Overwrite {
+        path: PathBuf,
+        close_after: bool,
+    },
+    /// "Close All Tabs" with unsaved documents among them.
+    CloseAll,
     Exit,
 }
 

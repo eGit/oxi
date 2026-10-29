@@ -41,6 +41,7 @@ pub(crate) enum AppAction {
     FocusSplitPane,
     ToggleSplitMirror,
     CloseSplit,
+    CloseAllEditorTabs,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -281,6 +282,10 @@ fn build_menus() -> Vec<MenuSpec> {
                 Separator,
                 editor(keys("Save", cmd(), Key::S)),
                 editor(keys("Close Tab", cmd(), Key::W).palette("File: Close Editor Tab")),
+                editor(
+                    run("Close All Tabs", CloseAllEditorTabs)
+                        .palette("File: Close All Editor Tabs"),
+                ),
             ],
         },
         MenuSpec {
@@ -744,6 +749,7 @@ impl OxiApp {
             AppAction::ToggleWordWrap => self.toggle_word_wrap(),
             AppAction::ToggleMinimap => self.toggle_minimap(),
             AppAction::NewGeneralChat => self.new_general_chat(),
+            AppAction::CloseAllEditorTabs => self.request_close_all_editor_tabs(),
             AppAction::ChatSplit => self.new_chat_split(),
             AppAction::WorktreeSplit => self.start_worktree_split(),
             AppAction::FocusSplitPane => self.focus_split_partner(),
