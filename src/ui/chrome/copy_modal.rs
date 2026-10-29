@@ -91,13 +91,15 @@ pub fn modal_backdrop(ctx: &egui::Context, id: &str) -> bool {
     clicked
 }
 
-/// Shared confirmation modal for destructive actions.
+/// Shared confirmation modal for destructive actions. `option` adds a checkbox (label, value)
+/// above the buttons.
 pub fn confirm_modal(
     ctx: &egui::Context,
     id: &str,
     title: &str,
     body: &str,
     note: Option<&str>,
+    option: Option<(&str, &mut bool)>,
     confirm_label: &str,
 ) -> ModalOutcome {
     let mut outcome = ModalOutcome::Open;
@@ -126,6 +128,10 @@ pub fn confirm_modal(
                                 .size(FS_TINY)
                                 .color(crate::theme::c_error_fg()),
                         );
+                    }
+                    if let Some((label, value)) = option {
+                        ui.add_space(10.0);
+                        ui.checkbox(value, RichText::new(label).size(FS_SMALL).color(c_text()));
                     }
                     ui.add_space(14.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
