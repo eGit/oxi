@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-10-29
+
+### Added
+- **Editor:** Close All Tabs command available from the open-tabs menu, tab context menu, File menu, and command palette.
+- **Workspaces:** Optional work tree removal when deleting a chat, with work trees now displayed under their parent checkout header.
+
+### Changed
+- **Settings:** Redesigned to match the chat UI with flat sections, label-left/control-right layout, and a sidebar similar to the chat panel.
+- **Settings:** Consolidated Terminal settings into Editor and notifications into General, with rarely used options folded away.
+- **Theme:** New installs now default to the Zed theme with IBM Plex Sans and Lilex fonts.
+
+
 ## [1.29.0] - 2026-10-29
 
 ### Added
@@ -1249,7 +1261,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.29.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.30.0...HEAD
+[1.30.0]: https://github.com/maziluiosif/oxi/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/maziluiosif/oxi/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/maziluiosif/oxi/compare/v1.27.0...v1.28.0
 [1.27.0]: https://github.com/maziluiosif/oxi/compare/v1.26.0...v1.27.0
