@@ -6,13 +6,13 @@ use eframe::egui::{
 };
 
 use crate::theme::*;
-use crate::ui::chrome::{ghost_button, primary_button, settings_caption, settings_nav_row};
+use crate::ui::chrome::{ghost_button, primary_button, settings_nav_row};
 
 use super::super::OxiApp;
 use super::super::state::{SettingsExitAction, SettingsTab};
 use crate::settings::LlmProviderKind;
 
-const SETTINGS_CONTENT_MAX: f32 = 820.0;
+const SETTINGS_CONTENT_MAX: f32 = 720.0;
 const SAVE_BAR_H: f32 = 52.0;
 
 /// One settings-sidebar section: a caption + the navigation rows under it.
@@ -24,29 +24,31 @@ struct SettingsNavGroup {
 /// Grouped navigation keeps related pages together instead of dumping every tab in one list.
 const SETTINGS_NAV: &[SettingsNavGroup] = &[
     SettingsNavGroup {
+        caption: "App",
+        items: &[
+            (SettingsTab::Appearance, ICON_APPEARANCE, "General"),
+            (SettingsTab::Editor, ICON_FILE, "Editor & terminal"),
+            (SettingsTab::Voice, ICON_MIC, "Voice"),
+        ],
+    },
+    SettingsNavGroup {
         caption: "AI",
         items: &[
-            (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
+            (SettingsTab::Providers, ICON_PROVIDERS, "Models"),
+            (SettingsTab::Agent, ICON_AGENT, "Agent tools"),
             (SettingsTab::Prompts, ICON_PROMPTS, "Prompts"),
         ],
     },
     SettingsNavGroup {
-        caption: "Agent",
+        caption: "Connections",
         items: &[
-            (SettingsTab::Agent, ICON_AGENT, "Tools & safety"),
-            (SettingsTab::GitHub, ICON_GIT, "GitHub"),
+            (SettingsTab::GitHub, ICON_GIT, "Git & GitHub"),
+            (SettingsTab::Server, ICON_SERVER, "Server & phone"),
         ],
     },
     SettingsNavGroup {
-        caption: "App",
-        items: &[
-            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
-            (SettingsTab::Editor, ICON_FILE, "Editor"),
-            (SettingsTab::Terminal, ICON_TERMINAL, "Terminal"),
-            (SettingsTab::Voice, ICON_MIC, "Voice"),
-            (SettingsTab::Server, ICON_SERVER, "Server & phone"),
-            (SettingsTab::About, ICON_INFO, "About"),
-        ],
+        caption: "",
+        items: &[(SettingsTab::About, ICON_INFO, "About")],
     },
 ];
 
@@ -210,20 +212,17 @@ impl OxiApp {
         if self.conv.settings_page.original.is_none() {
             self.conv.settings_page.original = Some(self.conv.settings.clone());
         }
-        const SIDEBAR_W_MIN: f32 = 180.0;
-        const SIDEBAR_W_MAX: f32 = 320.0;
+        // The chat sidebar's width (within reason), so opening Settings doesn't jump the
+        // boundary between the sidebar and the page.
+        const SIDEBAR_W_MIN: f32 = 200.0;
+        const SIDEBAR_W_MAX: f32 = 360.0;
         let full_h = ui.available_height();
 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.set_min_height(full_h);
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            // Independent of the chat sidebar width so resizing chat doesn't affect Settings.
-            let w = self
-                .conv
-                .settings_page
-                .sidebar_width
-                .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
+            let w = self.conv.sidebar.width.clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
@@ -279,20 +278,28 @@ impl OxiApp {
                             .show(ui, |ui| {
                                 Frame::new()
                                     .inner_margin(Margin {
-                                        left: 36,
+                                        left: 32,
                                         // The reserved 10px scroll gutter adds to this;
-                                        // 26 + 10 keeps optical symmetry with the left.
-                                        right: 26,
+                                        // 22 + 10 keeps optical symmetry with the left.
+                                        right: 22,
                                         top: 20 + crate::ui::window_chrome::TITLEBAR_H as i8,
                                         bottom: 48,
                                     })
                                     .show(ui, |ui| {
-                                        // Never wider than the viewport: a fixed 820 laid a
-                                        // narrow window's content out past its right edge.
-                                        ui.set_max_width(
-                                            SETTINGS_CONTENT_MAX.min(ui.available_width()),
-                                        );
-                                        self.render_settings_body(ui);
+                                        // Centered like the chat column, and never wider than
+                                        // the viewport.
+                                        let w = SETTINGS_CONTENT_MAX.min(ui.available_width());
+                                        let side = ((ui.available_width() - w) * 0.5).max(0.0);
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(side);
+                                            ui.vertical(|ui| {
+                                                ui.set_width(w);
+                                                // The page row above zeroes it for the
+                                                // sidebar/body split; buttons need a gap.
+                                                ui.spacing_mut().item_spacing.x = 8.0;
+                                                self.render_settings_body(ui);
+                                            });
+                                        });
                                     });
                             });
                         if show_bar {
@@ -386,12 +393,13 @@ impl OxiApp {
             rect.top(),
             Stroke::new(1.0, c_border_subtle()),
         );
+        // Lined up with the centered page content above it.
+        let room = (rect.width() - 64.0).max(0.0);
+        let w = SETTINGS_CONTENT_MAX.min(room);
+        let left = rect.left() + 32.0 + (room - w) * 0.5;
         let inner = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 36.0, rect.top()),
-            egui::pos2(
-                (rect.left() + 36.0 + SETTINGS_CONTENT_MAX).min(rect.right() - 36.0),
-                rect.bottom(),
-            ),
+            egui::pos2(left, rect.top()),
+            egui::pos2(left + w, rect.bottom()),
         );
         // Buttons first (right to left), then the message truncated to what is left: a long
         // save error laid out first ran under Save/Discard.
@@ -445,6 +453,35 @@ impl OxiApp {
     fn render_settings_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
+        // Same spot and look as the chat sidebar's "New chat": the way out comes first.
+        let back_label = if self.conv.editor.active.is_some() || self.conv.diff_view.open {
+            "Back to editor"
+        } else {
+            "Back to chat"
+        };
+        let back = crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_CHEVRON_LEFT,
+            back_label,
+            FS_SMALL,
+            egui::vec2(ui.available_width(), 30.0),
+            c_text(),
+        )
+        .on_hover_text("Asks before discarding unsaved changes");
+        if back.rect.width() >= 170.0 {
+            ui.painter().text(
+                back.rect.right_center() - egui::vec2(8.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                "Esc",
+                egui::FontId::proportional(FS_TINY),
+                c_text_faint(),
+            );
+        }
+        if back.clicked() {
+            self.request_settings_exit(SettingsExitAction::BackToChat);
+        }
+        ui.add_space(SPACE_SM);
+
         let search = crate::ui::chrome::sidebar_text_field(
             ui,
             &mut self.conv.settings_page.search,
@@ -455,23 +492,19 @@ impl OxiApp {
         }
         let query = self.conv.settings_page.search.trim().to_owned();
         let enter = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.add_space(12.0);
+        ui.add_space(SPACE_MD);
 
-        // Leave room for the pinned Back row so a long result list scrolls above it.
-        let list_h = (ui.available_height() - 40.0).max(60.0);
         if query.is_empty() {
             ScrollArea::vertical()
                 .id_salt("settings_nav_scroll")
-                .max_height(list_h)
-                .auto_shrink([false, true])
+                .auto_shrink([false, false])
                 .show(ui, |ui| self.render_settings_nav(ui));
         } else {
             let hits = super::search::search(&query);
             let mut chosen = enter.then(|| hits.first().map(|hit| hit.target)).flatten();
             ScrollArea::vertical()
                 .id_salt("settings_search_scroll")
-                .max_height(list_h)
-                .auto_shrink([false, true])
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
                     if hits.is_empty() {
                         ui.add_space(4.0);
@@ -498,40 +531,24 @@ impl OxiApp {
                 self.go_to_settings_target(ui.ctx(), target);
             }
         }
-
-        // Pinned to the bottom of the sidebar, level with where the chat sidebar's rows end.
-        // In a `bottom_up` layout the first item added sits lowest.
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(2.0);
-            let back = if self.conv.editor.active.is_some() || self.conv.diff_view.open {
-                "Back to editor"
-            } else {
-                "Back to chat"
-            };
-            if settings_nav_row(ui, ICON_CHEVRON_LEFT, back, false)
-                .on_hover_text("Esc \u{2014} asks before discarding unsaved changes")
-                .clicked()
-            {
-                self.request_settings_exit(SettingsExitAction::BackToChat);
-            }
-            ui.add_space(2.0);
-        });
     }
 
     fn render_settings_nav(&mut self, ui: &mut Ui) {
         for (group_i, group) in SETTINGS_NAV.iter().enumerate() {
             if group_i > 0 {
-                ui.add_space(12.0);
+                ui.add_space(SPACE_SM);
             }
-            settings_caption(ui, group.caption);
-            ui.add_space(4.0);
+            if !group.caption.is_empty() {
+                crate::ui::chrome::sidebar_caption(ui, group.caption);
+                ui.add_space(2.0);
+            }
             for (tab, icon, label) in group.items {
                 let selected = self.conv.settings_page.tab == *tab;
                 let response = settings_nav_row(ui, icon, label, selected);
                 if response.clicked() {
                     self.conv.settings_page.tab = *tab;
                 }
-                ui.add_space(2.0);
+                ui.add_space(1.0);
             }
         }
     }
@@ -578,7 +595,6 @@ impl OxiApp {
             SettingsTab::GitHub => self.render_settings_github_panel(ui),
             SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
             SettingsTab::Voice => self.render_settings_voice_panel(ui),
-            SettingsTab::Terminal => self.render_settings_terminal_panel(ui),
             SettingsTab::Editor => self.render_settings_editor_panel(ui),
             SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
             SettingsTab::Server => self.render_settings_server_panel(ui),

@@ -1,11 +1,11 @@
 //! Codex OAuth settings and browser sign-in flow.
 
-use eframe::egui::{self, Align, Layout, RichText, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use crate::app::task_runner::spawn_async_task;
 use crate::oauth::{OAuthUiMsg, clear_codex, load_oauth_store, save_oauth_store};
 use crate::theme::*;
-use crate::ui::chrome::card_frame;
+use crate::ui::chrome::{setting_row, settings_section};
 
 use super::super::OxiApp;
 use super::layout::{active_pill, inactive_pill};
@@ -16,27 +16,18 @@ impl OxiApp {
     pub(super) fn render_codex_oauth_section(&mut self, ui: &mut Ui) {
         let oauth = load_oauth_store();
         let signed_in = oauth.openai_codex.is_some();
-        card_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("ChatGPT / Codex OAuth")
-                        .size(FS_BODY)
-                        .color(c_text())
-                        .strong(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        settings_section(ui, "Sign-in", None, |ui| {
+            setting_row(
+                ui,
+                "ChatGPT / Codex OAuth",
+                Some("Opens the browser; the reply comes back on localhost:1455."),
+                |ui| {
                     if signed_in {
                         active_pill(ui, "Signed in");
                     } else {
                         inactive_pill(ui, "Signed out");
                     }
-                });
-            });
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new("Browser + localhost:1455 callback")
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
+                },
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {

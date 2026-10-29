@@ -21,7 +21,12 @@ pub struct ThemeChoice {
 }
 
 /// The default theme id, used when settings carry no (or an unknown) theme.
-pub const DEFAULT_THEME_ID: &str = "dark";
+pub const DEFAULT_THEME_ID: &str = "zed";
+
+/// Interface and code fonts a fresh install starts with — Zed's pair, to go with
+/// [`DEFAULT_THEME_ID`].
+pub const DEFAULT_UI_FONT: &str = "bundled:ibm_plex_sans";
+pub const DEFAULT_MONO_FONT: &str = "bundled:lilex";
 
 /// Built-in themes, in display order.
 pub fn builtin_themes() -> Vec<ThemeChoice> {

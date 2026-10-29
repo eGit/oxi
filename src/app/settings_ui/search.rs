@@ -29,7 +29,8 @@ pub(super) struct SettingsHit {
     pub target: SettingsTarget,
 }
 
-/// (page, card title as painted by `settings_card_header`/`settings_caption`, setting label,
+/// (page, section title as painted by `settings_card_header` — or a folded group's or a row's
+/// title, which a search hit also reveals — setting label,
 /// extra words people search for).
 type Entry = (SettingsTab, &'static str, &'static str, &'static str);
 
@@ -50,9 +51,9 @@ const ENTRIES: &[Entry] = &[
     // Prompts
     (
         SettingsTab::Prompts,
-        "Agent system prompt",
         "System prompt",
-        "instructions persona",
+        "System prompt",
+        "instructions persona agent",
     ),
     (
         SettingsTab::Prompts,
@@ -68,7 +69,7 @@ const ENTRIES: &[Entry] = &[
     ),
     (
         SettingsTab::Prompts,
-        "Commit messages & chat titles",
+        "Commit message prompt",
         "Commit message prompt",
         "git generate",
     ),
@@ -100,26 +101,14 @@ const ENTRIES: &[Entry] = &[
     (
         SettingsTab::Agent,
         "Approvals",
-        "Ask before bash",
-        "approval permission confirm command shell",
+        "Ask before commands",
+        "approval permission confirm bash command shell",
     ),
     (
         SettingsTab::Agent,
         "Approvals",
         "Always allowed commands",
         "allowlist bash whitelist",
-    ),
-    (
-        SettingsTab::Agent,
-        "Approvals",
-        "Notify me in the background",
-        "notification desktop alert",
-    ),
-    (
-        SettingsTab::Agent,
-        "Approvals",
-        "Keep the computer awake while an agent works",
-        "sleep caffeinate power",
     ),
     (
         SettingsTab::Agent,
@@ -130,7 +119,7 @@ const ENTRIES: &[Entry] = &[
     (
         SettingsTab::Agent,
         "Limits",
-        "Bash timeout cap",
+        "Bash timeout cap (seconds)",
         "seconds limit",
     ),
     (
@@ -142,7 +131,7 @@ const ENTRIES: &[Entry] = &[
     (
         SettingsTab::Agent,
         "Limits",
-        "Stop idle ACP agents after",
+        "Stop idle ACP agents after (minutes)",
         "idle reaper minutes",
     ),
     (
@@ -168,13 +157,7 @@ const ENTRIES: &[Entry] = &[
         SettingsTab::GitHub,
         "System Git",
         "Use system Git for push, pull, and fetch",
-        "git executable ssh remote",
-    ),
-    (
-        SettingsTab::GitHub,
-        "Native Git engine",
-        "Native Git engine",
-        "libgit2",
+        "git executable ssh remote libgit2 native engine",
     ),
     // Voice
     (
@@ -204,7 +187,7 @@ const ENTRIES: &[Entry] = &[
     // Editor
     (
         SettingsTab::Editor,
-        "Font size",
+        "Text",
         "Editor font size",
         "zoom text code points",
     ),
@@ -224,19 +207,19 @@ const ENTRIES: &[Entry] = &[
     ),
     (
         SettingsTab::Editor,
-        "Highlights",
+        "Editing",
         "Auto complete",
         "completion suggestions",
     ),
     (
         SettingsTab::Editor,
-        "Highlights",
+        "Editing",
         "Highlight current line",
         "caret line",
     ),
     (
         SettingsTab::Editor,
-        "Highlights",
+        "Editing",
         "Draw white space",
         "whitespace tabs spaces invisibles",
     ),
@@ -254,51 +237,59 @@ const ENTRIES: &[Entry] = &[
     ),
     // Terminal
     (
-        SettingsTab::Terminal,
-        if cfg!(windows) {
-            "Windows shell"
-        } else {
-            "Shell"
-        },
-        "Terminal shell",
-        "zsh bash powershell wsl cmd login",
+        SettingsTab::Editor,
+        "Terminal",
+        "Shell",
+        "terminal zsh bash powershell wsl cmd login",
     ),
     // Appearance
     (
         SettingsTab::Appearance,
-        "Theme",
+        "Appearance",
         "Theme",
         "dark light color sublime mariana midnight",
     ),
     (
         SettingsTab::Appearance,
-        "Font",
+        "Appearance",
         "Interface font",
         "typeface inter",
     ),
     (
         SettingsTab::Appearance,
-        "Font",
+        "Appearance",
         "Code font",
         "monospace typeface jetbrains",
     ),
     (
         SettingsTab::Appearance,
-        "Text size",
+        "Appearance",
         "Text size",
         "zoom density scale ui",
     ),
     (
         SettingsTab::Appearance,
+        "Chat",
         "Tool calls",
-        "Tool calls detail",
         "minimal balanced expanded pills",
     ),
     (
         SettingsTab::Appearance,
-        "Chat width",
+        "Chat",
         "Chat width",
         "column message",
+    ),
+    (
+        SettingsTab::Appearance,
+        "While agents work",
+        "Notify me in the background",
+        "notification desktop alert",
+    ),
+    (
+        SettingsTab::Appearance,
+        "While agents work",
+        "Keep the computer awake while an agent works",
+        "sleep caffeinate power",
     ),
     // About
     (
@@ -410,14 +401,13 @@ const PROVIDER_ENTRIES: &[ProviderEntry] = &[
 
 pub(super) fn tab_title(tab: SettingsTab) -> &'static str {
     match tab {
-        SettingsTab::Providers => "Models & providers",
+        SettingsTab::Providers => "Models",
         SettingsTab::Prompts => "Prompts",
-        SettingsTab::Agent => "Tools & safety",
-        SettingsTab::GitHub => "GitHub",
+        SettingsTab::Agent => "Agent tools",
+        SettingsTab::GitHub => "Git & GitHub",
         SettingsTab::Voice => "Voice",
-        SettingsTab::Editor => "Editor",
-        SettingsTab::Terminal => "Terminal",
-        SettingsTab::Appearance => "Appearance",
+        SettingsTab::Editor => "Editor & terminal",
+        SettingsTab::Appearance => "General",
         SettingsTab::Server => "Server & phone",
         SettingsTab::About => "About",
     }
@@ -496,7 +486,6 @@ pub(super) fn search(query: &str) -> Vec<SettingsHit> {
         SettingsTab::GitHub,
         SettingsTab::Voice,
         SettingsTab::Editor,
-        SettingsTab::Terminal,
         SettingsTab::Appearance,
         SettingsTab::Server,
         SettingsTab::About,

@@ -12,8 +12,8 @@ use eframe::egui::{self, Color32, RichText, Ui};
 use crate::remote::service::{self, Status};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, ghost_button_widget, hairline, settings_caption, settings_card_header,
-    settings_section_title, toggle,
+    field_hint, ghost_button_widget, setting_block, setting_row, setting_switch, settings_section,
+    settings_section_title,
 };
 
 use super::super::OxiApp;
@@ -154,16 +154,19 @@ impl OxiApp {
         let busy = panel.busy.is_some();
 
         // ---- the server itself ------------------------------------------------------------
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Run the oxi server",
-                Some("Keeps agents running in the background, even with this window closed."),
-            );
+        settings_section(ui, "Run the oxi server", None, |ui| {
             let mut on = status.service;
             let response = ui
                 .add_enabled_ui(!busy, |ui| {
-                    toggle(ui, &mut on, "Start at login and keep running")
+                    setting_switch(
+                        ui,
+                        &mut on,
+                        "Start at login and keep running",
+                        Some(&format!(
+                            "Keeps agents running with this window closed. {}",
+                            service_hint()
+                        )),
+                    )
                 })
                 .inner;
             if response.clicked() {
@@ -177,9 +180,7 @@ impl OxiApp {
                     .map(Some)
                 });
             }
-            field_hint(ui, service_hint());
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            {
                 let (dot, text) = match &status.daemon {
                     Some(d) => (
                         c_success(),
@@ -191,38 +192,33 @@ impl OxiApp {
                     ),
                     None => (c_text_faint(), "Not running".to_string()),
                 };
-                status_dot(ui, dot);
-                ui.label(RichText::new(text).size(FS_SMALL).color(c_text_muted()));
-                if status.running() {
-                    ui.add_space(8.0);
-                    if ui
-                        .add_enabled(!busy, ghost_button_widget("Restart", false))
-                        .on_hover_text("Restart the server. Running turns are stopped.")
-                        .clicked()
+                setting_row(ui, "Status", Some(&text), |ui| {
+                    status_dot(ui, dot);
+                    if status.running()
+                        && ui
+                            .add_enabled(!busy, ghost_button_widget("Restart", false))
+                            .on_hover_text("Restart the server. Running turns are stopped.")
+                            .clicked()
                     {
                         panel.run(&ctx, Some("Restarting…"), || {
                             service::restart().map(|()| None)
                         });
                     }
-                }
-            });
+                });
+            }
         });
 
-        ui.add_space(12.0);
-
         // ---- phones -------------------------------------------------------------------------
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Phone access",
-                Some(
-                    "Pair the oxi Android app. Phones connect over Tailscale with a private token.",
-                ),
-            );
+        settings_section(ui, "Phone access", None, |ui| {
             let mut phones = status.phone.is_some();
             let response = ui
                 .add_enabled_ui(!busy, |ui| {
-                    toggle(ui, &mut phones, "Allow phones to connect")
+                    setting_switch(
+                        ui,
+                        &mut phones,
+                        "Allow phones to connect",
+                        Some("Pair the oxi Android app. Phones connect over Tailscale with a private token."),
+                    )
                 })
                 .inner;
             if response.clicked() {
@@ -237,16 +233,17 @@ impl OxiApp {
                 }
             }
             let Some(config) = status.phone.clone() else {
-                field_hint(
-                    ui,
-                    "Off: the server accepts no connections from other devices.",
-                );
                 return;
             };
             let mut lan = config.lan;
             let response = ui
                 .add_enabled_ui(!busy, |ui| {
-                    toggle(ui, &mut lan, "Also allow phones on my local network")
+                    setting_switch(
+                        ui,
+                        &mut lan,
+                        "Also allow phones on my local network",
+                        Some("Local network traffic is not encrypted; Tailscale's is."),
+                    )
                 })
                 .inner;
             if response.clicked() {
@@ -254,18 +251,7 @@ impl OxiApp {
                     service::set_phone_lan(lan).map(|()| None)
                 });
             }
-            field_hint(
-                ui,
-                "Local network traffic is not encrypted; Tailscale's is. Leave this off unless \
-                 the phone can't use Tailscale.",
-            );
-
-            ui.add_space(10.0);
-            hairline(ui);
-            ui.add_space(10.0);
-            settings_caption(ui, "Pair a phone");
-            ui.add_space(6.0);
-            match status.pair_link() {
+            setting_block(ui, "Pair a phone", None, |ui| match status.pair_link() {
                 None => {
                     ui.label(
                         RichText::new(
@@ -349,7 +335,7 @@ impl OxiApp {
                         });
                     });
                 }
-            }
+            });
             if !status.service {
                 ui.add_space(8.0);
                 field_hint(
@@ -360,31 +346,32 @@ impl OxiApp {
             }
         });
 
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "From the terminal",
-                Some("The same controls, for a machine you reach over SSH."),
-            );
-            for line in [
-                "oxi server install     # start at login",
-                "oxi server phone       # allow phones, print the QR code",
-                "oxi server             # status",
-            ] {
-                ui.label(
-                    RichText::new(line)
-                        .size(FS_SMALL)
-                        .monospace()
-                        .color(c_text_muted()),
-                );
-            }
-        });
+        settings_section(
+            ui,
+            "From the terminal",
+            Some("The same controls, for a machine you reach over SSH."),
+            |ui| {
+                ui.add_space(4.0);
+                for line in [
+                    "oxi server install     # start at login",
+                    "oxi server phone       # allow phones, print the QR code",
+                    "oxi server             # status",
+                ] {
+                    ui.label(
+                        RichText::new(line)
+                            .size(FS_SMALL)
+                            .monospace()
+                            .color(c_text_muted()),
+                    );
+                }
+                ui.add_space(8.0);
+            },
+        );
 
         if let Some(label) = panel.busy {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.spinner();
+                crate::theme::spinner(ui, 14.0, c_text_muted());
                 ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
             });
         } else if let Some(message) = &panel.message {

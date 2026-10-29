@@ -1,12 +1,11 @@
 //! Git identity and GitHub authentication settings.
 
 use super::super::OxiApp;
-use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, field_label, field_label_first, ghost_button, settings_card_header,
-    settings_section_title, settings_text_field,
+    CONTROL_W, ghost_button, setting_row, setting_switch, settings_section, settings_section_title,
+    settings_text_field_width,
 };
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -45,134 +44,109 @@ impl OxiApp {
     pub(super) fn render_settings_github_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
-            "GitHub",
-            Some(
-                "Authenticate push, pull, and fetch with a GitHub token, or use the Git installed on this machine.",
-            ),
+            "Git & GitHub",
+            Some("Who commits are from, and how push, pull and fetch sign in."),
         );
 
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Commit identity",
-                Some("Author name and email written into commits created by oxi."),
-            );
-            field_label_first(ui, "Author name");
-            settings_text_field(ui, &mut self.conv.settings.git_author_name, "Your name");
-            field_label(ui, "Author email");
-            settings_text_field(
-                ui,
-                &mut self.conv.settings.git_author_email,
-                "you@example.com",
-            );
-            field_hint(
-                ui,
-                "Leave both empty to use identity from the repository or global Git config.",
-            );
-        });
+        settings_section(
+            ui,
+            "Commit identity",
+            Some("Leave both empty to use the repository's or your global Git config."),
+            |ui| {
+                setting_row(ui, "Author name", None, |ui| {
+                    settings_text_field_width(
+                        ui,
+                        &mut self.conv.settings.git_author_name,
+                        "Your name",
+                        CONTROL_W + 40.0,
+                    )
+                });
+                setting_row(ui, "Author email", None, |ui| {
+                    settings_text_field_width(
+                        ui,
+                        &mut self.conv.settings.git_author_email,
+                        "you@example.com",
+                        CONTROL_W + 40.0,
+                    )
+                });
+            },
+        );
 
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "GitHub authentication",
-                Some("Use a fine-grained personal access token with access to the repositories you work with."),
-            );
-            field_label_first(ui, "GitHub username");
-            settings_text_field(ui, &mut self.conv.settings.github_username, "octocat");
-            field_hint(ui, "Your GitHub account name, not your email address.");
-            field_label(ui, "Personal access token");
-            crate::ui::chrome::settings_password_field(
-                ui,
-                &mut self.conv.settings.github_token,
-                "github_pat_… or ghp_…",
-            );
-            field_hint(
-                ui,
-                "The token is stored only in your OS keychain. Fine-grained tokens need access to the repository and Contents: Read and write permission. Organization tokens may also require SSO authorization and administrator approval.",
-            );
-            if self.conv.settings.git_use_system_cli {
-                field_hint(
+        settings_section(
+            ui,
+            "GitHub authentication",
+            Some(
+                "A fine-grained personal access token with Contents: Read and write on your repositories. It is kept in the OS keychain.",
+            ),
+            |ui| {
+                setting_row(
                     ui,
-                    "System Git is enabled below, so this token is not used for push, pull, or fetch.",
+                    "GitHub username",
+                    Some("Your account name, not your email."),
+                    |ui| {
+                        settings_text_field_width(
+                            ui,
+                            &mut self.conv.settings.github_username,
+                            "octocat",
+                            CONTROL_W + 40.0,
+                        )
+                    },
                 );
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if self.conv.settings.github_token.trim().is_empty() {
-                    super::layout::inactive_pill(ui, "Not configured");
+                let token_set = !self.conv.settings.github_token.trim().is_empty();
+                let help = if self.conv.settings.git_use_system_cli {
+                    "Not used while system Git handles push, pull and fetch."
+                } else if token_set {
+                    "Configured."
                 } else {
-                    super::layout::active_pill(ui, "Configured");
-                }
-                if ghost_button(ui, "Create token on GitHub", false).clicked() {
-                    let _ = webbrowser::open("https://github.com/settings/personal-access-tokens/new?name=oxi&description=Native%20Git%20push%20from%20oxi&contents=write");
-                }
-                if !self.conv.settings.github_token.is_empty()
-                    && ghost_button(ui, "Clear token", true).clicked()
-                {
-                    self.conv.settings.github_token.clear();
-                }
-            });
-        });
+                    "Organization repositories may also need SSO authorization."
+                };
+                setting_row(ui, "Personal access token", Some(help), |ui| {
+                    if token_set {
+                        if ghost_button(ui, "Clear", true).clicked() {
+                            self.conv.settings.github_token.clear();
+                        }
+                    } else if ghost_button(ui, "Create on GitHub", false).clicked() {
+                        let _ = webbrowser::open(
+                            "https://github.com/settings/personal-access-tokens/new?name=oxi&description=Native%20Git%20push%20from%20oxi&contents=write",
+                        );
+                    }
+                    ui.add_space(6.0);
+                    crate::ui::chrome::settings_password_field_width(
+                        ui,
+                        &mut self.conv.settings.github_token,
+                        "github_pat_\u{2026}",
+                        CONTROL_W - 40.0,
+                    )
+                });
+            },
+        );
 
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
+        settings_section(ui, "System Git", None, |ui| {
+            setting_switch(
                 ui,
-                "System Git",
-                Some("For remotes that reject token authentication, such as company servers."),
+                &mut self.conv.settings.git_use_system_cli,
+                "Use system Git for push, pull, and fetch",
+                Some(
+                    "For remotes that reject tokens, like company servers: uses your SSH keys and credential manager. Status, diffs and commits still run on the built-in engine.",
+                ),
             );
-            let mut use_system = self.conv.settings.git_use_system_cli;
-            if crate::ui::chrome::toggle(ui,
-                    &mut use_system,
-                    RichText::new("Use system Git for push, pull, and fetch")
-                        .size(FS_SMALL)
-                        .color(c_text()),
+            if !self.conv.settings.git_use_system_cli {
+                return;
+            }
+            let probe = git_probe(ui.ctx(), &self.conv.settings.git_executable);
+            let help = match &probe {
+                GitProbe::Pending => "Detecting Git\u{2026}".to_owned(),
+                GitProbe::Done(Ok(version)) => version.clone(),
+                GitProbe::Done(Err(error)) => format!("Not found: {error}"),
+            };
+            setting_row(ui, "Git executable", Some(&help), |ui| {
+                settings_text_field_width(
+                    ui,
+                    &mut self.conv.settings.git_executable,
+                    "git on PATH",
+                    CONTROL_W + 40.0,
                 )
-                .changed()
-            {
-                self.conv.settings.git_use_system_cli = use_system;
-            }
-            field_hint(
-                ui,
-                "Use the system git installation and its credentials (SSH keys, credential manager) instead of the token. Status, diffs, commits, and merges still run natively.",
-            );
-            field_label(ui, "Git executable");
-            settings_text_field(
-                ui,
-                &mut self.conv.settings.git_executable,
-                "Auto-detect (git on PATH)",
-            );
-            ui.add_space(4.0);
-            match git_probe(ui.ctx(), &self.conv.settings.git_executable) {
-                GitProbe::Pending => field_hint(ui, "Detecting Git…"),
-                GitProbe::Done(Ok(version)) => {
-                    ui.horizontal(|ui| {
-                        super::layout::active_pill(ui, "Found");
-                        ui.label(RichText::new(version).size(FS_SMALL).color(c_text_muted()));
-                    });
-                }
-                GitProbe::Done(Err(error)) => {
-                    ui.horizontal(|ui| {
-                        super::layout::inactive_pill(ui, "Not found");
-                    });
-                    field_hint(ui, &error);
-                }
-            }
-        });
-
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Native Git engine",
-                Some("Status, diffs, commits, branches and network operations run through bundled libgit2."),
-            );
-            ui.label(
-                RichText::new("Unless system Git is enabled, HTTPS GitHub remotes use the token above and SSH remotes use your running SSH agent. TLS certificates remain verified by libgit2.")
-                    .size(FS_SMALL)
-                    .color(c_text_muted()),
-            );
+            });
         });
     }
 }

@@ -395,3 +395,23 @@ fn reloading_a_clean_tab_hands_back_the_replaced_text_for_undo() {
     assert_eq!(doc.sync_from_disk_keeping_old(), None);
     assert!(doc.externally_modified);
 }
+
+#[test]
+fn close_all_tabs_closes_clean_tabs_and_asks_before_dropping_edits() {
+    crate::secrets::use_mock_store();
+    let mut app = crate::app::OxiApp::new();
+    app.conv.editor.documents = vec![clean_document("a.rs".into()), clean_document("b.rs".into())];
+    app.conv.editor.active = Some(1);
+    app.request_close_all_editor_tabs();
+    assert!(app.conv.editor.documents.is_empty());
+    assert!(app.conv.editor.prompt.is_none());
+
+    app.conv.editor.documents = vec![clean_document("a.rs".into()), document("b.rs".into())];
+    app.conv.editor.active = Some(0);
+    app.request_close_all_editor_tabs();
+    assert_eq!(app.conv.editor.documents.len(), 2);
+    assert!(matches!(
+        app.conv.editor.prompt,
+        Some(super::super::state::EditorPrompt::CloseAll)
+    ));
+}

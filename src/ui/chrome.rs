@@ -22,22 +22,8 @@ pub fn keyboard_focus_ring(ui: &Ui, response: &Response, radius: CornerRadius) {
 
 mod copy_modal;
 pub use copy_modal::*;
-
-/// Chevron used by every dropdown instead of egui's default filled triangle.
-pub fn combo_chevron_icon(
-    ui: &Ui,
-    rect: egui::Rect,
-    visuals: &egui::style::WidgetVisuals,
-    _is_open: bool,
-) {
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        ICON_ANGLE_DOWN,
-        FontId::new(10.0, icon_font()),
-        visuals.fg_stroke.color,
-    );
-}
+mod settings_kit;
+pub use settings_kit::*;
 
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let id = ui.id().with(("sidebar_text_field", hint));
@@ -114,6 +100,16 @@ pub fn settings_password_field(ui: &mut Ui, text: &mut String, hint: &str) -> Re
     settings_text_field_opts(ui, text, hint, true, f32::INFINITY)
 }
 
+/// Password variant of [`settings_text_field_width`].
+pub fn settings_password_field_width(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+) -> Response {
+    settings_text_field_opts(ui, text, hint, true, width)
+}
+
 fn settings_text_field_opts(
     ui: &mut Ui,
     text: &mut String,
@@ -160,64 +156,41 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
     finish_text_field(ui, frame, RADIUS_BUTTON)
 }
 
-/// Settings list row: left-aligned identity, right-aligned actions, optional divider.
-/// Callers typically put labels on the left and buttons via `Layout::right_to_left`.
-pub fn settings_list_row(ui: &mut Ui, show_divider: bool, add_contents: impl FnOnce(&mut Ui)) {
-    let available = ui.available_width();
-    ui.horizontal(|ui| {
-        ui.set_min_width(available);
-        ui.set_min_height(28.0);
-        add_contents(ui);
-    });
-    if show_divider {
-        ui.add_space(4.0);
-        hairline(ui);
-        ui.add_space(4.0);
-    } else {
-        ui.add_space(2.0);
-    }
-}
-
-/// Section caption used above groups of settings: small, uppercase, muted.
-pub fn settings_caption(ui: &mut Ui, text: &str) {
-    let flash = ui.painter().add(egui::Shape::Noop);
-    let rect = ui
-        .label(
-            RichText::new(text.to_uppercase())
-                .size(FS_TINY)
-                .color(c_text_faint())
-                .strong(),
-        )
-        .rect;
-    settings_reveal_flash(ui, text, rect, flash);
-    ui.add_space(2.0);
-}
-
 /// Primary section title inside a panel.
 pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(RichText::new(title).size(FS_H2).color(c_text()).strong());
+    ui.label(
+        RichText::new(title)
+            .size(FS_H2)
+            .color(c_text_strong())
+            .strong(),
+    );
     if let Some(sub) = subtitle {
-        ui.add_space(2.0);
+        ui.add_space(3.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
     }
-    ui.add_space(14.0);
+    ui.add_space(18.0);
 }
 
 /// Card header: caption + optional one-line helper. Returns nothing; just paints.
 pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
     let flash = ui.painter().add(egui::Shape::Noop);
     let mut rect = ui
-        .label(RichText::new(title).size(FS_BODY).color(c_text()).strong())
+        .label(
+            RichText::new(title)
+                .size(FS_BODY)
+                .color(c_text_strong())
+                .strong(),
+        )
         .rect;
     if let Some(help) = help {
-        ui.add_space(2.0);
+        ui.add_space(1.0);
         rect = rect.union(
             ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()))
                 .rect,
         );
     }
     settings_reveal_flash(ui, title, rect, flash);
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 }
 
 /// A Settings search hit waiting to be shown: the page scrolls to the card (or caption) with
@@ -231,6 +204,13 @@ struct SettingsReveal {
 
 fn settings_reveal_id() -> egui::Id {
     egui::Id::new("oxi_settings_reveal")
+}
+
+/// Title of the settings card a search hit is about to reveal, if any (lets a folded group
+/// open itself first).
+pub fn settings_reveal_pending(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<SettingsReveal>(settings_reveal_id()))
+        .map(|reveal| reveal.title)
 }
 
 /// Scroll to the settings card or caption titled `title` on the next frame and flash it.
@@ -409,9 +389,8 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-/// A card used to group related settings. Matches the elevated background + subtle border.
-/// Cards always span the full content width so a page's stack of cards lines up, whatever
-/// each one contains.
+/// A group of related settings. Spans the full content width so a page's groups line up,
+/// whatever each one contains.
 pub fn card_frame() -> Card {
     Card
 }
@@ -424,25 +403,15 @@ impl Card {
         ui: &mut Ui,
         add_contents: impl FnOnce(&mut Ui) -> R,
     ) -> egui::InnerResponse<R> {
-        Frame::new()
-            .fill(c_bg_elevated())
-            .stroke(Stroke::new(1.0, c_border_subtle()))
-            .corner_radius(RADIUS_CARD)
-            .inner_margin(Margin::symmetric(14, 12))
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                add_contents(ui)
-            })
+        // Flat, like the chat transcript: a section is its title and hairline-separated rows
+        // on the page background, not a raised box.
+        let response = Frame::new().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            add_contents(ui)
+        });
+        ui.add_space(SECTION_GAP);
+        response
     }
-}
-
-/// Slightly elevated card variant — used for nested sub-cards inside a panel.
-pub fn nested_card_frame() -> Frame {
-    Frame::new()
-        .fill(c_bg_elevated_2())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .corner_radius(RADIUS_CHIP)
-        .inner_margin(Margin::symmetric(10, 8))
 }
 
 /// Single-line label → value field row used on settings panels.
@@ -1235,7 +1204,8 @@ pub fn flat_button_icon(
     )
 }
 
-/// Settings-page sidebar nav row (icon + label, rounded pill row).
+/// Settings-page sidebar nav row, drawn like a chat row in the chat sidebar: accent tint and
+/// rail when selected, a hover tint otherwise, muted label until selected.
 pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) -> Response {
     let row_w = ui.available_width();
     let h = 30.0;
@@ -1260,38 +1230,46 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
         .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
     keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
     if selected {
-        ui.painter().rect_stroke(
-            rect,
-            CornerRadius::same(RADIUS_ROW),
-            Stroke::new(1.0, c_border_subtle()),
-            egui::StrokeKind::Middle,
+        let rail = egui::Rect::from_min_max(
+            rect.left_top() + egui::vec2(0.0, 8.0),
+            rect.left_bottom() + egui::vec2(2.0, -8.0),
         );
+        ui.painter().rect_filled(rail, 1.0, c_accent());
     }
     let text_color = if selected { c_text() } else { c_text_muted() };
-    ui.scope_builder(
-        egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
-        |ui| {
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(icon)
-                        .size(FS_BODY)
-                        .font(FontId::new(FS_BODY, icon_font()))
-                        .color(if selected || hovered {
-                            c_accent()
-                        } else {
-                            c_text_faint()
-                        }),
-                );
-                ui.add_space(8.0);
-                ui.add(
-                    Label::new(RichText::new(label).size(FS_SMALL).color(text_color))
-                        .selectable(false),
-                );
-            });
-        },
+    ui.painter().text(
+        egui::pos2(rect.left() + 18.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        FontId::new(FS_SMALL, icon_font()),
+        if selected { c_accent() } else { c_text_faint() },
+    );
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        label.to_owned(),
+        FontId::proportional(FS_SMALL),
+        text_color,
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 40.0).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(
+        egui::pos2(rect.left() + 34.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
     );
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response
+}
+
+/// Caption over a group of rows in a sidebar, like the chat list's date headers.
+pub fn sidebar_caption(ui: &mut Ui, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), Sense::hover());
+    ui.painter().text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        FontId::proportional(FS_TINY),
+        c_text_faint(),
+    );
 }

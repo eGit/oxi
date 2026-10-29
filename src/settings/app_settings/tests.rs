@@ -11,6 +11,22 @@ fn default_has_all_provider_kinds() {
 }
 
 #[test]
+fn fresh_install_starts_on_the_zed_theme_and_fonts() {
+    let s = AppSettings::default();
+    assert_eq!(s.theme_id, "zed");
+    assert_eq!(s.ui_font, "bundled:ibm_plex_sans");
+    assert_eq!(s.mono_font, "bundled:lilex");
+    assert!(crate::theme::ui_font_is_known(&s.ui_font));
+    assert!(crate::theme::mono_font_is_known(&s.mono_font));
+    let mut migrated = s.clone();
+    migrated.normalize();
+    assert_eq!(
+        (migrated.ui_font, migrated.mono_font),
+        (s.ui_font, s.mono_font)
+    );
+}
+
+#[test]
 fn antigravity_settings_preserve_command_and_keep_api_key_in_environment_only() {
     let kind = LlmProviderKind::AntigravityAcp;
     let mut settings = AppSettings {

@@ -34,7 +34,6 @@ pub enum SettingsTab {
     GitHub,
     Prompts,
     Voice,
-    Terminal,
     Editor,
     Appearance,
     Server,
@@ -63,9 +62,14 @@ pub enum ConfirmAction {
     DeleteSession {
         wi: usize,
         si: usize,
+        /// In a work tree workspace: also remove the work tree (folder and branch). Toggled by
+        /// a checkbox in the modal.
+        remove_worktree: bool,
     },
     DeleteWorkspace {
         wi: usize,
+        /// For a work tree workspace: also remove the work tree (folder and branch).
+        remove_worktree: bool,
     },
     RemoveWorktree {
         wi: usize,
@@ -107,7 +111,12 @@ pub enum SidebarMode {
 pub enum EditorPrompt {
     Close(PathBuf),
     Reload(PathBuf),
-    Overwrite { path: PathBuf, close_after: bool },
+    Overwrite {
+        path: PathBuf,
+        close_after: bool,
+    },
+    /// "Close All Tabs" with unsaved documents among them.
+    CloseAll,
     Exit,
 }
 
@@ -676,8 +685,6 @@ pub struct TerminalPanelState {
 /// Settings page: navigation, the dirty-check snapshot and per-provider connection helpers.
 #[derive(Default)]
 pub struct SettingsPageState {
-    /// Settings page left-nav width (independent of the chat sidebar).
-    pub sidebar_width: f32,
     /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
     pub original: Option<AppSettings>,
     pub exit_prompt: Option<SettingsExitAction>,

@@ -183,42 +183,59 @@ impl OxiApp {
             }
             return;
         }
-        for (wi, parent) in sidebar_workspace_order(&self.conv.workspaces) {
+        let order = sidebar_workspace_order(&self.conv.workspaces);
+        for &(wi, parent) in &order {
             if sidebar_changed {
                 return;
             }
-            if self.conv.no_workspace && wi == 0 {
+            // Linked checkouts are drawn by their parent, right under its header.
+            if parent.is_some() || (self.conv.no_workspace && wi == 0) {
                 continue;
             }
-            let parent_folded =
-                parent.is_some_and(|pi| self.conv.workspaces[pi].sidebar_folded) && q.is_empty();
-            if parent_folded && !self.sidebar_workspace_needs_visibility(wi, ui.ctx()) {
-                continue;
-            }
-            ui.horizontal(|ui| {
-                if parent.is_some() {
-                    let (guide, _) = ui.allocate_exact_size(egui::vec2(16.0, 22.0), Sense::hover());
-                    ui.painter().line_segment(
-                        [
-                            guide.left_top() + egui::vec2(8.0, 0.0),
-                            guide.left_bottom() + egui::vec2(8.0, 0.0),
-                        ],
-                        Stroke::new(1.0, c_border_subtle()),
-                    );
-                    ui.painter().line_segment(
-                        [
-                            guide.left_center() + egui::vec2(8.0, 0.0),
-                            guide.right_center(),
-                        ],
-                        Stroke::new(1.0, c_border_subtle()),
-                    );
-                }
-                ui.vertical(|ui| {
-                    sidebar_changed =
-                        self.render_sidebar_workspace(ui, wi, parent, parent_folded, &q);
-                });
-            });
+            let children: Vec<usize> = order
+                .iter()
+                .filter(|(_, p)| *p == Some(wi))
+                .map(|&(child, _)| child)
+                .collect();
+            sidebar_changed = self.render_sidebar_workspace(ui, wi, None, false, &q, &children);
         }
+    }
+
+    /// Linked checkout `wi` of workspace `parent`, indented under it with a tree guide.
+    fn render_sidebar_worktree_child(
+        &mut self,
+        ui: &mut egui::Ui,
+        wi: usize,
+        parent: usize,
+        q: &str,
+    ) -> bool {
+        let parent_folded = self.conv.workspaces[parent].sidebar_folded && q.is_empty();
+        if parent_folded && !self.sidebar_workspace_needs_visibility(wi, ui.ctx()) {
+            return false;
+        }
+        let mut sidebar_changed = false;
+        ui.horizontal(|ui| {
+            let (guide, _) = ui.allocate_exact_size(egui::vec2(16.0, 22.0), Sense::hover());
+            ui.painter().line_segment(
+                [
+                    guide.left_top() + egui::vec2(8.0, 0.0),
+                    guide.left_bottom() + egui::vec2(8.0, 0.0),
+                ],
+                Stroke::new(1.0, c_border_subtle()),
+            );
+            ui.painter().line_segment(
+                [
+                    guide.left_center() + egui::vec2(8.0, 0.0),
+                    guide.right_center(),
+                ],
+                Stroke::new(1.0, c_border_subtle()),
+            );
+            ui.vertical(|ui| {
+                sidebar_changed =
+                    self.render_sidebar_workspace(ui, wi, Some(parent), parent_folded, q, &[]);
+            });
+        });
+        sidebar_changed
     }
 
     fn sidebar_workspace_needs_visibility(&self, wi: usize, ctx: &egui::Context) -> bool {
