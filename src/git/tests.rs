@@ -371,3 +371,50 @@ fn block_edits_stage_and_revert_single_changes() {
             .all(|l| !l.starts_with('+'))
     );
 }
+
+#[test]
+fn delete_branch_refuses_unmerged_and_current_unless_forced() {
+    let repo = TestRepo::new();
+    let head = repo.repo.head().unwrap().peel_to_commit().unwrap();
+    repo.repo.branch("merged", &head, false).unwrap();
+    // "topic" gets a commit that is not on the current branch.
+    let topic = repo.repo.branch("topic", &head, false).unwrap();
+    let sig = git2::Signature::now("Oxi Test", "oxi@example.com").unwrap();
+    repo.repo
+        .commit(
+            topic.get().name().ok(),
+            &sig,
+            &sig,
+            "topic work",
+            &head.tree().unwrap(),
+            &[&head],
+        )
+        .unwrap();
+    let current = current_branch(&repo.repo);
+
+    let delete = |name: &str, force| {
+        handle_op(
+            repo.cwd(),
+            GitOp::DeleteBranch {
+                name: name.into(),
+                force,
+            },
+        )
+    };
+    assert!(delete(&current, true).error.is_some());
+    let state = delete("topic", false);
+    assert!(
+        state
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(UNMERGED_BRANCH_ERROR))
+    );
+    assert!(state.branches.contains(&"topic".to_string()));
+
+    let state = delete("merged", false);
+    assert_eq!(state.error, None);
+    assert!(!state.branches.contains(&"merged".to_string()));
+    let state = delete("topic", true);
+    assert_eq!(state.error, None);
+    assert_eq!(state.branches, vec![current]);
+}

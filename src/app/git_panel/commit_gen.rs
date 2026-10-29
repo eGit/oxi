@@ -174,6 +174,7 @@ impl OxiApp {
                 self.conv.git_ui.epoch += 1;
             }
             self.conv.git = state;
+            self.settle_branch_delete();
             ctx.request_repaint();
         }
         if let Some(diff) = collected_diff
@@ -193,6 +194,31 @@ impl OxiApp {
                     .unwrap_or_else(|| "No changes to summarize.".to_string()),
             );
             ctx.request_repaint();
+        }
+    }
+
+    /// Follow up a safe branch delete: git refusing it as unmerged turns into a force-delete
+    /// confirmation; the branch disappearing or any other error ends it.
+    fn settle_branch_delete(&mut self) {
+        let Some(name) = self.conv.git_ui.pending_branch_delete.as_ref() else {
+            return;
+        };
+        if self.conv.git.busy {
+            return;
+        }
+        let unmerged = self
+            .conv
+            .git
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(crate::git::UNMERGED_BRANCH_ERROR));
+        if unmerged {
+            let name = name.clone();
+            self.conv.git.error = None;
+            self.conv.git_ui.pending_branch_delete = None;
+            self.request_confirm(crate::app::state::ConfirmAction::GitForceDeleteBranch { name });
+        } else if self.conv.git.error.is_some() || !self.conv.git.branches.contains(name) {
+            self.conv.git_ui.pending_branch_delete = None;
         }
     }
 

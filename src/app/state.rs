@@ -73,6 +73,10 @@ pub enum ConfirmAction {
     GitDiscard {
         paths: Vec<String>,
     },
+    /// Force-delete a local branch whose commits are not merged anywhere.
+    GitForceDeleteBranch {
+        name: String,
+    },
     DeleteLocalModel {
         id: String,
     },
@@ -791,6 +795,9 @@ pub struct GitUiState {
     pub tab: crate::app::git_panel::GitTab,
     pub commit_message: String,
     pub new_branch: String,
+    /// A safe branch delete in flight: if git refuses it as unmerged, the panel asks
+    /// whether to force it.
+    pub pending_branch_delete: Option<String>,
     /// Branch comparison shown by the Compare tab (see [`crate::git::compare`]).
     pub compare: crate::app::git_panel::CompareView,
     /// Set while a commit-message generation is in flight: we've asked the git worker for

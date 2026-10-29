@@ -905,6 +905,104 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     response.clicked()
 }
 
+/// Flat panel tab strip (VS Code / Zed style): labels with an optional faint count, the
+/// selected one in strong ink over a 2 px accent underline, a hairline under the whole
+/// strip. Tabs share any spare width so the strip spans the panel. Returns the clicked index.
+pub fn underline_tabs(ui: &mut Ui, tabs: &[(&str, usize, bool)]) -> Option<usize> {
+    let label_font = FontId::proportional(FS_SMALL);
+    let count_font = FontId::proportional(FS_TINY);
+    let pad_x = 6.0;
+    let gap = 4.0;
+    let height = 26.0;
+    let galleys: Vec<_> = tabs
+        .iter()
+        .map(|(label, count, _)| {
+            let label = ui.painter().layout_no_wrap(
+                label.to_string(),
+                label_font.clone(),
+                Color32::PLACEHOLDER,
+            );
+            let count = (*count > 0).then(|| {
+                ui.painter().layout_no_wrap(
+                    count.to_string(),
+                    count_font.clone(),
+                    Color32::PLACEHOLDER,
+                )
+            });
+            (label, count)
+        })
+        .collect();
+    let natural: Vec<f32> = galleys
+        .iter()
+        .map(|(label, count)| {
+            label.rect.width() + count.as_ref().map_or(0.0, |c| gap + c.rect.width()) + pad_x * 2.0
+        })
+        .collect();
+    let avail = ui.available_width();
+    let extra = ((avail - natural.iter().sum::<f32>()) / tabs.len().max(1) as f32).max(0.0);
+
+    let (strip, _) = ui.allocate_exact_size(egui::vec2(avail, height), Sense::hover());
+    let painter = ui.painter_at(strip);
+    painter.hline(
+        strip.x_range(),
+        strip.bottom() - 0.5,
+        Stroke::new(1.0, c_border_subtle()),
+    );
+    let mut clicked = None;
+    let mut x = strip.left();
+    for (i, ((label, count), w)) in galleys.into_iter().zip(&natural).enumerate() {
+        let selected = tabs[i].2;
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(w + extra, height));
+        x = rect.right();
+        let response = ui
+            .interact(rect, ui.id().with(("underline_tab", i)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tabs[i].0)
+        });
+        let hovered = response.hovered();
+        let ink = if selected {
+            c_text_strong()
+        } else if hovered {
+            c_text()
+        } else {
+            c_text_muted()
+        };
+        let content_w = w - pad_x * 2.0;
+        let mut tx = rect.center().x - content_w / 2.0;
+        let cy = rect.center().y - 1.0;
+        let label_w = label.rect.width();
+        painter.galley(egui::pos2(tx, cy - label.rect.height() / 2.0), label, ink);
+        tx += label_w + gap;
+        if let Some(count) = count {
+            let count_ink = if selected {
+                c_text_muted()
+            } else {
+                c_text_faint()
+            };
+            painter.galley(
+                egui::pos2(tx, cy - count.rect.height() / 2.0),
+                count,
+                count_ink,
+            );
+        }
+        if selected || hovered {
+            let line = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
+                egui::pos2(rect.right() - 2.0, rect.bottom()),
+            );
+            let color = if selected { c_accent() } else { c_border() };
+            painter.rect_filled(line, CornerRadius::ZERO, color);
+        }
+        keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
+        if response.clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
 /// Primary filled button with accent color.
 pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
     let rich = RichText::new(label).size(FS_SMALL).color(c_on_accent());
