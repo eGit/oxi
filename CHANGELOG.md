@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-10-29
+
+### Added
+- **Git:** Delete branches directly from the panel with a hover button or context menu, including force-delete for unmerged branches.
+
+### Changed
+- **Git:** Tab style in the Git panel changed from rounded pills to underline strips for a cleaner look.
+
+
 ## [1.28.0] - 2026-10-28
 
 ### Added
@@ -1240,7 +1249,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.28.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.29.0...HEAD
+[1.29.0]: https://github.com/maziluiosif/oxi/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/maziluiosif/oxi/compare/v1.27.0...v1.28.0
 [1.27.0]: https://github.com/maziluiosif/oxi/compare/v1.26.0...v1.27.0
 [1.26.0]: https://github.com/maziluiosif/oxi/compare/v1.25.0...v1.26.0
