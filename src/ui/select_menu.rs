@@ -71,6 +71,9 @@ pub struct SelectMenu<'a> {
     hover: &'a str,
     max_w: f32,
     min_popup_w: f32,
+    /// Fixed button width for a framed, form-style button (Settings); `None` is the quiet
+    /// composer button.
+    framed: Option<f32>,
 }
 
 impl<'a> SelectMenu<'a> {
@@ -81,6 +84,7 @@ impl<'a> SelectMenu<'a> {
             hover: "",
             max_w: 160.0,
             min_popup_w: 180.0,
+            framed: None,
         }
     }
 
@@ -96,12 +100,23 @@ impl<'a> SelectMenu<'a> {
         self
     }
 
+    /// A form-style button `width` wide, filled and bordered like a text field, for Settings
+    /// rows. The list it opens is the same one the composer pickers use.
+    pub fn framed(mut self, width: f32) -> Self {
+        self.framed = Some(width);
+        self.min_popup_w = self.min_popup_w.max(width);
+        self
+    }
+
     /// Returns the index (into the list `options` built) of the option the user picked this
     /// frame. `options` only runs while the list is open.
     pub fn show(self, ui: &mut Ui, options: impl FnOnce() -> Vec<SelectOption>) -> Option<usize> {
         let popup_id = self.id.with("popup");
         let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
-        let button = quiet_button(ui, self.id, self.text, self.max_w, open);
+        let button = match self.framed {
+            Some(width) => framed_button(ui, self.id, self.text, width, open),
+            None => quiet_button(ui, self.id, self.text, self.max_w, open),
+        };
         let button = if self.hover.is_empty() || open {
             button
         } else {
@@ -120,15 +135,23 @@ impl<'a> SelectMenu<'a> {
                 .show(|_| ());
             return None;
         }
+        let framed = self.framed.is_some();
         let options = options();
         let width = popup_width(ui, &options, self.min_popup_w);
         let room = room_around(ui.ctx(), button.rect);
         let mut picked = None;
         egui::Popup::from_toggle_button_response(&button)
             .id(popup_id)
-            .align(RectAlign::TOP_START)
+            // The composer pickers sit at the bottom of the window, so they open upwards;
+            // a Settings field opens downwards like any form dropdown.
+            .align(if framed {
+                RectAlign::BOTTOM_START
+            } else {
+                RectAlign::TOP_START
+            })
             .align_alternatives(&[
                 RectAlign::BOTTOM_START,
+                RectAlign::TOP_START,
                 RectAlign::TOP_END,
                 RectAlign::BOTTOM_END,
             ])
@@ -466,6 +489,60 @@ fn quiet_button(ui: &mut Ui, id: Id, text: &str, max_w: f32, open: bool) -> Resp
             } else {
                 c_text_faint()
             },
+        );
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_BUTTON));
+    resp
+}
+
+/// Form-style select button: input fill and border, label left, chevron right.
+fn framed_button(ui: &mut Ui, id: Id, text: &str, width: f32, open: bool) -> Response {
+    let width = width.min(ui.available_width()).max(60.0);
+    let pad = egui::vec2(9.0, 4.0);
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat::simple(egui::FontId::proportional(FS_SMALL), c_text()),
+    );
+    job.wrap =
+        egui::text::TextWrapping::truncate_at_width((width - CHEVRON_W - 2.0 * pad.x).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    // As tall as the buttons that share Settings rows with it.
+    let height = 28.0_f32.max(galley.size().y + 2.0 * pad.y);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
+    let resp = ui.interact(rect, id.with("button"), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), text)
+    });
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        let border = if open {
+            c_composer_focus_border()
+        } else if resp.hovered() || resp.has_focus() {
+            c_border()
+        } else {
+            c_border_subtle()
+        };
+        painter.rect(
+            rect,
+            CornerRadius::same(RADIUS_BUTTON),
+            c_bg_input(),
+            Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+        let text_pos = egui::pos2(rect.left() + pad.x, rect.center().y - galley.size().y * 0.5);
+        let text_color = if ui.is_enabled() {
+            c_text()
+        } else {
+            c_text_faint()
+        };
+        painter.galley(text_pos, galley, text_color);
+        painter.text(
+            egui::pos2(rect.right() - pad.x - CHEVRON_W * 0.5, rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            if open { ICON_ANGLE_UP } else { ICON_ANGLE_DOWN },
+            egui::FontId::new(9.0, icon_font()),
+            if open { c_accent() } else { c_text_muted() },
         );
     }
     crate::ui::chrome::keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_BUTTON));

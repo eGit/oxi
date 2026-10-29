@@ -6,10 +6,12 @@ use crate::agent::mcp::McpServerStatus;
 use crate::settings::{ALL_TOOL_NAMES, DEFAULT_MCP_TIMEOUT_SECS, McpServerConfig, McpTransport};
 use crate::theme::*;
 use crate::ui::chrome::{
-    alert_banner, card_frame, field_hint, field_label, field_label_first, ghost_button,
-    nested_card_frame, pill_tab, settings_card_header, settings_password_field,
+    alert_banner, field_hint, field_label, ghost_button, ghost_button_icon, icon_button_plain,
+    pill_tab, setting_item, settings_text_area, setting_block, setting_number, setting_row, setting_select,
+    setting_switch, settings_disclosure, settings_password_field, settings_section,
     settings_section_title, settings_text_field, settings_text_field_width,
 };
+use crate::ui::select_menu::SelectOption;
 use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 /// Tool chips grouped by intent. Keep this list in sync with `ALL_TOOL_NAMES`.
@@ -33,14 +35,106 @@ impl OxiApp {
     pub(super) fn render_settings_agent_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
-            "Tools & safety",
-            Some(
-                "Control which tools the agent can call, when it must ask first, and how web search works.",
-            ),
+            "Agent tools",
+            Some("What oxi's own agent may do, and when it has to ask first."),
         );
 
+        // ── Approvals ──────────────────────────────────────────────────────
+        settings_section(
+            ui,
+            "Approvals",
+            Some("The agent pauses and asks before matching tool calls. Bash is not sandboxed, so this is the real safety boundary."),
+            |ui| {
+            setting_switch(
+                ui,
+                &mut self.conv.settings.require_write_edit_approval,
+                "Ask before file changes",
+                Some("write, edit, delete, move and mkdir."),
+            );
+            setting_switch(
+                ui,
+                &mut self.conv.settings.require_bash_approval,
+                "Ask before commands",
+                Some("bash, and diagnostics (it runs the project's build tools)."),
+            );
+            if self.conv.settings.require_bash_approval {
+                setting_block(
+                    ui,
+                    "Always allowed commands",
+                    Some("Commands starting with one of these run without asking. Pipes, ;, &&, redirects, $, quotes and globs always ask."),
+                    |ui| {
+                        let mut remove_idx: Option<usize> = None;
+                        for (i, entry) in self.conv.settings.bash_allowlist.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                settings_text_field_width(ui, entry, "cargo test", 240.0);
+                                if icon_button_plain(ui, ICON_CLOSE, 22.0, false)
+                                    .on_hover_text("Remove")
+                                    .clicked()
+                                {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(i) = remove_idx {
+                            self.conv.settings.bash_allowlist.remove(i);
+                        }
+                        if ghost_button_icon(ui, ICON_PLUS, "Add command", false).clicked() {
+                            self.conv.settings.bash_allowlist.push(String::new());
+                        }
+                    },
+                );
+            }
+            if self
+                .conv
+                .settings
+                .workspace_tool_allowlist
+                .values()
+                .any(|tools| !tools.is_empty())
+            {
+                setting_block(
+                    ui,
+                    "Always allowed tools",
+                    Some("Allowed with \u{201c}Always allow here\u{201d} on an approval, per workspace."),
+                    |ui| {
+                        let mut remove: Option<(String, usize)> = None;
+                        for (root, tools) in &self.conv.settings.workspace_tool_allowlist {
+                            if tools.is_empty() {
+                                continue;
+                            }
+                            ui.label(
+                                RichText::new(root.as_str())
+                                    .size(FS_TINY)
+                                    .color(c_text_muted()),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                                for (i, tool) in tools.iter().enumerate() {
+                                    if tool_chip(ui, tool, true)
+                                        .on_hover_text("Click to stop allowing it")
+                                        .clicked()
+                                    {
+                                        remove = Some((root.clone(), i));
+                                    }
+                                }
+                            });
+                            ui.add_space(4.0);
+                        }
+                        if let Some((root, i)) = remove
+                            && let Some(tools) =
+                                self.conv.settings.workspace_tool_allowlist.get_mut(&root)
+                        {
+                            tools.remove(i);
+                            if tools.is_empty() {
+                                self.conv.settings.workspace_tool_allowlist.remove(&root);
+                            }
+                        }
+                    },
+                );
+            }
+        });
+
         // ── Tools ──────────────────────────────────────────────────────────
-        card_frame().show(ui, |ui| {
+        settings_section(ui, "Tools", None, |ui| {
             let enabled_count = self
                 .conv
                 .settings
@@ -49,81 +143,93 @@ impl OxiApp {
                 .take(ALL_TOOL_NAMES.len())
                 .filter(|enabled| **enabled)
                 .count();
-            ui.horizontal(|ui| {
-                // Hand-built header (it shares the row with Enable/Disable all), so it hooks
-                // into the Settings search reveal itself.
-                let flash = ui.painter().add(egui::Shape::Noop);
-                let header = ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new("Enabled tools")
-                            .size(FS_BODY)
-                            .color(c_text())
-                            .strong(),
-                    );
-                    ui.add_space(2.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{enabled_count} of {} available to the agent",
-                            ALL_TOOL_NAMES.len()
-                        ))
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                    );
-                });
-                crate::ui::chrome::settings_reveal_flash(
-                    ui,
-                    "Enabled tools",
-                    header.response.rect,
-                    flash,
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    if ghost_button(ui, "Disable all", false).clicked() {
-                        self.conv.settings.tools_enabled.fill(false);
-                    }
-                    if ghost_button(ui, "Enable all", false).clicked() {
-                        self.conv.settings.tools_enabled.fill(true);
-                    }
-                });
-            });
-            ui.add_space(10.0);
-            for (gi, (group, names)) in TOOL_GROUPS.iter().enumerate() {
-                if gi > 0 {
-                    ui.add_space(10.0);
+            let summary = format!(
+                "{enabled_count} of {} available to the agent.",
+                ALL_TOOL_NAMES.len()
+            );
+            setting_row(ui, "Enabled tools", Some(&summary), |ui| {
+                if ghost_button(ui, "Disable all", false).clicked() {
+                    self.conv.settings.tools_enabled.fill(false);
                 }
-                ui.label(RichText::new(*group).size(FS_TINY).color(c_text_muted()));
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
-                    for name in *names {
-                        let Some(i) = ALL_TOOL_NAMES.iter().position(|n| n == name) else {
-                            continue;
-                        };
-                        let enabled = self.conv.settings.tools_enabled[i];
-                        if tool_chip(ui, name, enabled).clicked() {
-                            self.conv.settings.tools_enabled[i] = !enabled;
-                        }
+                if ghost_button(ui, "Enable all", false).clicked() {
+                    self.conv.settings.tools_enabled.fill(true);
+                }
+            });
+            settings_disclosure(ui, "Choose tools", &["Enabled tools"], |ui| {
+                for (group, names) in TOOL_GROUPS {
+                    setting_block(ui, group, None, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                            for name in *names {
+                                let Some(i) = ALL_TOOL_NAMES.iter().position(|n| n == name) else {
+                                    continue;
+                                };
+                                let enabled = self.conv.settings.tools_enabled[i];
+                                if tool_chip(ui, name, enabled).clicked() {
+                                    self.conv.settings.tools_enabled[i] = !enabled;
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+        });
+
+        // ── Web search ─────────────────────────────────────────────────────
+        settings_section(ui, "Web search", None, |ui| {
+            use crate::settings::WebSearchBackend;
+            let current = self.conv.settings.web_search_backend;
+            let help = match current {
+                WebSearchBackend::Bing => "No setup. Uses Bing's RSS results feed.",
+                WebSearchBackend::DuckDuckGo => {
+                    "No setup. Falls back to Bing when DuckDuckGo rate-limits."
+                }
+                WebSearchBackend::SearXng => "Your own instance, with JSON output enabled.",
+            };
+            if let Some(backend) = setting_select(
+                ui,
+                "web_search_backend",
+                "Search with",
+                Some(help),
+                current.label(),
+                || {
+                    WebSearchBackend::ALL
+                        .iter()
+                        .map(|backend| SelectOption::new(backend.label(), *backend == current))
+                        .collect()
+                },
+            )
+            .and_then(|i| WebSearchBackend::ALL.get(i))
+            {
+                self.conv.settings.web_search_backend = *backend;
+            }
+            if self.conv.settings.web_search_backend == WebSearchBackend::SearXng {
+                setting_block(ui, "SearXNG instance URL", None, |ui| {
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.settings.searxng_url,
+                        "https://searxng.example.com",
+                    );
+                    if self.conv.settings.searxng_url.trim().is_empty() {
+                        field_hint(ui, "No URL set: web_search reports a configuration error.");
                     }
                 });
             }
         });
 
         // ── MCP servers ────────────────────────────────────────────────────
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "MCP servers",
-                Some("Local (stdio) or remote (Streamable HTTP) MCP servers. Tools appear as mcp_<name>_<tool>; servers with resources also get list_resources / read_resource."),
-            );
+        settings_section(
+            ui,
+            "MCP servers",
+            Some("Local commands or remote HTTP servers. Their tools appear as mcp_<name>_<tool>."),
+            |ui| {
             let statuses = self.mcp.statuses();
             let mut remove_idx: Option<usize> = None;
             let n = self.conv.settings.mcp_servers.len();
             for i in 0..n {
                 let server = &mut self.conv.settings.mcp_servers[i];
                 let status = statuses.iter().find(|s| s.name == server.name);
-                nested_card_frame().show(ui, |ui| {
-                    ui.set_width(ui.available_width());
+                setting_item(ui, |ui| {
                     ui.horizontal(|ui| {
                         crate::ui::chrome::toggle(ui, &mut server.enabled, "");
                         settings_text_field_width(ui, &mut server.name, "name", 120.0);
@@ -165,13 +271,7 @@ impl OxiApp {
                                 }
                             });
                             field_label(ui, "Environment (KEY=VALUE per line, stored in the OS keychain)");
-                            ui.add(
-                                egui::TextEdit::multiline(&mut server.env)
-                                    .desired_rows(2)
-                                    .desired_width(f32::INFINITY)
-                                    .font(egui::TextStyle::Monospace)
-                                    .hint_text("GITHUB_TOKEN=…"),
-                            );
+                            settings_text_area(ui, &mut server.env, "GITHUB_TOKEN=…", 2);
                         }
                         McpTransport::Http => {
                             settings_text_field(
@@ -199,13 +299,12 @@ impl OxiApp {
                         server.timeout_secs = timeout.trim().parse::<u32>().ok().filter(|t| *t > 0);
                     }
                 });
-                ui.add_space(6.0);
             }
             if let Some(i) = remove_idx {
                 self.conv.settings.mcp_servers.remove(i);
             }
-            ui.horizontal(|ui| {
-                if ghost_button(ui, "Add MCP server", false).clicked() {
+            setting_item(ui, |ui| ui.horizontal(|ui| {
+                if ghost_button_icon(ui, ICON_PLUS, "Add MCP server", false).clicked() {
                     self.conv
                         .settings
                         .mcp_servers
@@ -225,287 +324,60 @@ impl OxiApp {
                     });
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                 }
-            });
+            }));
             if statuses.iter().any(|s| s.connecting) {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(250));
             }
-        });
-
-        // ── Approvals ──────────────────────────────────────────────────────
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Approvals",
-                Some("When on, the agent pauses and asks before each matching tool call."),
-            );
-            let mut require_write_edit_approval = self.conv.settings.require_write_edit_approval;
-            if crate::ui::chrome::toggle(ui,
-                    &mut require_write_edit_approval,
-                    RichText::new("Ask before file changes")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                )
-                .on_hover_text(
-                    "When on, the agent pauses before write, edit, delete, move, or mkdir tool calls.",
-                )
-                .changed()
-            {
-                self.conv.settings.require_write_edit_approval = require_write_edit_approval;
-            }
-            let mut require_bash_approval = self.conv.settings.require_bash_approval;
-            if crate::ui::chrome::toggle(ui,
-                    &mut require_bash_approval,
-                    RichText::new("Ask before bash").size(FS_SMALL).color(c_text()),
-                )
-                .on_hover_text(
-                    "When on, the agent pauses for your approval before each bash or diagnostics call (diagnostics runs the project's build tooling).",
-                )
-                .changed()
-            {
-                self.conv.settings.require_bash_approval = require_bash_approval;
-            }
-            if self.conv.settings.require_bash_approval {
-                field_label(ui, "Always allowed commands");
-                field_hint(
-                    ui,
-                    "Bash commands starting with one of these run without asking, e.g. `cargo test` or `git status`. Commands with pipes, `;`, `&&`, redirection, `$`, quotes or globs always ask.",
-                );
-                let mut remove_idx: Option<usize> = None;
-                for (i, entry) in self.conv.settings.bash_allowlist.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        settings_text_field_width(ui, entry, "cargo test", 240.0);
-                        if ghost_button(ui, "Remove", true).clicked() {
-                            remove_idx = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove_idx {
-                    self.conv.settings.bash_allowlist.remove(i);
-                }
-                if ghost_button(ui, "Add command", false).clicked() {
-                    self.conv.settings.bash_allowlist.push(String::new());
-                }
-            }
-            if self
-                .conv
-                .settings
-                .workspace_tool_allowlist
-                .values()
-                .any(|tools| !tools.is_empty())
-            {
-                field_label(ui, "Always allowed tools");
-                field_hint(
-                    ui,
-                    "Tools allowed with “Always allow here” on an approval prompt, per workspace.",
-                );
-                let mut remove: Option<(String, usize)> = None;
-                for (root, tools) in &self.conv.settings.workspace_tool_allowlist {
-                    if tools.is_empty() {
-                        continue;
-                    }
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(root.as_str())
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                    for (i, tool) in tools.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(tool.as_str()).size(FS_SMALL).color(c_text()).monospace());
-                            if ghost_button(ui, "Remove", true).clicked() {
-                                remove = Some((root.clone(), i));
-                            }
-                        });
-                    }
-                }
-                if let Some((root, i)) = remove
-                    && let Some(tools) = self.conv.settings.workspace_tool_allowlist.get_mut(&root)
-                {
-                    tools.remove(i);
-                    if tools.is_empty() {
-                        self.conv.settings.workspace_tool_allowlist.remove(&root);
-                    }
-                }
-            }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(
-                    "Bash is not sandboxed; the approval prompt is the real safety boundary. Read-only tools never require approval.",
-                )
-                .size(FS_TINY)
-                .color(c_text_faint()),
-            );
-            ui.add_space(8.0);
-            let mut notify = self.conv.settings.notify_in_background;
-            if crate::ui::chrome::toggle(ui,
-                    &mut notify,
-                    RichText::new("Notify me in the background")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                )
-                .on_hover_text(
-                    "When oxi is not the focused window, show a desktop notification when a response finishes or the agent is waiting for your approval.",
-                )
-                .changed()
-            {
-                self.conv.settings.notify_in_background = notify;
-            }
-            let mut keep_awake = self.conv.settings.keep_awake_while_working;
-            if crate::ui::chrome::toggle(ui,
-                    &mut keep_awake,
-                    RichText::new("Keep the computer awake while an agent works")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                )
-                .on_hover_text(
-                    "Holds off idle sleep until the turn ends, so long unattended runs keep going. The screen can still turn off, and closing the lid still sleeps. Not held while a turn waits for your approval.",
-                )
-                .changed()
-            {
-                self.conv.settings.keep_awake_while_working = keep_awake;
-            }
-        });
+        },
+        );
 
         // ── Limits ─────────────────────────────────────────────────────────
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
+        settings_section(ui, "Limits", None, |ui| {
+            settings_disclosure(
                 ui,
-                "Limits",
-                Some("Caps that keep a runaway agent loop from going forever."),
-            );
-
-            field_label_first(ui, "Max tool calls per run (0 = unlimited)");
-            let mut max_rounds = self.conv.settings.max_tool_rounds.to_string();
-            if settings_text_field_width(ui, &mut max_rounds, "0", 180.0).changed() {
-                let trimmed = max_rounds.trim();
-                if trimmed.is_empty() {
-                    self.conv.settings.max_tool_rounds = 0;
-                } else if let Ok(n) = trimmed.parse::<u32>() {
-                    self.conv.settings.max_tool_rounds = n;
-                }
-            }
-            field_hint(
-                ui,
-                "Caps tool-call rounds in a single agent run. 0 disables the cap.",
-            );
-
-            field_label(ui, "Bash timeout cap (seconds)");
-            let mut bash_cap = self.conv.settings.bash_timeout_cap_secs.to_string();
-            if settings_text_field_width(ui, &mut bash_cap, "300", 180.0).changed()
-                && let Ok(n) = bash_cap.trim().parse::<u32>()
-                && n >= 1
-            {
-                self.conv.settings.bash_timeout_cap_secs = n.clamp(5, 3600);
-            }
-            field_hint(
-                ui,
-                "Upper bound for one bash call (5–3600s). The model's own timeout is clamped to this.",
-            );
-
-            field_label(ui, "Stop idle ACP agents after (minutes, 0 = never)");
-            let mut idle = self.conv.settings.acp_idle_minutes.to_string();
-            if settings_text_field_width(ui, &mut idle, "15", 180.0).changed() {
-                let trimmed = idle.trim();
-                if trimmed.is_empty() {
-                    self.conv.settings.acp_idle_minutes = 0;
-                } else if let Ok(n) = trimmed.parse::<u32>() {
-                    self.conv.settings.acp_idle_minutes = n.min(24 * 60);
-                }
-            }
-            field_hint(
-                ui,
-                "Each Claude Code, Codex or Copilot chat keeps its own agent process (a few hundred MB) after a reply. An idle one is stopped and relaunched on the next message, with the conversation resumed. Agents running background work get two hours.",
-            );
-
-            field_label(ui, "Max ACP agents running (0 = unlimited)");
-            let mut max_live = self.conv.settings.acp_max_live_agents.to_string();
-            if settings_text_field_width(ui, &mut max_live, "4", 180.0).changed() {
-                let trimmed = max_live.trim();
-                if trimmed.is_empty() {
-                    self.conv.settings.acp_max_live_agents = 0;
-                } else if let Ok(n) = trimmed.parse::<u32>() {
-                    self.conv.settings.acp_max_live_agents = n;
-                }
-            }
-            let live = crate::agent::acp::live_count();
-            field_hint(
-                ui,
-                &format!(
-                    "Beyond this, the least recently used idle agent is stopped. Running now: {live}."
-                ),
-            );
-        });
-
-        // ── Web search ─────────────────────────────────────────────────────
-        ui.add_space(12.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Web search",
-                Some("Backend used by the web_search tool."),
-            );
-            let current = self.conv.settings.web_search_backend;
-            egui::ComboBox::from_id_salt("web_search_backend_combo")
-                .icon(crate::ui::chrome::combo_chevron_icon)
-                .selected_text(current.label())
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    for backend in crate::settings::WebSearchBackend::ALL {
-                        if ui
-                            .selectable_label(backend == current, backend.label())
-                            .clicked()
-                        {
-                            self.conv.settings.web_search_backend = backend;
-                        }
-                    }
-                });
-            ui.add_space(6.0);
-            match self.conv.settings.web_search_backend {
-                crate::settings::WebSearchBackend::Bing => {
-                    ui.label(
-                        RichText::new(
-                            "Zero-config. Uses Bing's RSS results feed only.",
-                        )
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                    );
-                }
-                crate::settings::WebSearchBackend::DuckDuckGo => {
-                    ui.label(
-                        RichText::new(
-                            "Zero-config. Falls back to Bing when DuckDuckGo rate-limits.",
-                        )
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                    );
-                }
-                crate::settings::WebSearchBackend::SearXng => {
-                    field_label_first(ui, "SearXNG instance URL");
-                    settings_text_field(
+                "Runaway loops and background agents",
+                &["Limits"],
+                |ui| {
+                    let settings = &mut self.conv.settings;
+                    setting_number(
                         ui,
-                        &mut self.conv.settings.searxng_url,
-                        "https://searxng.example.com",
-                    )
-                    .on_hover_text(
-                        "Base URL of your SearXNG instance. JSON output must be enabled (search.formats: [html, json]).",
+                        "Max tool calls per run",
+                        Some("0 means no cap."),
+                        &mut settings.max_tool_rounds,
+                        0,
+                        0..=u32::MAX,
                     );
-                    if self.conv.settings.searxng_url.trim().is_empty() {
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(
-                                "No URL set — web_search will report a configuration error.",
-                            )
-                            .size(FS_TINY)
-                            .color(c_text_faint()),
-                        );
-                    } else {
-                        field_hint(ui, "Requires JSON format enabled on the instance.");
-                    }
-                }
-            }
+                    setting_number(
+                        ui,
+                        "Bash timeout cap (seconds)",
+                        Some("Longest one command may run, 5\u{2013}3600. The model's own timeout is clamped to it."),
+                        &mut settings.bash_timeout_cap_secs,
+                        300,
+                        5..=3600,
+                    );
+                    setting_number(
+                        ui,
+                        "Stop idle ACP agents after (minutes)",
+                        Some("Claude Code, Codex and Copilot chats each keep an agent process. An idle one is stopped and resumed on the next message. 0 means never."),
+                        &mut settings.acp_idle_minutes,
+                        0,
+                        0..=24 * 60,
+                    );
+                    let live = crate::agent::acp::live_count();
+                    let help = format!(
+                        "Past this, the least recently used idle agent stops. Running now: {live}. 0 means no cap."
+                    );
+                    setting_number(
+                        ui,
+                        "Max ACP agents running",
+                        Some(&help),
+                        &mut settings.acp_max_live_agents,
+                        0,
+                        0..=u32::MAX,
+                    );
+                },
+            );
         });
     }
 }

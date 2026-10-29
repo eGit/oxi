@@ -1,14 +1,15 @@
 //! Per-provider model, endpoint, credential, and reasoning configuration.
 
-use eframe::egui::{self, Align, Layout, RichText, Ui};
+use eframe::egui::{RichText, Ui};
 
 use crate::settings::LlmProviderKind;
 use crate::theme::*;
 use crate::ui::chrome::{
-    alert_banner, card_frame, field_hint, field_label, field_label_first, nested_card_frame,
-    settings_caption, settings_card_header, settings_password_field, settings_text_field,
-    settings_text_field_width,
+    CONTROL_W, alert_banner, ghost_button, setting_block, setting_row, setting_select,
+    setting_switch, settings_disclosure, settings_password_field, settings_section,
+    settings_text_field, settings_text_field_width,
 };
+use crate::ui::select_menu::{SelectMenu, SelectOption};
 
 use super::super::OxiApp;
 
@@ -25,100 +26,110 @@ impl OxiApp {
         // ACP agents advertise their own models and thinking levels, which the composer
         // offers; only Claude Code needs a field, for ids its adapter doesn't list.
         if kind == LlmProviderKind::ClaudeCodeAcp {
-            card_frame().show(ui, |ui| {
-                settings_card_header(ui, "Model", Some("Pick the model and effort in the composer."));
-                field_label_first(ui, "Model id");
-                settings_text_field(
+            settings_section(ui, "Model", Some("Pick the model and effort in the composer."), |ui| {
+                setting_row(
                     ui,
-                    &mut self.conv.settings.provider_mut(kind).model_id,
-                    "e.g. claude-opus-5",
-                );
-                field_hint(
-                    ui,
-                    "Follows the composer's picker. Type an id the agent doesn't list (e.g. claude-opus-5) to launch with it.",
+                    "Model id",
+                    Some("Follows the composer's picker. Type an id the agent doesn't list to launch with it."),
+                    |ui| {
+                        settings_text_field_width(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).model_id,
+                            "e.g. claude-opus-5",
+                            CONTROL_W - 18.0,
+                        )
+                    },
                 );
             });
-            ui.add_space(12.0);
         } else if !kind.is_acp() {
             self.render_model_card(ui, kind);
-            ui.add_space(12.0);
         }
 
         // ── Connection ─────────────────────────────────────────────────────
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Connection",
-                Some("Endpoint and credentials. Secrets stay in the OS keychain."),
-            );
-
+        settings_section(ui, "Connection", None, |ui| {
             if kind.is_acp() {
                 // ACP launches a subprocess instead of hitting an HTTP endpoint.
-                field_label_first(ui, "Agent command");
                 let default_command = self.conv.settings.provider(kind).default_acp_command();
-                settings_text_field(
+                setting_block(
                     ui,
-                    &mut self.conv.settings.provider_mut(kind).acp_command,
-                    default_command,
+                    "Agent command",
+                    Some("Empty runs the recommended default."),
+                    |ui| {
+                        settings_text_field(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).acp_command,
+                            default_command,
+                        );
+                        if kind == LlmProviderKind::AntigravityAcp {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(
+                                    "The official server is downloaded on first launch. Sign in \
+                                     with Google in the browser when asked, or give a Gemini API \
+                                     key below.",
+                                )
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                            );
+                            ui.hyperlink_to(
+                                RichText::new("Antigravity authentication and plans").size(FS_TINY),
+                                "https://antigravity.google/docs/ide/extensions/zed/",
+                            );
+                        }
+                    },
                 );
-                field_hint(
+                let status = self.fetch_status_text(kind);
+                setting_row(
                     ui,
-                    "Shell command for the ACP server. Leave empty for the recommended default.",
+                    "Check that it starts",
+                    Some(status.as_deref().unwrap_or("Failures include installation hints.")),
+                    |ui| {
+                        if ghost_button(ui, "Test launch", false).clicked() {
+                            self.spawn_model_fetch(ui.ctx(), kind);
+                        }
+                    },
                 );
-                if kind == LlmProviderKind::AntigravityAcp {
-                    field_hint(ui, "The official server is downloaded on first launch. Sign in with Google in the browser when prompted, or provide a Gemini API key below. Models are listed in the composer.");
-                    ui.hyperlink_to("Antigravity authentication and plans", "https://antigravity.google/docs/ide/extensions/zed/");
-                }
-                ui.add_space(4.0);
-                if crate::ui::chrome::ghost_button(ui, "Test launch", false)
-                    .on_hover_text("Start the agent once to check it runs; failures include installation hints")
-                    .clicked()
-                {
-                    self.spawn_model_fetch(ui.ctx(), kind);
-                }
-                self.model_fetch_status(ui, kind);
+                self.fetch_error(ui, kind);
             } else if kind.has_custom_endpoint() {
-                field_label_first(ui, "Base URL (optional)");
-                settings_text_field(
-                    ui,
-                    &mut self.conv.settings.provider_mut(kind).base_url,
-                    kind.default_base_url(),
-                );
-                if let Some(warning) = self.conv.settings.provider(kind).base_url_warning() {
-                    ui.add_space(4.0);
-                    alert_banner(ui, warning, false);
-                }
-                ui.add_space(6.0);
+                setting_block(ui, "Base URL", Some("Empty uses the default."), |ui| {
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.settings.provider_mut(kind).base_url,
+                        kind.default_base_url(),
+                    );
+                    if let Some(warning) = self.conv.settings.provider(kind).base_url_warning() {
+                        ui.add_space(4.0);
+                        alert_banner(ui, warning, false);
+                    }
+                });
                 let mut accept_invalid = self.conv.settings.provider(kind).allows_self_signed_tls();
-                if crate::ui::chrome::toggle(ui,
-                        &mut accept_invalid,
-                        RichText::new("Accept self-signed TLS certificates")
-                            .size(FS_SMALL)
-                            .color(c_text()),
-                    )
-                    .on_hover_text(
-                        "Skips certificate validation for this endpoint. Only enable it for a server you control on a trusted network: anyone on the path could otherwise read the API key.",
-                    )
-                    .changed()
+                if setting_switch(
+                    ui,
+                    &mut accept_invalid,
+                    "Accept self-signed TLS certificates",
+                    Some("Only for a server you control on a trusted network: anyone on the path could read the API key."),
+                )
+                .changed()
                 {
                     self.conv.settings.provider_mut(kind).allow_self_signed_tls =
                         Some(accept_invalid);
                 }
             } else {
-                field_label_first(ui, "Endpoint");
-                ui.label(
-                    RichText::new(kind.default_base_url())
-                        .size(FS_SMALL)
-                        .color(c_text_muted())
-                        .monospace(),
-                );
-                field_hint(
+                setting_row(
                     ui,
-                    "This provider uses its official endpoint. Use OpenAI Compatible or Anthropic Compatible for a custom URL.",
+                    "Endpoint",
+                    Some("The official one. Use OpenAI or Anthropic Compatible for a custom URL."),
+                    |ui| {
+                        ui.label(
+                            RichText::new(kind.default_base_url())
+                                .size(FS_SMALL)
+                                .color(c_text_muted())
+                                .monospace(),
+                        )
+                    },
                 );
             }
 
-            field_label(ui, "API key / token");
             let key_hint = match kind {
                 LlmProviderKind::OpenAi => "OpenAI API key",
                 LlmProviderKind::OpenRouter => "OpenRouter API key",
@@ -146,34 +157,43 @@ impl OxiApp {
                 LlmProviderKind::CopilotAcp => {
                     "Optional COPILOT_GITHUB_TOKEN (else Copilot CLI's own login is used)"
                 }
-                LlmProviderKind::AntigravityAcp => "Optional GEMINI_API_KEY (else Google account sign-in is used)",
+                LlmProviderKind::AntigravityAcp => {
+                    "Optional GEMINI_API_KEY (else Google account sign-in is used)"
+                }
                 LlmProviderKind::Router => "",
             };
-            settings_password_field(
-                ui,
-                &mut self.conv.settings.provider_mut(kind).api_key,
-                key_hint,
-            );
+            let key_help = if kind.is_acp() {
+                "Kept in the OS keychain."
+            } else {
+                "Kept in the OS keychain. Empty falls back to the environment variable."
+            };
+            setting_block(ui, "API key / token", Some(key_help), |ui| {
+                settings_password_field(
+                    ui,
+                    &mut self.conv.settings.provider_mut(kind).api_key,
+                    key_hint,
+                )
+            });
 
             if kind == LlmProviderKind::OpenRouter {
-                ui.add_space(10.0);
-                nested_card_frame().show(ui, |ui| {
-                    settings_caption(ui, "Optional OpenRouter headers");
-                    settings_text_field(
-                        ui,
-                        &mut self
-                            .conv
-                            .settings
-                            .provider_mut(kind)
-                            .openrouter_http_referer,
-                        "HTTP-Referer",
-                    );
-                    ui.add_space(4.0);
-                    settings_text_field(
-                        ui,
-                        &mut self.conv.settings.provider_mut(kind).openrouter_title,
-                        "X-Title",
-                    );
+                settings_disclosure(ui, "OpenRouter headers", &[], |ui| {
+                    let config = self.conv.settings.provider_mut(kind);
+                    setting_row(ui, "HTTP-Referer", Some("Your app's URL, for OpenRouter rankings."), |ui| {
+                        settings_text_field_width(
+                            ui,
+                            &mut config.openrouter_http_referer,
+                            "https://\u{2026}",
+                            CONTROL_W - 18.0,
+                        )
+                    });
+                    setting_row(ui, "X-Title", Some("Your app's name."), |ui| {
+                        settings_text_field_width(
+                            ui,
+                            &mut config.openrouter_title,
+                            "oxi",
+                            CONTROL_W - 18.0,
+                        )
+                    });
                 });
             }
         });
@@ -187,143 +207,124 @@ impl OxiApp {
         }
     }
 
-    /// Status line for the provider's model fetch (also the ACP launch check).
-    fn model_fetch_status(&self, ui: &mut Ui, kind: LlmProviderKind) {
-        if let Some(f) = self.conv.fetched_models.get(&kind) {
-            if let Some(e) = f.error.clone() {
-                ui.add_space(4.0);
-                alert_banner(ui, &e, true);
-            } else if f.loading {
-                ui.label(
-                    RichText::new(if kind.is_acp() {
-                        "Starting agent…"
-                    } else {
-                        "Loading models…"
-                    })
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
-                );
-            } else if !f.models.is_empty() {
-                ui.label(
-                    RichText::new(if kind.is_acp() {
-                        format!("Agent runs · {} models", f.models.len())
-                    } else {
-                        format!("{} models available", f.models.len())
-                    })
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
-                );
-            }
+    /// One line on the provider's model fetch (also the ACP launch check), if there is one.
+    fn fetch_status_text(&self, kind: LlmProviderKind) -> Option<String> {
+        let f = self.conv.fetched_models.get(&kind)?;
+        if f.error.is_some() {
+            None
+        } else if f.loading {
+            Some(if kind.is_acp() { "Starting agent\u{2026}" } else { "Loading models\u{2026}" }.to_owned())
+        } else if !f.models.is_empty() {
+            Some(if kind.is_acp() {
+                format!("Agent runs \u{00b7} {} models", f.models.len())
+            } else {
+                format!("{} models available", f.models.len())
+            })
+        } else {
+            None
+        }
+    }
+
+    /// The model fetch's error, as a banner.
+    fn fetch_error(&self, ui: &mut Ui, kind: LlmProviderKind) {
+        if let Some(e) = self
+            .conv
+            .fetched_models
+            .get(&kind)
+            .and_then(|f| f.error.clone())
+        {
+            ui.add_space(2.0);
+            alert_banner(ui, &e, true);
+            ui.add_space(8.0);
         }
     }
 
     /// Model id, context window and effort for providers oxi talks to directly.
     fn render_model_card(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
-        card_frame().show(ui, |ui| {
-            settings_card_header(ui, "Model", Some("Primary model id and context window for this provider."));
-
-            field_label_first(ui, "Model id");
-            let have = self
+        settings_section(ui, "Model", None, |ui| {
+            let fetched = self
                 .conv
                 .fetched_models
                 .get(&kind)
-                .is_some_and(|f| !f.models.is_empty());
-            // Refresh button pinned to the right edge; the model field/combo fills the
-            // rest of the row on the left. Laying the whole row out right-to-left keeps
-            // the field flush-left instead of leaving it stranded on the right.
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let refresh = crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
+                .map(|f| f.models.clone())
+                .unwrap_or_default();
+            let status = self.fetch_status_text(kind);
+            let current = self.conv.settings.provider(kind).model_id.clone();
+            setting_row(
+                ui,
+                "Model",
+                Some(status.as_deref().unwrap_or("Load the provider's list with the refresh button.")),
+                |ui| {
+                    if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
                         .on_hover_text("Load available models from provider")
-                        .clicked();
-                    if have {
-                        let fetched = self
-                            .conv
-                            .fetched_models
-                            .get(&kind)
-                            .map(|f| f.models.clone())
-                            .unwrap_or_default();
-                        let current = self.conv.settings.provider(kind).model_id.clone();
-                        let label = if current.is_empty() {
-                            "(custom)".to_string()
-                        } else {
-                            current.clone()
-                        };
-                        egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
-                            .icon(crate::ui::chrome::combo_chevron_icon)
-                            .selected_text(label)
-                            .width(ui.available_width())
-                            .show_ui(ui, |ui| {
-                                if !current.is_empty() && fetched.iter().all(|x| x != &current) {
-                                    let _ =
-                                        ui.selectable_label(false, format!("{current} (custom)"));
-                                }
-                                for m in &fetched {
-                                    if ui.selectable_label(*m == current, m.clone()).clicked() {
-                                        self.conv.settings.provider_mut(kind).model_id = m.clone();
-                                    }
-                                }
-                            });
-                    } else {
-                        settings_text_field(
-                            ui,
-                            &mut self.conv.settings.provider_mut(kind).model_id,
-                            "e.g. gpt-4o-mini or kimi-k2.7-code",
-                        );
-                    }
-                    if refresh {
-                        self.spawn_model_fetch(ui.ctx(), kind);
-                    }
-                });
-            });
-            // The combo replaces the free-text field once a list arrives, so keep an explicit
-            // escape hatch for ids the provider doesn't advertise.
-            if have {
-                ui.add_space(4.0);
-                field_label(ui, "Custom model id");
-                settings_text_field(
-                    ui,
-                    &mut self.conv.settings.provider_mut(kind).model_id,
-                    "e.g. claude-opus-5",
-                );
-            }
-            self.model_fetch_status(ui, kind);
-
-            // Context window (auto from catalog; editable override).
-            {
-                let cw = self.conv.settings.provider(kind).context_window;
-                let resolved = self
-                    .conv
-                    .settings
-                    .provider(kind)
-                    .effective_context_window(self.conv.settings.context_window_default);
-                field_label(ui, "Context window (tokens, empty = auto)");
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    // Empty when automatic, so the hint shows what "auto" resolves to.
-                    let mut value = cw.map(|n| n.to_string()).unwrap_or_default();
-                    let hint = format!("auto ({})", group_thousands(resolved as u64));
-                    if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
-                        let parsed = value.trim().parse::<usize>().ok();
-                        self.conv.settings.provider_mut(kind).context_window =
-                            parsed.filter(|&n| n > 0);
-                    }
-                    if crate::ui::chrome::ghost_button(ui, "Auto", false)
-                        .on_hover_text("Resolve context window from the model catalog")
                         .clicked()
                     {
-                        self.conv.settings.provider_mut(kind).context_window = None;
+                        self.spawn_model_fetch(ui.ctx(), kind);
                     }
-                    ui.label(
-                        RichText::new(format!(
-                            "Effective: {} tokens",
-                            group_thousands(resolved as u64)
-                        ))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
+                    ui.add_space(4.0);
+                    if fetched.is_empty() {
+                        settings_text_field_width(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).model_id,
+                            "e.g. gpt-4o-mini",
+                            CONTROL_W - 18.0,
+                        );
+                    } else {
+                        let label = if current.is_empty() {
+                            "Choose a model"
+                        } else {
+                            current.as_str()
+                        };
+                        if let Some(i) = SelectMenu::new(("model", kind.slug()), label)
+                            .framed(CONTROL_W)
+                            .show(ui, || {
+                                fetched
+                                    .iter()
+                                    .map(|m| SelectOption::new(m.clone(), *m == current))
+                                    .collect()
+                            })
+                        {
+                            self.conv.settings.provider_mut(kind).model_id = fetched[i].clone();
+                        }
+                    }
+                },
+            );
+            self.fetch_error(ui, kind);
+            // The list replaces the free-text field once it arrives, so keep a way to use an
+            // id the provider doesn't advertise.
+            if !fetched.is_empty() {
+                settings_disclosure(ui, "Use a model that isn't listed", &[], |ui| {
+                    setting_row(ui, "Model id", None, |ui| {
+                        settings_text_field_width(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).model_id,
+                            "e.g. claude-opus-5",
+                            CONTROL_W - 18.0,
+                        )
+                    });
                 });
             }
+
+            let cw = self.conv.settings.provider(kind).context_window;
+            let resolved = self
+                .conv
+                .settings
+                .provider(kind)
+                .effective_context_window(self.conv.settings.context_window_default);
+            let help = format!(
+                "Empty takes it from the model catalog. In use: {} tokens.",
+                group_thousands(resolved as u64)
+            );
+            setting_row(ui, "Context window", Some(&help), |ui| {
+                // Empty when automatic, so the hint shows what "auto" resolves to.
+                let mut value = cw.map(|n| n.to_string()).unwrap_or_default();
+                let hint = format!("auto ({})", group_thousands(resolved as u64));
+                if settings_text_field_width(ui, &mut value, &hint, 120.0).changed() {
+                    let parsed = value.trim().parse::<usize>().ok();
+                    self.conv.settings.provider_mut(kind).context_window =
+                        parsed.filter(|&n| n > 0);
+                }
+            });
 
             if matches!(
                 kind,
@@ -338,14 +339,6 @@ impl OxiApp {
                     LlmProviderKind::OpenAi
                         | LlmProviderKind::GptCodex
                         | LlmProviderKind::AzureOpenAi
-                );
-                field_label(
-                    ui,
-                    if is_gpt {
-                        "Thinking / reasoning level"
-                    } else {
-                        "Claude effort (4.6+ adaptive thinking)"
-                    },
                 );
                 let current = self.conv.settings.provider(kind).effort.clone();
                 let values: &[(&str, &str)] = if is_gpt {
@@ -365,25 +358,25 @@ impl OxiApp {
                     .find(|(value, _)| *value == current)
                     .map(|(_, label)| *label)
                     .unwrap_or("default");
-                egui::ComboBox::from_id_salt(("effort_combo", kind.slug()))
-                    .icon(crate::ui::chrome::combo_chevron_icon)
-                    .selected_text(selected)
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for (value, label) in values {
-                            if ui.selectable_label(current == *value, *label).clicked() {
-                                self.conv.settings.provider_mut(kind).effort = value.to_string();
-                            }
-                        }
-                    });
-                field_hint(
+                if let Some(i) = setting_select(
                     ui,
-                    if is_gpt {
-                        "Sent as reasoning_effort for GPT reasoning models (gpt-5/o-series) and as reasoning.effort for ChatGPT Codex."
+                    ("effort", kind.slug()),
+                    if is_gpt { "Reasoning level" } else { "Effort" },
+                    Some(if is_gpt {
+                        "For GPT reasoning models (gpt-5, o-series) and ChatGPT Codex."
                     } else {
-                        "Sent as output_config.effort only for Claude 4.6+ adaptive-thinking models."
+                        "For Claude 4.6+ adaptive-thinking models."
+                    }),
+                    selected,
+                    || {
+                        values
+                            .iter()
+                            .map(|(value, label)| SelectOption::new(*label, current == *value))
+                            .collect()
                     },
-                );
+                ) {
+                    self.conv.settings.provider_mut(kind).effort = values[i].0.to_string();
+                }
             }
         });
     }

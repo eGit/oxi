@@ -246,7 +246,6 @@ impl OxiApp {
                 },
                 settings: settings.clone(),
                 settings_page: state::SettingsPageState {
-                    sidebar_width: 220.0,
                     provider_tab: crate::settings::LlmProviderKind::OpenAi,
                     ..Default::default()
                 },

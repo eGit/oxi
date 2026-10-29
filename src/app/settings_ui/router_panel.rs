@@ -6,9 +6,11 @@ use crate::router::{ledger, quota};
 use crate::settings::{Billing, LlmProviderKind, RouterStrategy};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, field_label, ghost_button_icon, hairline, settings_card_header,
+    card_frame, field_hint, ghost_button_icon, hairline, setting_row, setting_select,
+    setting_switch, settings_card_header, settings_disclosure, settings_section,
     settings_text_field_width,
 };
+use crate::ui::select_menu::{SelectMenu, SelectOption};
 use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 /// Re-probe quota at most this often while the page is open.
@@ -24,98 +26,78 @@ impl OxiApp {
         self.maybe_auto_refresh_quota(ui.ctx());
 
         self.render_router_strategy_card(ui);
-        ui.add_space(12.0);
         self.render_router_quota_card(ui, &configured);
-        ui.add_space(12.0);
         self.render_router_candidates_card(ui, &configured);
     }
 
     fn render_router_strategy_card(&mut self, ui: &mut Ui) {
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "How it decides",
-                Some(
-                    "Each turn is classified as light, standard or heavy; candidates are scored on quality for that tier, subscription quota left, estimated cost, and staying on the same model for prompt caching. The choice and the reason appear above every reply.",
-                ),
-            );
-
-            crate::ui::chrome::toggle(ui, &mut self.conv.settings.router.use_jev, "Use Jev for multilingual task classification (default)");
-            field_hint(ui, "Uses your OpenRouter API key from Settings or OPENROUTER_API_KEY. Sends the current message and limited recent text context to Jev 1.13; classification is billed to OpenRouter and included in the monthly budget. Without a key, or on errors / uncertain answers, uses a conservative local fallback.");
-
-            field_label(ui, "Default strategy (new chats; each chat can change it in the composer)");
+        settings_section(
+            ui,
+            "How it decides",
+            Some("Each turn is rated light, standard or heavy, then candidates are scored on quality, quota left, cost and prompt caching. The choice and why show above every reply."),
+            |ui| {
             let router_cfg = self.conv.settings.provider_mut(LlmProviderKind::Router);
             let current = RouterStrategy::from_id(&router_cfg.model_id);
-            egui::ComboBox::from_id_salt("router_default_strategy")
-                .selected_text(current.label())
-                .width(240.0)
-                .show_ui(ui, |ui| {
-                    for s in RouterStrategy::ALL {
-                        if ui
-                            .selectable_label(s == current, s.label())
-                            .on_hover_text(s.description())
-                            .clicked()
-                        {
-                            router_cfg.model_id = s.id().to_string();
-                        }
-                    }
-                });
-            field_hint(ui, current.description());
+            if let Some(i) = setting_select(
+                ui,
+                "router_default_strategy",
+                "Default strategy",
+                Some(current.description()),
+                current.label(),
+                || {
+                    RouterStrategy::ALL
+                        .iter()
+                        .map(|s| SelectOption::new(s.label(), *s == current).detail(s.description()))
+                        .collect()
+                },
+            ) {
+                router_cfg.model_id = RouterStrategy::ALL[i].id().to_string();
+            }
 
             let router = &mut self.conv.settings.router;
-            field_label(ui, "Subscription reserve");
-            ui.add(
-                egui::Slider::new(&mut router.reserve_pct, 0..=50)
-                    .suffix("%")
-                    .text("kept for heavy tasks"),
-            );
-            field_hint(
+            setting_row(
                 ui,
-                "Light and standard tasks stop using a subscription once less than this share of its usage window is left.",
+                "Subscription reserve",
+                Some("Light and standard tasks leave a subscription once less than this share of its window is left."),
+                |ui| {
+                    ui.spacing_mut().slider_width = 120.0;
+                    ui.add(egui::Slider::new(&mut router.reserve_pct, 0..=50).suffix("%"))
+                },
             );
-
-            field_label(ui, "Monthly pay-per-use budget");
-            ui.horizontal(|ui| {
+            let budget_help = format!(
+                "Pay-per-use providers are skipped past it; 0 means no cap. Spent this month (est.): ${:.2}.",
+                ledger::spend_this_month()
+            );
+            setting_row(ui, "Monthly pay-per-use budget", Some(&budget_help), |ui| {
                 ui.add(
                     egui::DragValue::new(&mut router.monthly_budget_usd)
                         .range(0.0..=10_000.0)
                         .speed(1.0)
                         .prefix("$"),
-                );
-                ui.label(
-                    RichText::new(format!(
-                        "spent this month (est.): ${:.2}",
-                        ledger::spend_this_month()
-                    ))
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
+                )
+            });
+            setting_switch(
+                ui,
+                &mut router.failover,
+                "Continue with another provider when quota is reached",
+                Some("Keeps progress and approval rules. An agent picked in the composer only moves to other ACP agents set up here."),
+            );
+            setting_switch(
+                ui,
+                &mut router.wait_for_quota,
+                "Wait for quota to reset when every provider is out",
+                Some("The turn pauses until the first provider resets (up to 24 hours), then continues."),
+            );
+            settings_disclosure(ui, "Task classification", &[], |ui| {
+                setting_switch(
+                    ui,
+                    &mut router.use_jev,
+                    "Use Jev to classify tasks",
+                    Some("Multilingual, via your OpenRouter key; billed there and counted in the budget. Without a key, or when unsure, a local fallback decides."),
                 );
             });
-            field_hint(ui, "0 = no cap. Pay-per-use providers are skipped once the cap would be exceeded.");
-
-            ui.add_space(8.0);
-            crate::ui::chrome::toggle(ui,
-                &mut router.failover,
-                RichText::new("Continue with another provider when quota is reached")
-                    .size(FS_SMALL)
-                    .color(c_text()),
-            )
-            .on_hover_text(
-                "Continue with the next eligible API or ACP provider after a quota failure, preserving reported progress and approval policies.",
-            );
-            field_hint(ui, "In Router mode it may switch to any eligible provider. An agent picked in the composer only switches to other ACP agents already set up on this machine, so it stays on subscriptions. At most two switches at a time; unfinished tools or pending approvals stop continuation. An explicit ‘only’ provider instruction disables switching.");
-
-            ui.add_space(4.0);
-            crate::ui::chrome::toggle(ui,
-                &mut router.wait_for_quota,
-                RichText::new("Wait for quota to reset when every provider is out")
-                    .size(FS_SMALL)
-                    .color(c_text()),
-            )
-            .on_hover_text(
-                "Keeps a long task going unattended: the turn pauses until the first provider resets (up to 24 hours), then continues.",
-            );
-        });
+        },
+        );
     }
 
     fn render_router_quota_card(&mut self, ui: &mut Ui, configured: &[LlmProviderKind]) {
@@ -287,17 +269,21 @@ impl OxiApp {
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let current = prefs.billing.unwrap_or(default_billing);
-                        egui::ComboBox::from_id_salt(("router_billing", kind.slug()))
-                            .selected_text(current.label())
-                            .width(130.0)
-                            .show_ui(ui, |ui| {
-                                for b in [Billing::Subscription, Billing::PayPerUse, Billing::Local]
-                                {
-                                    if ui.selectable_label(b == current, b.label()).clicked() {
-                                        prefs.billing = (b != default_billing).then_some(b);
-                                    }
-                                }
-                            });
+                        const BILLINGS: [Billing; 3] =
+                            [Billing::Subscription, Billing::PayPerUse, Billing::Local];
+                        if let Some(i) =
+                            SelectMenu::new(("router_billing", kind.slug()), current.label())
+                                .framed(140.0)
+                                .show(ui, || {
+                                    BILLINGS
+                                        .iter()
+                                        .map(|b| SelectOption::new(b.label(), *b == current))
+                                        .collect()
+                                })
+                        {
+                            let b = BILLINGS[i];
+                            prefs.billing = (b != default_billing).then_some(b);
+                        }
                     });
                 });
                 if !prefs.enabled {

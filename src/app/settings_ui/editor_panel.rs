@@ -1,12 +1,14 @@
 //! Text editor preferences, named after their Sublime Text counterparts, with a live preview.
 
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, Ui};
 
 use crate::settings::{DrawWhiteSpace, EDITOR_FONT_SIZE_MAX, EDITOR_FONT_SIZE_MIN, EditorSettings};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, hairline, settings_card_header, settings_section_title,
+    SECTION_GAP, setting_row, setting_select, setting_switch, settings_section,
+    settings_section_title,
 };
+use crate::ui::select_menu::SelectOption;
 
 use super::super::OxiApp;
 
@@ -23,7 +25,7 @@ impl OxiApp {
     pub(super) fn render_settings_editor_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
-            "Editor",
+            "Editor & terminal",
             Some("How files look and behave in the editor. Changes show as you make them."),
         );
         let mod_key = if cfg!(target_os = "macos") {
@@ -33,144 +35,103 @@ impl OxiApp {
         };
         let prefs = &mut self.conv.settings.editor;
 
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Font size",
-                Some("The code font itself is chosen under Appearance."),
+        settings_section(ui, "Text", None, |ui| {
+            let help = format!(
+                "{mod_key}= and {mod_key}- change it while a file is open; {mod_key}0 resets. \
+                 The code font is under General."
             );
-            ui.spacing_mut().slider_width = 260.0;
-            ui.add(
-                egui::Slider::new(
-                    &mut prefs.font_size,
-                    EDITOR_FONT_SIZE_MIN..=EDITOR_FONT_SIZE_MAX,
+            setting_row(ui, "Font size", Some(&help), |ui| {
+                ui.spacing_mut().slider_width = 150.0;
+                ui.add(
+                    egui::Slider::new(
+                        &mut prefs.font_size,
+                        EDITOR_FONT_SIZE_MIN..=EDITOR_FONT_SIZE_MAX,
+                    )
+                    .step_by(0.5)
+                    .suffix(" pt"),
                 )
-                .step_by(0.5)
-                .suffix(" pt"),
-            );
-            field_hint(
-                ui,
-                &format!(
-                    "{mod_key}= and {mod_key}- change it while a file is open; {mod_key}0 resets."
-                ),
-            );
-            ui.add_space(10.0);
+            });
+            ui.add_space(2.0);
             preview(ui, prefs);
+            ui.add_space(10.0);
         });
 
-        ui.add_space(10.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(ui, "Layout", None);
-            check(
-                ui,
-                &mut prefs.word_wrap,
-                "Word wrap",
-                "Long lines wrap at the window edge.",
-            );
-            ui.add_enabled_ui(prefs.word_wrap, |ui| {
-                check(
+        settings_section(ui, "Layout", None, |ui| {
+            setting_switch(ui, &mut prefs.word_wrap, "Word wrap", None);
+            if prefs.word_wrap {
+                setting_switch(
                     ui,
                     &mut prefs.wrap_indent,
                     "Indent wrapped lines",
-                    "Wrapped rows continue at the line's indentation.",
+                    Some("Wrapped rows continue at the line's indentation."),
                 );
-            });
-            check(
-                ui,
-                &mut prefs.minimap,
-                "Minimap",
-                "A zoomed-out map of the file beside the text.",
-            );
-            check(
+            }
+            setting_switch(ui, &mut prefs.minimap, "Minimap", None);
+            setting_switch(
                 ui,
                 &mut prefs.scroll_past_end,
                 "Scroll past end",
-                "The last line can be scrolled up to the top of the view.",
+                Some("The last line can be scrolled up to the top of the view."),
             );
+        });
 
-            ui.add_space(8.0);
-            hairline(ui);
-            ui.add_space(10.0);
-            settings_card_header(ui, "Highlights", None);
-            check(
+        settings_section(ui, "Editing", None, |ui| {
+            setting_switch(
                 ui,
                 &mut prefs.auto_complete,
                 "Auto complete",
-                "Offer words from the file while you type; Enter or Tab inserts one.",
+                Some("Offer words from the file while you type; Enter or Tab inserts one."),
             );
-            check(
+            setting_switch(ui, &mut prefs.highlight_line, "Highlight current line", None);
+            let current = prefs.draw_white_space;
+            if let Some(mode) = setting_select(
                 ui,
-                &mut prefs.highlight_line,
-                "Highlight current line",
-                "Tint the line the caret is on.",
-            );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Draw white space")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                );
-                ui.add_space(8.0);
-                egui::ComboBox::from_id_salt("editor_draw_white_space")
-                    .icon(crate::ui::chrome::combo_chevron_icon)
-                    .selected_text(prefs.draw_white_space.label())
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for mode in DrawWhiteSpace::ALL {
-                            ui.selectable_value(&mut prefs.draw_white_space, mode, mode.label());
-                        }
-                    });
-            });
-        });
-
-        ui.add_space(10.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(ui, "On save", None);
-            check(
-                ui,
-                &mut prefs.trim_trailing_white_space_on_save,
-                "Trim trailing white space",
-                "Spaces and tabs at the ends of lines are removed.",
-            );
-            check(
-                ui,
-                &mut prefs.ensure_newline_at_eof_on_save,
-                "Ensure newline at end of file",
-                "A file that doesn't end with a newline gets one.",
-            );
-            field_hint(ui, "Both are undoable with the save's own undo step.");
-        });
-
-        ui.add_space(10.0);
-        if ui
-            .add_enabled(
-                *prefs != EditorSettings::default(),
-                egui::Button::new(RichText::new("Restore defaults").size(FS_SMALL)),
+                "editor_draw_white_space",
+                "Draw white space",
+                None,
+                current.label(),
+                || {
+                    DrawWhiteSpace::ALL
+                        .iter()
+                        .map(|mode| SelectOption::new(mode.label(), *mode == current))
+                        .collect()
+                },
             )
-            .clicked()
-        {
-            *prefs = EditorSettings::default();
-        }
-    }
-}
-
-/// A toggle with its explanation underneath, aligned with the label.
-fn check(ui: &mut Ui, value: &mut bool, label: &str, help: &str) {
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 1.0;
-        crate::ui::chrome::toggle(
-            ui,
-            value,
-            RichText::new(label).size(FS_SMALL).color(c_text()),
-        );
-        let indent = crate::ui::chrome::TOGGLE_W + crate::ui::chrome::TOGGLE_GAP;
-        ui.horizontal(|ui| {
-            ui.add_space(indent);
-            ui.label(RichText::new(help).size(FS_TINY).color(c_text_faint()));
+            .and_then(|i| DrawWhiteSpace::ALL.get(i))
+            {
+                prefs.draw_white_space = *mode;
+            }
         });
-    });
-    ui.add_space(8.0);
+
+        settings_section(
+            ui,
+            "On save",
+            Some("Both are undone with the save's own undo step."),
+            |ui| {
+                setting_switch(
+                    ui,
+                    &mut prefs.trim_trailing_white_space_on_save,
+                    "Trim trailing white space",
+                    None,
+                );
+                setting_switch(
+                    ui,
+                    &mut prefs.ensure_newline_at_eof_on_save,
+                    "Ensure newline at end of file",
+                    None,
+                );
+            },
+        );
+
+        if *prefs != EditorSettings::default() {
+            if crate::ui::chrome::ghost_button(ui, "Restore editor defaults", false).clicked() {
+                *prefs = EditorSettings::default();
+            }
+            ui.add_space(SECTION_GAP);
+        }
+
+        self.render_settings_terminal_section(ui);
+    }
 }
 
 /// A few lines of code drawn the way the editor will: font size, line numbers, the caret line

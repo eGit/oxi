@@ -2,14 +2,13 @@
 //! [`crate::voice_models`]). Unlike the local-LLM HF panel there's a small fixed model
 //! catalog instead of a HuggingFace search UI, since there's one canonical upstream repo.
 
-use eframe::egui::{self, Align, Layout, RichText, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use crate::app::task_runner::spawn_async_task;
 use crate::theme::*;
 use crate::ui::chrome::{
-    alert_banner, card_frame, field_label, ghost_button, ghost_button_icon,
-    primary_button_icon_widget, settings_card_header, settings_list_row, settings_section_title,
-    settings_text_field_width,
+    alert_banner, ghost_button, ghost_button_icon, ghost_button_icon_enabled, setting_row,
+    setting_switch, settings_section, settings_section_title, settings_text_field_width,
 };
 use crate::voice_models::{self, VOICE_MODEL_CATALOG, VoiceModelCatalogEntry, VoiceModelMsg};
 
@@ -20,72 +19,59 @@ impl OxiApp {
     pub(super) fn render_settings_voice_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
-            "Voice dictation",
-            Some(
-                "Transcribe speech locally with a downloaded Whisper model — audio never \
-                 leaves this machine.",
-            ),
+            "Voice",
+            Some("Dictate into the composer. Speech is transcribed on this machine with Whisper."),
         );
 
-        card_frame().show(ui, |ui| {
-            settings_card_header(
+        settings_section(ui, "Dictation", None, |ui| {
+            setting_switch(
                 ui,
-                "Dictation",
+                &mut self.conv.settings.dictation.enabled,
+                "Enable dictation",
                 Some("Shows the mic button in the composer. No model is loaded until you dictate."),
             );
-            let mut enabled = self.conv.settings.dictation.enabled;
-            if crate::ui::chrome::toggle(
+            if !self.conv.settings.dictation.enabled {
+                return;
+            }
+            setting_row(
                 ui,
-                &mut enabled,
-                RichText::new("Enable dictation")
-                    .size(FS_SMALL)
-                    .color(c_text()),
-            )
-            .changed()
-            {
-                self.conv.settings.dictation.enabled = enabled;
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let mut keep_loaded = self.conv.settings.dictation.keep_loaded;
-                if crate::ui::chrome::toggle(
-                    ui,
-                    &mut keep_loaded,
-                    RichText::new("Keep model loaded after use")
-                        .size(FS_SMALL)
-                        .color(c_text()),
-                )
-                .on_hover_text(
-                    "Off (default): unload after each transcription. On: keep warm in memory.",
-                )
-                .changed()
-                {
-                    self.conv.settings.dictation.keep_loaded = keep_loaded;
-                }
-                if ghost_button(ui, "Unload model now", false)
-                    .on_hover_text("Free the whisper model from memory immediately.")
-                    .clicked()
-                {
-                    self.voice.unload();
-                }
-            });
-            field_label(ui, "Language (\"en\", \"ro\", or \"auto\" to detect)");
-            let mut language = self.conv.settings.dictation.language.clone();
-            if settings_text_field_width(ui, &mut language, "auto", 140.0).changed() {
-                self.conv.settings.dictation.language = language;
-            }
+                "Language",
+                Some("A code like en or ro, or auto to detect it."),
+                |ui| {
+                    let mut language = self.conv.settings.dictation.language.clone();
+                    if settings_text_field_width(ui, &mut language, "auto", 72.0).changed() {
+                        self.conv.settings.dictation.language = language;
+                    }
+                },
+            );
+            setting_row(
+                ui,
+                "Keep model loaded after use",
+                Some("Faster next time, but holds the model in memory."),
+                |ui| {
+                    crate::ui::chrome::toggle(ui, &mut self.conv.settings.dictation.keep_loaded, "");
+                    if self.conv.settings.dictation.keep_loaded {
+                        ui.add_space(8.0);
+                        if ghost_button(ui, "Unload now", false)
+                            .on_hover_text("Free the Whisper model from memory now.")
+                            .clicked()
+                        {
+                            self.voice.unload();
+                        }
+                    }
+                },
+            );
         });
 
-        ui.add_space(14.0);
-        card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Whisper model",
-                Some("Download a model, then make it active. Larger = more accurate, slower."),
-            );
-
-            let n = VOICE_MODEL_CATALOG.len();
-            for (i, entry) in VOICE_MODEL_CATALOG.iter().enumerate() {
+        if !self.conv.settings.dictation.enabled {
+            return;
+        }
+        settings_section(
+            ui,
+            "Whisper model",
+            Some("Larger models are more accurate and slower."),
+            |ui| {
+            for entry in VOICE_MODEL_CATALOG.iter() {
                 let downloaded = self
                     .conv
                     .voice_ui
@@ -95,29 +81,9 @@ impl OxiApp {
                     .cloned();
                 let is_active = self.conv.settings.dictation.model_id.as_deref() == Some(entry.id);
                 let downloading = self.conv.voice_ui.downloading_id.as_deref() == Some(entry.id);
+                let size = format!("~{} MB", entry.approx_mb);
 
-                settings_list_row(ui, i + 1 < n, |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(entry.label)
-                                    .size(FS_SMALL)
-                                    .color(c_text())
-                                    .strong(),
-                            );
-                            if is_active {
-                                ui.add_space(6.0);
-                                active_pill(ui, "Active");
-                            }
-                        });
-                        ui.label(
-                            RichText::new(format!("~{} MB", entry.approx_mb))
-                                .size(FS_TINY)
-                                .color(c_text_faint()),
-                        );
-                    });
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                setting_row(ui, entry.label, Some(&size), |ui| {
                         if let Some(m) = &downloaded {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
                                 self.request_confirm(
@@ -126,7 +92,9 @@ impl OxiApp {
                                     },
                                 );
                             }
-                            if !is_active && ghost_button(ui, "Make active", false).clicked() {
+                            if is_active {
+                                active_pill(ui, "Active");
+                            } else if ghost_button(ui, "Make active", false).clicked() {
                                 self.conv.settings.dictation.model_id = Some(m.id.clone());
                             }
                         } else if downloading {
@@ -141,16 +109,17 @@ impl OxiApp {
                                 None => "…".to_string(),
                             };
                             ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
-                        } else if ui
-                            .add_enabled(
-                                self.conv.voice_ui.downloading_id.is_none(),
-                                primary_button_icon_widget(ICON_DOWNLOAD, "Download"),
-                            )
-                            .clicked()
+                        } else if ghost_button_icon_enabled(
+                            ui,
+                            ICON_DOWNLOAD,
+                            "Download",
+                            false,
+                            self.conv.voice_ui.downloading_id.is_none(),
+                        )
+                        .clicked()
                         {
                             self.spawn_voice_download(ui.ctx(), entry);
                         }
-                    });
                 });
             }
 

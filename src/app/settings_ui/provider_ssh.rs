@@ -19,9 +19,6 @@ impl OxiApp {
         // Remote HF shows this inside its numbered "Connect to the host" step, which already
         // explains the context, so the card stays terse there.
         let guided = kind == LlmProviderKind::RemoteHf;
-        if !guided {
-            ui.add_space(12.0);
-        }
         card_frame().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if guided {
@@ -144,7 +141,6 @@ impl OxiApp {
                     .to_string()
             });
 
-        ui.add_space(12.0);
         card_frame().show(ui, |ui| {
             settings_card_header(
                 ui,

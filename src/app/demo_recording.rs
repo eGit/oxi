@@ -224,7 +224,6 @@ fn run_gallery(rec: &mut Recorder<'_>) {
             (SettingsTab::Prompts, "settings-prompts"),
             (SettingsTab::Voice, "settings-voice"),
             (SettingsTab::Editor, "settings-editor"),
-            (SettingsTab::Terminal, "settings-terminal"),
             (SettingsTab::Appearance, "settings-appearance"),
             (SettingsTab::Server, "settings-server"),
             (SettingsTab::About, "settings-about"),
@@ -246,9 +245,12 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 }
             }
             rec.still(name);
-            if tab == SettingsTab::Agent {
+            if matches!(
+                tab,
+                SettingsTab::Agent | SettingsTab::Editor | SettingsTab::Prompts
+            ) {
                 rec.scroll_by(-700.0);
-                rec.still("settings-agent-mcp");
+                rec.still(&format!("{name}-more"));
             }
         }
         // Settings search: the result list, then a hit's card scrolled to and flashing.
@@ -332,6 +334,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.app().conv.settings_page.open = false;
         rec.app().conv.settings_page.original = None;
         rec.harness.run_steps(3);
+        // OXI_SETTINGS_REVIEW=1: only the Settings stills above.
+        if std::env::var_os("OXI_SETTINGS_REVIEW").is_some() {
+            return;
+        }
     }
     {
         let app = rec.app();

@@ -34,7 +34,6 @@ pub enum SettingsTab {
     GitHub,
     Prompts,
     Voice,
-    Terminal,
     Editor,
     Appearance,
     Server,
@@ -686,8 +685,6 @@ pub struct TerminalPanelState {
 /// Settings page: navigation, the dirty-check snapshot and per-provider connection helpers.
 #[derive(Default)]
 pub struct SettingsPageState {
-    /// Settings page left-nav width (independent of the chat sidebar).
-    pub sidebar_width: f32,
     /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
     pub original: Option<AppSettings>,
     pub exit_prompt: Option<SettingsExitAction>,
