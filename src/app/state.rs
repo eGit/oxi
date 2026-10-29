@@ -63,9 +63,14 @@ pub enum ConfirmAction {
     DeleteSession {
         wi: usize,
         si: usize,
+        /// In a work tree workspace: also remove the work tree (folder and branch). Toggled by
+        /// a checkbox in the modal.
+        remove_worktree: bool,
     },
     DeleteWorkspace {
         wi: usize,
+        /// For a work tree workspace: also remove the work tree (folder and branch).
+        remove_worktree: bool,
     },
     RemoveWorktree {
         wi: usize,
